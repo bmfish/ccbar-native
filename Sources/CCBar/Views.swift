@@ -340,14 +340,17 @@ class GradientHeaderView: NSView {
     }
 }
 
-// MARK: - 柱状图（支持渐变色）
+// MARK: - 柱状图（支持渐变色和每根柱子独立色）
 
 class BarChartView: NSView {
     var values: [CGFloat] = []
     var labels: [String] = []
     var barColor: NSColor = Design.brandColor
 
-    // 渐变模式（和折线图一致的配色）
+    // 每根柱子独立色（优先级高于 barColor）
+    var barColors: [NSColor]? = nil
+
+    // 渐变模式
     var useGradient: Bool = false
     var hueOffset: CGFloat = 0
 
@@ -403,9 +406,11 @@ class BarChartView: NSView {
             let barRect = NSRect(x: x, y: y, width: barWidth, height: max(h, 1))
             let barPath = NSBezierPath(roundedRect: barRect, xRadius: 2, yRadius: 2)
 
-            // 颜色
+            // 颜色（优先级：barColors > useGradient > barColor）
             let color: NSColor
-            if useGradient {
+            if let barColors = barColors, i < barColors.count {
+                color = barColors[i]
+            } else if useGradient {
                 let progress = count > 1 ? CGFloat(i) / CGFloat(count - 1) : 0.5
                 color = gradientColor(at: progress)
             } else {

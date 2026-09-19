@@ -29,6 +29,15 @@ class Settings {
         get { defaults.bool(forKey: "launchAtLogin") }
         set { defaults.set(newValue, forKey: "launchAtLogin") }
     }
+
+    /// 通知间隔（万），每累计到这个倍数弹一次通知，0=关闭
+    var notifyInterval: Int {
+        get {
+            let v = defaults.integer(forKey: "notifyInterval")
+            return v == 0 ? 1000 : v  // 默认1000万
+        }
+        set { defaults.set(newValue, forKey: "notifyInterval") }
+    }
 }
 
 // MARK: - Data Cache

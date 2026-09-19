@@ -12,13 +12,14 @@ class SettingsWindowController: NSWindowController {
     var warningCheck: NSButton!
     var launchCheck: NSButton!
     var themePopup: NSPopUpButton!
+    var notifyIntervalField: NSTextField!
 
     init(settings: Settings, onSave: @escaping () -> Void) {
         self.settings = settings
         self.onSave = onSave
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 440, height: 360),
+            contentRect: NSRect(x: 0, y: 0, width: 440, height: 420),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -109,6 +110,13 @@ class SettingsWindowController: NSWindowController {
         stack.addArrangedSubview(warningRow)
         warningRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
+        // 通知间隔
+        notifyIntervalField = makeField()
+        let notifyRow = makeSettingRow(label: "通知间隔", sfIcon: "bell.badge",
+                                       unit: "万", field: notifyIntervalField, hint: "每累计N万通知，0=关闭")
+        stack.addArrangedSubview(notifyRow)
+        notifyRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
         addSep(to: stack)
 
         // 复选框
@@ -131,11 +139,16 @@ class SettingsWindowController: NSWindowController {
         buttonBar.trailingAnchor.constraint(equalTo: stack.trailingAnchor).isActive = true
 
         let resetBtn = makeButton(title: "重置", action: #selector(resetSettings))
+        resetBtn.bezelStyle = .rounded
         buttonBar.addArrangedSubview(resetBtn)
 
-        let saveBtn = makeButton(title: "保存", action: #selector(saveSettings))
-        saveBtn.keyEquivalent = "\r"
+        let saveBtn = NSButton(title: "保存", target: self, action: #selector(saveSettings))
         saveBtn.bezelStyle = .rounded
+        saveBtn.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        saveBtn.keyEquivalent = "\r"
+        saveBtn.wantsLayer = true
+        saveBtn.layer?.backgroundColor = Design.brandColor.withAlphaComponent(0.25).cgColor
+        saveBtn.layer?.cornerRadius = 6
         buttonBar.addArrangedSubview(saveBtn)
     }
 
@@ -310,6 +323,7 @@ class SettingsWindowController: NSWindowController {
         warningCheck.state = settings.warningEnabled ? .on : .off
         launchCheck.state = settings.launchAtLogin ? .on : .off
         themePopup.selectItem(withTitle: Theme.current.displayName)
+        notifyIntervalField.stringValue = "\(settings.notifyInterval)"
     }
 
     @objc func browsePath() {
@@ -336,6 +350,11 @@ class SettingsWindowController: NSWindowController {
         }
         settings.warningEnabled = warningCheck.state == .on
         settings.launchAtLogin = launchCheck.state == .on
+
+        // 通知间隔
+        if let interval = Int(notifyIntervalField.stringValue), interval >= 0 {
+            settings.notifyInterval = interval
+        }
 
         // 保存主题
         let selectedTheme = Theme.allCases.first { $0.displayName == themePopup.titleOfSelectedItem } ?? .default
@@ -422,19 +441,38 @@ class DetailBaseWindowController: NSWindowController {
             nextBtn.centerYAnchor.constraint(equalTo: navBar.centerYAnchor).isActive = true
         }
 
-        // 内容栈
+        // 内容栈（放在滚动视图里）
+        let scrollView = NSScrollView()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.hasVerticalScroller = true
+        scrollView.drawsBackground = false
+        scrollView.scrollerStyle = .overlay
+        scrollView.automaticallyAdjustsContentInsets = false
+        contentView.addSubview(scrollView)
+
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: navBar.bottomAnchor, constant: 6),
+            scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 14),
+            scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -14),
+            scrollView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -10)
+        ])
+
         contentStack = NSStackView()
         contentStack.orientation = .vertical
         contentStack.alignment = .leading
         contentStack.spacing = 0
         contentStack.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(contentStack)
+
+        let clipView = NSClipView()
+        clipView.documentView = contentStack
+        clipView.drawsBackground = false
+        scrollView.contentView = clipView
 
         NSLayoutConstraint.activate([
-            contentStack.topAnchor.constraint(equalTo: navBar.bottomAnchor, constant: 6),
-            contentStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 14),
-            contentStack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -14),
-            contentStack.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -10)
+            contentStack.topAnchor.constraint(equalTo: clipView.topAnchor),
+            contentStack.leadingAnchor.constraint(equalTo: clipView.leadingAnchor),
+            contentStack.trailingAnchor.constraint(equalTo: clipView.trailingAnchor),
+            contentStack.bottomAnchor.constraint(equalTo: clipView.bottomAnchor)
         ])
     }
 
@@ -982,7 +1020,7 @@ class HourlyDetailWindowController: DetailBaseWindowController {
             return
         }
 
-        // 柱状图
+        // 柱状图（每根柱子不同颜色）
         let chartBox = NSView()
         chartBox.translatesAutoresizingMaskIntoConstraints = false
         chartBox.heightAnchor.constraint(equalToConstant: 80).isActive = true
@@ -990,9 +1028,11 @@ class HourlyDetailWindowController: DetailBaseWindowController {
         chartBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
 
         let barChart = BarChartView(frame: .zero)
-        barChart.values = hourly.map { CGFloat($0.1) }  // 用 output+input 作为柱高
+        barChart.values = hourly.map { CGFloat($0.1) }
         barChart.labels = (0..<24).map { "\($0)" }
-        barChart.barColor = Design.brandColor
+        // 每根柱子用不同颜色（循环使用主题模型色）
+        let colors = Design.modelColors(count: 24)
+        barChart.barColors = colors
         barChart.translatesAutoresizingMaskIntoConstraints = false
         chartBox.addSubview(barChart)
         NSLayoutConstraint.activate([

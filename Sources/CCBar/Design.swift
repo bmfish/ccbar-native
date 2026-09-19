@@ -5,20 +5,29 @@ import Cocoa
 enum Theme: String, CaseIterable {
     case `default` = "默认主题"
     case kawaii01  = "卡哇伊 01"
+    case ocean     = "海蓝"
+    case forest    = "翠绿"
+    case purple    = "星空紫"
 
     // 主色（大数字、渐变条、品牌标识）
     var accent: NSColor {
         switch self {
         case .default: return NSColor(red: 0.91, green: 0.43, blue: 0.27, alpha: 1.0) // 暖橙
         case .kawaii01: return NSColor(red: 0.95, green: 0.35, blue: 0.58, alpha: 1.0) // 粉红
+        case .ocean: return NSColor(red: 0.18, green: 0.55, blue: 0.95, alpha: 1.0) // 海蓝
+        case .forest: return NSColor(red: 0.16, green: 0.72, blue: 0.42, alpha: 1.0) // 翠绿
+        case .purple: return NSColor(red: 0.55, green: 0.32, blue: 0.95, alpha: 1.0) // 星空紫
         }
     }
 
     // 数据高亮色（趋势行数值）
     var dataColor: NSColor {
         switch self {
-        case .default: return NSColor(red: 0.95, green: 0.70, blue: 0.45, alpha: 1.0) // 暖黄
-        case .kawaii01: return NSColor.white // 白色（可爱风用白色更干净）
+        case .default: return NSColor(red: 0.95, green: 0.70, blue: 0.45, alpha: 1.0)
+        case .kawaii01: return NSColor.white
+        case .ocean: return NSColor(red: 0.35, green: 0.75, blue: 1.00, alpha: 1.0) // 天蓝
+        case .forest: return NSColor(red: 0.40, green: 0.88, blue: 0.55, alpha: 1.0) // 嫩绿
+        case .purple: return NSColor(red: 0.72, green: 0.55, blue: 1.00, alpha: 1.0) // 淡紫
         }
     }
 
@@ -26,54 +35,51 @@ enum Theme: String, CaseIterable {
     var bigNumberColor: NSColor {
         switch self {
         case .default: return accent
-        case .kawaii01: return NSColor(red: 1.00, green: 0.42, blue: 0.65, alpha: 1.0) // 亮粉
+        case .kawaii01: return NSColor(red: 1.00, green: 0.42, blue: 0.65, alpha: 1.0)
+        case .ocean: return NSColor(red: 0.25, green: 0.62, blue: 1.00, alpha: 1.0)
+        case .forest: return NSColor(red: 0.22, green: 0.80, blue: 0.48, alpha: 1.0)
+        case .purple: return NSColor(red: 0.62, green: 0.40, blue: 1.00, alpha: 1.0)
         }
     }
 
     // 大数字字号
-    var bigNumberFontSize: CGFloat {
-        switch self {
-        case .default: return 30
-        case .kawaii01: return 30
-        }
-    }
+    var bigNumberFontSize: CGFloat { 30 }
 
     // 大数字字重
     var bigNumberWeight: NSFont.Weight {
         switch self {
-        case .default: return .bold
-        case .kawaii01: return .heavy // 更粗更可爱
+        case .kawaii01: return .heavy
+        default: return .bold
         }
     }
 
     // 发光效果强度
     var glowRadius: CGFloat {
         switch self {
-        case .default: return 14
-        case .kawaii01: return 20 // 粉色发光更强
+        case .kawaii01: return 20
+        default: return 14
         }
     }
 
     var glowAlpha: CGFloat {
         switch self {
-        case .default: return 0.30
         case .kawaii01: return 0.45
+        default: return 0.30
         }
     }
 
     // 卡片透明度
     var cardFillAlpha: CGFloat {
         switch self {
-        case .default: return 0.06
         case .kawaii01: return 0.08
+        default: return 0.06
         }
     }
 
-    // 卡片边框透明度
     var cardBorderAlpha: CGFloat {
         switch self {
-        case .default: return 0.10
         case .kawaii01: return 0.15
+        default: return 0.10
         }
     }
 
@@ -83,10 +89,25 @@ enum Theme: String, CaseIterable {
         case .default:
             return (.systemBlue, .systemPurple, .systemTeal, accent)
         case .kawaii01:
-            return (NSColor(red: 0.40, green: 0.80, blue: 0.65, alpha: 1.0),  // 薄荷绿
-                    NSColor(red: 0.50, green: 0.60, blue: 0.95, alpha: 1.0),  // 天蓝
-                    NSColor(red: 0.75, green: 0.50, blue: 0.95, alpha: 1.0),  // 薰衣草紫
-                    NSColor(red: 1.00, green: 0.55, blue: 0.35, alpha: 1.0))  // 珊瑚橙
+            return (NSColor(red: 0.40, green: 0.80, blue: 0.65, alpha: 1.0),
+                    NSColor(red: 0.50, green: 0.60, blue: 0.95, alpha: 1.0),
+                    NSColor(red: 0.75, green: 0.50, blue: 0.95, alpha: 1.0),
+                    NSColor(red: 1.00, green: 0.55, blue: 0.35, alpha: 1.0))
+        case .ocean:
+            return (NSColor(red: 0.25, green: 0.70, blue: 0.90, alpha: 1.0),
+                    NSColor(red: 0.40, green: 0.50, blue: 0.90, alpha: 1.0),
+                    NSColor(red: 0.20, green: 0.80, blue: 0.75, alpha: 1.0),
+                    accent)
+        case .forest:
+            return (NSColor(red: 0.20, green: 0.65, blue: 0.45, alpha: 1.0),
+                    NSColor(red: 0.45, green: 0.75, blue: 0.30, alpha: 1.0),
+                    NSColor(red: 0.10, green: 0.60, blue: 0.70, alpha: 1.0),
+                    accent)
+        case .purple:
+            return (NSColor(red: 0.60, green: 0.45, blue: 0.90, alpha: 1.0),
+                    NSColor(red: 0.80, green: 0.35, blue: 0.85, alpha: 1.0),
+                    NSColor(red: 0.35, green: 0.55, blue: 0.90, alpha: 1.0),
+                    accent)
         }
     }
 
@@ -101,36 +122,57 @@ enum Theme: String, CaseIterable {
                     NSColor(red: 0.60, green: 0.50, blue: 0.98, alpha: 1.0),
                     NSColor(red: 0.95, green: 0.40, blue: 0.68, alpha: 1.0)]
         case .kawaii01:
-            return [NSColor(red: 1.00, green: 0.45, blue: 0.65, alpha: 1.0),  // 樱花粉
-                    NSColor(red: 0.40, green: 0.65, blue: 0.95, alpha: 1.0),  // 天空蓝
-                    NSColor(red: 0.70, green: 0.50, blue: 0.95, alpha: 1.0),  // 薰衣草紫
-                    NSColor(red: 0.40, green: 0.82, blue: 0.60, alpha: 1.0),  // 薄荷绿
-                    NSColor(red: 1.00, green: 0.65, blue: 0.30, alpha: 1.0),  // 蜜桃橙
-                    NSColor(red: 0.95, green: 0.80, blue: 0.40, alpha: 1.0)]  // 柠檬黄
+            return [NSColor(red: 1.00, green: 0.45, blue: 0.65, alpha: 1.0),
+                    NSColor(red: 0.40, green: 0.65, blue: 0.95, alpha: 1.0),
+                    NSColor(red: 0.70, green: 0.50, blue: 0.95, alpha: 1.0),
+                    NSColor(red: 0.40, green: 0.82, blue: 0.60, alpha: 1.0),
+                    NSColor(red: 1.00, green: 0.65, blue: 0.30, alpha: 1.0),
+                    NSColor(red: 0.95, green: 0.80, blue: 0.40, alpha: 1.0)]
+        case .ocean:
+            return [accent,
+                    NSColor(red: 0.10, green: 0.75, blue: 0.85, alpha: 1.0),
+                    NSColor(red: 0.50, green: 0.65, blue: 0.95, alpha: 1.0),
+                    NSColor(red: 0.45, green: 0.80, blue: 0.55, alpha: 1.0),
+                    NSColor(red: 0.85, green: 0.55, blue: 0.25, alpha: 1.0),
+                    NSColor(red: 0.65, green: 0.40, blue: 0.90, alpha: 1.0)]
+        case .forest:
+            return [accent,
+                    NSColor(red: 0.20, green: 0.55, blue: 0.35, alpha: 1.0),
+                    NSColor(red: 0.50, green: 0.80, blue: 0.30, alpha: 1.0),
+                    NSColor(red: 0.10, green: 0.65, blue: 0.75, alpha: 1.0),
+                    NSColor(red: 0.85, green: 0.65, blue: 0.20, alpha: 1.0),
+                    NSColor(red: 0.70, green: 0.40, blue: 0.20, alpha: 1.0)]
+        case .purple:
+            return [accent,
+                    NSColor(red: 0.80, green: 0.35, blue: 0.95, alpha: 1.0),
+                    NSColor(red: 0.30, green: 0.50, blue: 0.95, alpha: 1.0),
+                    NSColor(red: 0.95, green: 0.40, blue: 0.60, alpha: 1.0),
+                    NSColor(red: 0.45, green: 0.80, blue: 0.65, alpha: 1.0),
+                    NSColor(red: 0.95, green: 0.65, blue: 0.30, alpha: 1.0)]
         }
     }
 
     // 进度条风格
     var progressLineWidth: CGFloat {
         switch self {
-        case .default: return 1.8
-        case .kawaii01: return 2.2 // 更粗更可爱
+        case .kawaii01: return 2.2
+        default: return 1.8
         }
     }
 
     // sparkline 线宽
     var sparklineLineWidth: CGFloat {
         switch self {
-        case .default: return 1.8
         case .kawaii01: return 2.2
+        default: return 1.8
         }
     }
 
     // 分隔线透明度
     var separatorAlpha: CGFloat {
         switch self {
-        case .default: return 0.10
         case .kawaii01: return 0.15
+        default: return 0.10
         }
     }
 

@@ -50,6 +50,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         AppDelegate.shared = self
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
+        // 不设置菜单栏图标，只显示数字
+
         // 初始数据库连接
         connectDB()
 
@@ -86,7 +88,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func showPopover() {
         if popover == nil {
             let popover = NSPopover()
-            popover.contentSize = NSSize(width: 300, height: 420)
+            popover.contentSize = NSSize(width: 300, height: 500)
             popover.behavior = .applicationDefined
             popover.animates = true
             popover.delegate = self
@@ -309,7 +311,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             statusItem.button?.title = "未找到"
         }
 
-        statusItem.button?.image = nil
+        // 图标由 updateIcon 设置，此处不覆盖
 
         // 如果弹窗正在显示，刷新内容（确保主题切换后立即生效）
         if let popover = popover, popover.isShown,
@@ -564,15 +566,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     // MARK: - 里程碑动画
 
+    /// 按设定间隔触发通知（每 N 万弹一次，每个档位每天只通知一次）
     func checkTokenMilestone(_ total: Int64) {
-        let tier = Int(total / 10_000_000)
-        guard tier > lastTokenTier, tier > 0 else { return }
-        lastTokenTier = tier
+        let intervalWan = settings.notifyInterval
+        guard intervalWan > 0 else { return }
+        let interval = Int64(intervalWan) * 10_000
+        let tier = Int(total / interval)
+        guard tier > 0 else { return }
 
-        let deltaTokens = total % 10_000_000 == 0 ? 10_000_000 : total - Int64(tier - 1) * 10_000_000
+        // 每个档位每天只通知一次（持久化记录）
+        let today = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none)
+        let key = "milestone_\(today)_\(tier)"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+
+        // 记录已通知，不再重复
+        UserDefaults.standard.set(true, forKey: key)
+
+        let deltaTokens = total % interval == 0 ? interval : total - Int64(tier - 1) * interval
 
         showBubble(delta: deltaTokens)
         flashTitle()
+
+        // 发送系统通知
+        let notification = NSUserNotification()
+        notification.title = "🎉 用量里程碑"
+        notification.informativeText = "今日 Token 已达 \(fmtK(total))（每\(intervalWan)万通知一次）"
+        notification.soundName = NSUserNotificationDefaultSoundName
+        NSUserNotificationCenter.default.deliver(notification)
     }
 
     func showBubble(delta: Int64) {
