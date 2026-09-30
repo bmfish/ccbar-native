@@ -207,6 +207,16 @@ enum Design {
     static let textPrimary = NSColor.white
     static let textSecondary = NSColor.white.withAlphaComponent(0.60)
     static let textMuted = NSColor.white.withAlphaComponent(0.38)
+
+    /// 毛玻璃材质上垫一层深色底：hudWindow 材质是半透明的，
+    /// 弹窗悬浮在亮色页面上时白字会看不清，这层保证对比度，同时留一点通透感
+    static func addDarkTint(overBlurIn parent: NSView) {
+        let tint = NSView(frame: parent.bounds)
+        tint.autoresizingMask = [.width, .height]
+        tint.wantsLayer = true
+        tint.layer?.backgroundColor = backgroundDark.withAlphaComponent(0.8).cgColor
+        parent.addSubview(tint)
+    }
     static let hoverFill = NSColor.white.withAlphaComponent(0.07)
     static let activeFill = NSColor.white.withAlphaComponent(0.10)
 

@@ -8,7 +8,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     var statusItem: NSStatusItem!
     var timer: Timer?
-    var db: OpaquePointer?
     let settings = Settings()
     var settingsWindow: SettingsWindowController?
     var detailWindow: DetailWindowController?
@@ -52,14 +51,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         // 不设置菜单栏图标，只显示数字
 
-        // 初始数据库连接
+        // 初始数据库连接（自建统计库 + ATTACH 各数据源）
         connectDB()
-
-        // 初始化历史备份表
-        initHistoryTable()
-
-        // 备份历史数据（启动时执行一次）
-        backupHistory()
 
         // 设置点击事件（使用 popover 替代 menu）
         if let button = statusItem.button {
@@ -72,6 +65,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         // 定时器
         startTimer()
+
     }
 
     var popover: NSPopover?
@@ -92,6 +86,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             popover.behavior = .applicationDefined
             popover.animates = true
             popover.delegate = self
+            popover.appearance = NSAppearance(named: .darkAqua)
             popover.contentViewController = PopoverViewController()
             self.popover = popover
         }
@@ -100,9 +95,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             popover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }
 
-        if let vc = popover?.contentViewController as? PopoverViewController {
-            vc.refresh()
-        }
+        // 打开弹窗时做一次实时查询，并把结果同步到菜单栏标题，
+        // 消除"标题 30 秒快照 vs 弹窗实时查"的数字时差
+        refreshData()
 
         if eventMonitor == nil {
             eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
@@ -136,120 +131,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     // MARK: - Database
 
+    let store = StatsStore()
+    /// 统计库连接（= store.handle，含 ATTACH 的各数据源），详情窗口共用
+    var db: OpaquePointer? {
+        return store.handle
+    }
+
     func connectDB() {
-        let dbPath = settings.dbPath
-        if sqlite3_open(dbPath, &db) != SQLITE_OK {
-            print("无法打开数据库: \(dbPath)")
-            db = nil
+        store.rebuild(configs: settings.sourceConfigs)
+        if store.handle == nil {
+            print("无法打开统计库")
         }
-    }
-
-    func initHistoryTable() {
-        guard let db = db else { return }
-
-        let sql = """
-        CREATE TABLE IF NOT EXISTS proxy_request_logs_history (
-            request_id TEXT PRIMARY KEY,
-            provider_id TEXT NOT NULL,
-            app_type TEXT NOT NULL,
-            model TEXT NOT NULL,
-            request_model TEXT,
-            input_tokens INTEGER NOT NULL DEFAULT 0,
-            output_tokens INTEGER NOT NULL DEFAULT 0,
-            cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-            cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
-            input_cost_usd TEXT NOT NULL DEFAULT '0',
-            output_cost_usd TEXT NOT NULL DEFAULT '0',
-            cache_read_cost_usd TEXT NOT NULL DEFAULT '0',
-            cache_creation_cost_usd TEXT NOT NULL DEFAULT '0',
-            total_cost_usd TEXT NOT NULL DEFAULT '0',
-            latency_ms INTEGER NOT NULL,
-            first_token_ms INTEGER,
-            duration_ms INTEGER,
-            status_code INTEGER NOT NULL,
-            error_message TEXT,
-            session_id TEXT,
-            provider_type TEXT,
-            is_streaming INTEGER NOT NULL DEFAULT 0,
-            cost_multiplier TEXT NOT NULL DEFAULT '1.0',
-            created_at INTEGER NOT NULL,
-            data_source TEXT NOT NULL DEFAULT 'proxy',
-            pricing_model TEXT,
-            input_token_semantics INTEGER NOT NULL DEFAULT 0,
-            backed_up_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-        );
-        """
-
-        if sqlite3_exec(db, sql, nil, nil, nil) != SQLITE_OK {
-            print("创建历史备份表失败")
-        } else {
-            print("历史备份表已就绪")
-        }
-    }
-
-    func backupHistory() {
-        guard let db = db else { return }
-
-        let lastBackupDate = UserDefaults.standard.string(forKey: "lastHistoryBackupDate") ?? "2000-01-01"
-
-        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        let yesterdayStr = formatter.string(from: yesterday)
-
-        guard lastBackupDate < yesterdayStr else {
-            print("历史数据已是最新（上次备份: \(lastBackupDate)）")
-            return
-        }
-
-        let sql = """
-        INSERT OR IGNORE INTO proxy_request_logs_history
-        SELECT *, strftime('%s', 'now') as backed_up_at
-        FROM proxy_request_logs
-        WHERE date(created_at, 'unixepoch', 'localtime') >= ? AND date(created_at, 'unixepoch', 'localtime') < ?
-        """
-
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            print("备份SQL准备失败")
-            return
-        }
-
-        sqlite3_bind_text(stmt, 1, lastBackupDate, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-        sqlite3_bind_text(stmt, 2, yesterdayStr, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-
-        if sqlite3_step(stmt) == SQLITE_DONE {
-            let changes = sqlite3_changes(db)
-            print("备份完成：\(changes) 条记录")
-            UserDefaults.standard.set(yesterdayStr, forKey: "lastHistoryBackupDate")
-        } else {
-            print("备份执行失败")
-        }
-        sqlite3_finalize(stmt)
-    }
-
-    func checkAndRunScheduledBackup() {
-        let now = Date()
-        let calendar = Calendar.current
-        let hour = calendar.component(.hour, from: now)
-        let minute = calendar.component(.minute, from: now)
-
-        let isBackupTime = (hour == 11 && minute == 0) || (hour == 20 && minute == 0)
-
-        guard isBackupTime else { return }
-
-        let lastBackupDate = UserDefaults.standard.string(forKey: "lastHistoryBackupDate") ?? "2000-01-01"
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        let yesterdayStr = formatter.string(from: Calendar.current.date(byAdding: .day, value: -1, to: now)!)
-
-        if hour == 20 && lastBackupDate >= yesterdayStr {
-            print("20:00 检查：历史数据已是最新，跳过备份")
-            return
-        }
-
-        print("执行定时备份（\(hour):00）")
-        backupHistory()
     }
 
     // MARK: - Timer
@@ -264,7 +156,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     @objc func updateData() {
-        checkAndRunScheduledBackup()
+        // 懒惰补账：历史（昨天及更早）落后就同步进自建库，今日走实时查询
+        store.syncIfNeeded()
 
         let todayStats = queryDayStats(days: 0)
 
@@ -308,7 +201,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             checkWarning(stats: stats)
             checkTokenMilestone(stats.total)
         } else {
-            statusItem.button?.title = "未找到"
+            statusItem.button?.title = store.attachedAdapters.isEmpty ? "未启用" : "未找到"
         }
 
         // 图标由 updateIcon 设置，此处不覆盖
@@ -323,66 +216,52 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     // MARK: - Query Methods
 
     func queryDayStats(days: Int) -> (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)? {
-        guard let db = db else { return nil }
-
-        let calendar = Calendar.current
-        let startOfDay = calendar.startOfDay(for: Date())
-        let startTimestamp = Int64(startOfDay.timeIntervalSince1970)
+        guard let db = db, !store.attachedAdapters.isEmpty else { return nil }
 
         var stmt: OpaquePointer?
         let sql: String
-        var bindValue: Int64?
+        var bindDays: Int?
 
         if days == 0 {
+            // 今日：用 date() 函数匹配，避免时区问题
             sql = """
             SELECT
-                COUNT(*) as reqs,
+                COALESCE(SUM(request_count), 0) as reqs,
                 COALESCE(SUM(input_tokens), 0) as input,
                 COALESCE(SUM(output_tokens), 0) as output,
                 COALESCE(SUM(cache_creation_tokens), 0) as cache_create,
                 COALESCE(SUM(cache_read_tokens), 0) as cache_read
-            FROM proxy_request_logs
-            WHERE created_at >= ?
+            FROM usage_all
+            WHERE date(created_at, 'unixepoch', 'localtime') = date('now', 'localtime')
             """
-            bindValue = startTimestamp
         } else if days == 1 {
-            let yesterdayStart = calendar.date(byAdding: .day, value: -1, to: startOfDay)!
+            // 昨日
             sql = """
             SELECT
-                COUNT(*) as reqs,
+                COALESCE(SUM(request_count), 0) as reqs,
                 COALESCE(SUM(input_tokens), 0) as input,
                 COALESCE(SUM(output_tokens), 0) as output,
                 COALESCE(SUM(cache_creation_tokens), 0) as cache_create,
                 COALESCE(SUM(cache_read_tokens), 0) as cache_read
-            FROM proxy_request_logs
-            WHERE created_at >= ? AND created_at < ?
+            FROM usage_all
+            WHERE date(created_at, 'unixepoch', 'localtime') = date('now', 'localtime', '-1 day')
             """
-            bindValue = Int64(yesterdayStart.timeIntervalSince1970)
         } else {
-            let startDate = calendar.date(byAdding: .day, value: -days, to: startOfDay)!
+            // 近N天
             sql = """
             SELECT
-                COUNT(*) as reqs,
+                COALESCE(SUM(request_count), 0) as reqs,
                 COALESCE(SUM(input_tokens), 0) as input,
                 COALESCE(SUM(output_tokens), 0) as output,
                 COALESCE(SUM(cache_creation_tokens), 0) as cache_create,
                 COALESCE(SUM(cache_read_tokens), 0) as cache_read
-            FROM proxy_request_logs
-            WHERE created_at >= ?
+            FROM usage_all
+            WHERE date(created_at, 'unixepoch', 'localtime') >= date('now', 'localtime', '-\(days) days')
             """
-            bindValue = Int64(startDate.timeIntervalSince1970)
         }
 
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             return nil
-        }
-
-        if let value = bindValue {
-            sqlite3_bind_int64(stmt, 1, value)
-        }
-
-        if days == 1 {
-            sqlite3_bind_int64(stmt, 2, startTimestamp)
         }
 
         var result: (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)?
@@ -404,10 +283,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func queryModelBreakdown() -> [(model: String, input: Int64, output: Int64, total: Int64)]? {
         guard let db = db else { return nil }
 
-        let calendar = Calendar.current
-        let startOfDay = calendar.startOfDay(for: Date())
-        let startTimestamp = Int64(startOfDay.timeIntervalSince1970)
-
         var stmt: OpaquePointer?
         let sql = """
         SELECT
@@ -415,8 +290,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             COALESCE(SUM(input_tokens), 0) as input,
             COALESCE(SUM(output_tokens), 0) as output,
             COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0) as total
-        FROM proxy_request_logs
-        WHERE created_at >= ?
+        FROM usage_all
+        WHERE date(created_at, 'unixepoch', 'localtime') = date('now', 'localtime')
         GROUP BY model
         ORDER BY total DESC
         """
@@ -424,7 +299,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             return nil
         }
-        sqlite3_bind_int64(stmt, 1, startTimestamp)
 
         var result: [(model: String, input: Int64, output: Int64, total: Int64)] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
@@ -441,21 +315,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func queryWorkHours() -> String? {
         guard let db = db else { return nil }
 
-        let calendar = Calendar.current
-        let startOfDay = calendar.startOfDay(for: Date())
-        let startTimestamp = Int64(startOfDay.timeIntervalSince1970)
-
         var stmt: OpaquePointer?
         let sql = """
         SELECT MIN(created_at)
-        FROM proxy_request_logs
-        WHERE created_at >= ?
+        FROM usage_all
+        WHERE date(created_at, 'unixepoch', 'localtime') = date('now', 'localtime')
         """
 
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             return nil
         }
-        sqlite3_bind_int64(stmt, 1, startTimestamp)
 
         if sqlite3_step(stmt) == SQLITE_ROW {
             let timestamp = sqlite3_column_int64(stmt, 0)
@@ -469,20 +338,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     func queryTotalStats() -> (reqs: Int, total: Int64)? {
-        guard let db = db else { return nil }
+        guard let db = db, !store.attachedAdapters.isEmpty else { return nil }
 
         var stmt: OpaquePointer?
+        // 历史聚合已在补账时展开进 usage_log，明细 + 今日实时全在 usage_all 里，单表即全量
         let sql = """
-        SELECT SUM(reqs), SUM(total) FROM (
-            SELECT COUNT(*) as reqs,
-                COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0) as total
-            FROM proxy_request_logs
-            UNION ALL
-            SELECT COALESCE(SUM(request_count), 0) as reqs,
-                COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0) as total
-            FROM usage_daily_rollups
-            WHERE date < (SELECT date(MIN(created_at), 'unixepoch', 'localtime') FROM proxy_request_logs)
-        )
+        SELECT COALESCE(SUM(request_count), 0),
+            COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
+        FROM usage_all
         """
 
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
@@ -499,6 +362,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         return nil
     }
 
+    /// 今日各数据源分账（source, 请求数, token 总量）
+    func querySourceBreakdown() -> [(source: String, reqs: Int, total: Int64)] {
+        guard let db = db, !store.attachedAdapters.isEmpty else { return [] }
+
+        var stmt: OpaquePointer?
+        let sql = """
+        SELECT source, COALESCE(SUM(request_count), 0),
+            COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
+        FROM usage_all
+        WHERE date(created_at, 'unixepoch', 'localtime') = date('now', 'localtime')
+        GROUP BY source
+        ORDER BY 3 DESC
+        """
+
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+
+        var result: [(String, Int, Int64)] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let source = String(cString: sqlite3_column_text(stmt, 0))
+            result.append((source, Int(sqlite3_column_int(stmt, 1)), sqlite3_column_int64(stmt, 2)))
+        }
+        sqlite3_finalize(stmt)
+        return result
+    }
+
     func queryDailyBreakdown(days: Int) -> [(date: String, reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, cost: Double)]? {
         guard let db = db else { return nil }
 
@@ -506,13 +394,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let sql = """
         SELECT
             date(created_at, 'unixepoch', 'localtime') as date,
-            COUNT(*) as reqs,
+            COALESCE(SUM(request_count), 0) as reqs,
             COALESCE(SUM(input_tokens), 0) as input,
             COALESCE(SUM(output_tokens), 0) as output,
             COALESCE(SUM(cache_creation_tokens), 0) as cache_create,
             COALESCE(SUM(cache_read_tokens), 0) as cache_read,
             COALESCE(SUM(CAST(total_cost_usd AS REAL)), 0) as cost
-        FROM proxy_request_logs
+        FROM usage_all
         WHERE created_at >= strftime('%s', 'now', 'localtime', '-' || ? || ' days')
         GROUP BY date
         ORDER BY date DESC
@@ -728,10 +616,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     func updateMenu() {
-        if let popover = popover, popover.isShown {
-            if let viewController = popover.contentViewController as? PopoverViewController {
-                viewController.viewDidLoad()
-            }
+        if let popover = popover, popover.isShown,
+           let vc = popover.contentViewController as? PopoverViewController {
+            vc.refresh()
         }
     }
 
@@ -787,7 +674,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     @objc func copyStats() {
-        var text = "ccSwitch 今日用量统计\n"
+        var text = "ccBar 今日用量统计\n"
         text += "==================\n"
 
         if let stats = DataCache.shared.getCachedToday() {
@@ -795,6 +682,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             text += "请求数量: \(stats.reqs)\n"
             text += "输入 Token: \(fmtK(stats.input))\n"
             text += "输出 Token: \(fmtK(stats.output))\n"
+        }
+
+        let sources = querySourceBreakdown()
+        if sources.count > 1 {
+            text += "\n数据源分布:\n"
+            for s in sources {
+                text += "  \(sourceDisplayName(s.source)): \(fmtK(s.total))\n"
+            }
         }
 
         if let models = DataCache.shared.getCachedModelBreakdown() {
@@ -814,6 +709,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         alert.messageText = "已复制到剪贴板"
         alert.informativeText = "统计数据已复制，可直接粘贴使用"
         alert.runModal()
+    }
+
+    /// source 标识 → 界面显示名（历史聚合行归入 cc-switch）
+    func sourceDisplayName(_ source: String) -> String {
+        switch source {
+        case "zcode": return "ZCode"
+        case "cc-switch", "cc-switch-rollup": return "cc-switch"
+        default: return source
+        }
     }
 
     @objc func openSettings() {

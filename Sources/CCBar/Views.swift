@@ -5,13 +5,37 @@ import Cocoa
 class InteractiveRowView: NSView {
     var isHovered = false
     var hoverColor: NSColor = Design.hoverFill
+    /// 整行点击（点在文字/图标上也算）
+    var onTap: (() -> Void)?
+    private var hoverArea: NSTrackingArea?
+
+    // 整行作为单一点击目标，避免点在子视图（文字/图标）上时收不到 mouseDown
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden, window != nil else { return nil }
+        let local = convert(point, from: superview)
+        return bounds.contains(local) ? self : nil
+    }
+
+    // 必须返回 true：否则窗口尚未 key 时，第一次点击只会激活窗口、
+    // 不会派发到视图，表现就是「要点两次才有反应」。
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount <= 1 { onTap?() }
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach { removeTrackingArea($0) }
+        // 只移除自己建的 hover 区域。
+        // 不能 trackingAreas.forEach { removeTrackingArea($0) } —— 那会把
+        // 手势识别器的 tracking area 一并清掉，导致整行点击全部失效。
+        if let area = hoverArea {
+            removeTrackingArea(area)
+        }
         let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
                                   owner: self, userInfo: nil)
         addTrackingArea(area)
+        hoverArea = area
     }
 
     override func mouseEntered(with event: NSEvent) {

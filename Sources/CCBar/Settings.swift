@@ -2,6 +2,22 @@ import Cocoa
 
 // MARK: - Settings
 
+/// 单个数据源的启用状态与库路径
+struct SourceConfig: Codable {
+    var id: String
+    var enabled: Bool
+    var dbPath: String
+
+    static func defaults() -> [SourceConfig] {
+        return [
+            SourceConfig(id: "ccswitch", enabled: true,
+                         dbPath: "\(NSHomeDirectory())/.cc-switch/cc-switch.db"),
+            SourceConfig(id: "zcode", enabled: false,
+                         dbPath: "\(NSHomeDirectory())/.zcode/cli/db/db.sqlite"),
+        ]
+    }
+}
+
 class Settings {
     let defaults = UserDefaults.standard
 
@@ -10,9 +26,30 @@ class Settings {
         set { defaults.set(newValue, forKey: "refreshInterval") }
     }
 
-    var dbPath: String {
-        get { defaults.string(forKey: "dbPath") ?? "\(NSHomeDirectory())/.cc-switch/cc-switch.db" }
-        set { defaults.set(newValue, forKey: "dbPath") }
+    /// 数据源列表。首次读取时迁移旧的单路径设置 dbPath 到 cc-switch 源。
+    var sourceConfigs: [SourceConfig] {
+        get {
+            if let data = defaults.data(forKey: "sourceConfigs"),
+               let arr = try? JSONDecoder().decode([SourceConfig].self, from: data) {
+                return arr
+            }
+            var configs = SourceConfig.defaults()
+            if let legacy = defaults.string(forKey: "dbPath"), !legacy.isEmpty,
+               let idx = configs.firstIndex(where: { $0.id == "ccswitch" }) {
+                configs[idx].dbPath = legacy
+            }
+            return configs
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: "sourceConfigs")
+            }
+        }
+    }
+
+    /// 供重置用的默认值
+    func resetSourceConfigs() {
+        sourceConfigs = SourceConfig.defaults()
     }
 
     var warningThreshold: Int {

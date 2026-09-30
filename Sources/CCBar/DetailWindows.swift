@@ -7,19 +7,21 @@ class SettingsWindowController: NSWindowController {
     let settings: Settings
     let onSave: () -> Void
     var intervalField: NSTextField!
-    var pathField: NSTextField!
     var warningField: NSTextField!
     var warningCheck: NSButton!
     var launchCheck: NSButton!
     var themePopup: NSPopUpButton!
     var notifyIntervalField: NSTextField!
+    /// 数据源区块：id → 路径输入框 / 启用勾选框
+    var sourceFields: [String: NSTextField] = [:]
+    var sourceChecks: [String: NSButton] = [:]
 
     init(settings: Settings, onSave: @escaping () -> Void) {
         self.settings = settings
         self.onSave = onSave
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 440, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 440, height: 500),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -35,6 +37,7 @@ class SettingsWindowController: NSWindowController {
         blur.state = .active
         blur.blendingMode = .behindWindow
         window.contentView!.addSubview(blur)
+        Design.addDarkTint(overBlurIn: window.contentView!)
 
         super.init(window: window)
         setupUI()
@@ -96,12 +99,17 @@ class SettingsWindowController: NSWindowController {
         stack.addArrangedSubview(intervalRow)
         intervalRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
-        // 数据库路径
-        pathField = makeField()
-        pathField.lineBreakMode = .byTruncatingMiddle
-        let pathRow = makePathRow()
-        stack.addArrangedSubview(pathRow)
-        pathRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        // 数据源（每源一行：启用勾选 + 路径 + 浏览）
+        let sourceHeader = NSTextField(labelWithString: "数据源")
+        sourceHeader.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        sourceHeader.textColor = Design.textMuted
+        stack.addArrangedSubview(sourceHeader)
+
+        for adapter in SourceRegistry.adapters {
+            let row = makeSourceRow(adapter: adapter)
+            stack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
 
         // 预警阈值
         warningField = makeField()
@@ -258,40 +266,44 @@ class SettingsWindowController: NSWindowController {
         return row
     }
 
-    private func makePathRow() -> NSView {
+    private func makeSourceRow(adapter: SourceAdapter) -> NSView {
         let row = NSView()
         row.translatesAutoresizingMaskIntoConstraints = false
 
-        let icon = NSImageView(image: NSImage(systemSymbolName: "folder", accessibilityDescription: nil) ?? NSImage())
-        icon.contentTintColor = Design.textSecondary
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.widthAnchor.constraint(equalToConstant: 16).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 16).isActive = true
-        row.addSubview(icon)
+        let check = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+        check.font = NSFont.systemFont(ofSize: 12)
+        check.translatesAutoresizingMaskIntoConstraints = false
+        sourceChecks[adapter.id] = check
+        row.addSubview(check)
 
-        let lbl = NSTextField(labelWithString: "数据库")
+        let lbl = NSTextField(labelWithString: adapter.name)
         lbl.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         lbl.textColor = Design.textPrimary
         lbl.translatesAutoresizingMaskIntoConstraints = false
         row.addSubview(lbl)
 
-        row.addSubview(pathField)
+        let field = makeField()
+        field.lineBreakMode = .byTruncatingMiddle
+        field.placeholderString = adapter.defaultPath
+        sourceFields[adapter.id] = field
+        row.addSubview(field)
 
-        let browseBtn = NSButton(title: "浏览", target: self, action: #selector(browsePath))
+        let browseBtn = NSButton(title: "浏览", target: self, action: #selector(browseSource(_:)))
         browseBtn.bezelStyle = .rounded
         browseBtn.font = NSFont.systemFont(ofSize: 12)
         browseBtn.translatesAutoresizingMaskIntoConstraints = false
+        browseBtn.tag = SourceRegistry.adapters.firstIndex { $0.id == adapter.id } ?? 0
         row.addSubview(browseBtn)
 
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: row.leadingAnchor),
-            icon.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-            lbl.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
+            check.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            check.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            lbl.leadingAnchor.constraint(equalTo: check.trailingAnchor, constant: 4),
             lbl.centerYAnchor.constraint(equalTo: row.centerYAnchor),
             lbl.widthAnchor.constraint(equalToConstant: 70),
-            pathField.leadingAnchor.constraint(equalTo: lbl.trailingAnchor, constant: 8),
-            pathField.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-            pathField.trailingAnchor.constraint(equalTo: browseBtn.leadingAnchor, constant: -8),
+            field.leadingAnchor.constraint(equalTo: lbl.trailingAnchor, constant: 8),
+            field.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            field.trailingAnchor.constraint(equalTo: browseBtn.leadingAnchor, constant: -8),
             browseBtn.trailingAnchor.constraint(equalTo: row.trailingAnchor),
             browseBtn.centerYAnchor.constraint(equalTo: row.centerYAnchor),
             browseBtn.widthAnchor.constraint(equalToConstant: 60)
@@ -317,25 +329,33 @@ class SettingsWindowController: NSWindowController {
 
     func loadSettings() {
         intervalField.stringValue = "\(settings.refreshInterval)"
-        pathField.stringValue = settings.dbPath
-        pathField.toolTip = settings.dbPath
         warningField.stringValue = "\(settings.warningThreshold)"
         warningCheck.state = settings.warningEnabled ? .on : .off
         launchCheck.state = settings.launchAtLogin ? .on : .off
         themePopup.selectItem(withTitle: Theme.current.displayName)
         notifyIntervalField.stringValue = "\(settings.notifyInterval)"
+
+        let configs = settings.sourceConfigs
+        for adapter in SourceRegistry.adapters {
+            let config = configs.first { $0.id == adapter.id }
+            sourceChecks[adapter.id]?.state = (config?.enabled ?? false) ? .on : .off
+            let path = config?.dbPath ?? adapter.defaultPath
+            sourceFields[adapter.id]?.stringValue = path
+            sourceFields[adapter.id]?.toolTip = path
+        }
     }
 
-    @objc func browsePath() {
+    @objc func browseSource(_ sender: NSButton) {
+        guard let adapter = SourceRegistry.adapters[safe: sender.tag] else { return }
         let panel = NSOpenPanel()
-        panel.title = "选择数据库文件"
-        panel.allowedFileTypes = ["db"]
+        panel.title = "选择 \(adapter.name) 数据库文件"
+        panel.allowedFileTypes = ["db", "sqlite"]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.begin { [weak self] result in
             if result == .OK, let url = panel.url {
-                self?.pathField.stringValue = url.path
-                self?.pathField.toolTip = url.path
+                self?.sourceFields[adapter.id]?.stringValue = url.path
+                self?.sourceFields[adapter.id]?.toolTip = url.path
             }
         }
     }
@@ -344,7 +364,13 @@ class SettingsWindowController: NSWindowController {
         if let interval = Int(intervalField.stringValue), interval >= 5 && interval <= 3000 {
             settings.refreshInterval = interval
         }
-        settings.dbPath = pathField.stringValue
+        // 数据源：勾选状态 + 路径（留空回落默认路径）
+        settings.sourceConfigs = SourceRegistry.adapters.map { adapter in
+            let enabled = sourceChecks[adapter.id]?.state == .on
+            let path = sourceFields[adapter.id]?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return SourceConfig(id: adapter.id, enabled: enabled,
+                                dbPath: path.isEmpty ? adapter.defaultPath : path)
+        }
         if let threshold = Int(warningField.stringValue), threshold > 0 {
             settings.warningThreshold = threshold
         }
@@ -373,7 +399,7 @@ class SettingsWindowController: NSWindowController {
 
     @objc func resetSettings() {
         settings.refreshInterval = 30
-        settings.dbPath = "\(NSHomeDirectory())/.cc-switch/cc-switch.db"
+        settings.resetSourceConfigs()
         settings.warningThreshold = 50
         settings.warningEnabled = true
         settings.launchAtLogin = false
@@ -397,6 +423,7 @@ class DetailBaseWindowController: NSWindowController {
         blur.state = .active
         blur.blendingMode = .behindWindow
         contentView.addSubview(blur)
+        Design.addDarkTint(overBlurIn: contentView)
 
         // 导航栏
         let navBar = NSView()
@@ -468,11 +495,14 @@ class DetailBaseWindowController: NSWindowController {
         clipView.drawsBackground = false
         scrollView.contentView = clipView
 
+        // 只固定 top/leading/width + 高度下限：
+        // 钉 bottom 会把 clipView 撑成内容高度、导致超高内容无法滚动；
+        // 不设高度下限则内容比可见区矮时会沉到下方、顶部留出大段空白。
         NSLayoutConstraint.activate([
             contentStack.topAnchor.constraint(equalTo: clipView.topAnchor),
             contentStack.leadingAnchor.constraint(equalTo: clipView.leadingAnchor),
-            contentStack.trailingAnchor.constraint(equalTo: clipView.trailingAnchor),
-            contentStack.bottomAnchor.constraint(equalTo: clipView.bottomAnchor)
+            contentStack.widthAnchor.constraint(equalTo: clipView.widthAnchor),
+            contentStack.heightAnchor.constraint(greaterThanOrEqualTo: clipView.heightAnchor)
         ])
     }
 
@@ -654,22 +684,15 @@ class DetailWindowController: DetailBaseWindowController {
     }
 
     private func queryDay(db: OpaquePointer, daysAgo: Int) -> (Int, Int64, Int64) {
+        // 历史聚合已在补账时展开进 usage_log，这里只需查统一的 usage_all
         let sql = """
-        SELECT SUM(r), SUM(o), SUM(c) FROM (
-            SELECT COUNT(*) as r, COALESCE(SUM(output_tokens+input_tokens+cache_read_tokens),0) as o,
-                COALESCE(SUM(cache_read_tokens),0) as c
-            FROM proxy_request_logs WHERE date(created_at,'unixepoch','localtime')=date('now','localtime','-'||?||' days')
-            UNION ALL
-            SELECT COALESCE(SUM(request_count),0), COALESCE(SUM(output_tokens+input_tokens+cache_read_tokens),0),
-                COALESCE(SUM(cache_read_tokens),0)
-            FROM usage_daily_rollups WHERE date=date('now','localtime','-'||?||' days')
-                AND date<(SELECT date(MIN(created_at),'unixepoch','localtime') FROM proxy_request_logs)
-        )
+        SELECT COALESCE(SUM(request_count),0) as r, COALESCE(SUM(output_tokens+input_tokens+cache_read_tokens+cache_creation_tokens),0) as o,
+            COALESCE(SUM(cache_read_tokens),0) as c
+        FROM usage_all WHERE date(created_at,'unixepoch','localtime')=date('now','localtime','-'||?||' days')
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return (0,0,0) }
         sqlite3_bind_int(stmt, 1, Int32(daysAgo))
-        sqlite3_bind_int(stmt, 2, Int32(daysAgo))
         var result = (0, Int64(0), Int64(0))
         if sqlite3_step(stmt) == SQLITE_ROW {
             result = (Int(sqlite3_column_int(stmt, 0)), sqlite3_column_int64(stmt, 1), sqlite3_column_int64(stmt, 2))
@@ -784,20 +807,13 @@ class MonthDetailWindowController: DetailBaseWindowController {
 
     private func queryDay(db: OpaquePointer, daysAgo: Int) -> (Int, Int64, Int64) {
         let sql = """
-        SELECT SUM(r), SUM(o), SUM(c) FROM (
-            SELECT COUNT(*) as r, COALESCE(SUM(output_tokens+input_tokens+cache_read_tokens),0) as o,
-                COALESCE(SUM(cache_read_tokens),0) as c
-            FROM proxy_request_logs WHERE date(created_at,'unixepoch','localtime')=date('now','localtime','-'||?||' days')
-            UNION ALL
-            SELECT COALESCE(SUM(request_count),0), COALESCE(SUM(output_tokens+input_tokens+cache_read_tokens),0),
-                COALESCE(SUM(cache_read_tokens),0)
-            FROM usage_daily_rollups WHERE date=date('now','localtime','-'||?||' days')
-                AND date<(SELECT date(MIN(created_at),'unixepoch','localtime') FROM proxy_request_logs)
-        )
+        SELECT COALESCE(SUM(request_count),0) as r, COALESCE(SUM(output_tokens+input_tokens+cache_read_tokens+cache_creation_tokens),0) as o,
+            COALESCE(SUM(cache_read_tokens),0) as c
+        FROM usage_all WHERE date(created_at,'unixepoch','localtime')=date('now','localtime','-'||?||' days')
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return (0,0,0) }
-        sqlite3_bind_int(stmt, 1, Int32(daysAgo)); sqlite3_bind_int(stmt, 2, Int32(daysAgo))
+        sqlite3_bind_int(stmt, 1, Int32(daysAgo))
         var result = (0, Int64(0), Int64(0))
         if sqlite3_step(stmt) == SQLITE_ROW {
             result = (Int(sqlite3_column_int(stmt, 0)), sqlite3_column_int64(stmt, 1), sqlite3_column_int64(stmt, 2))
@@ -847,27 +863,29 @@ class ModelDetailWindowController: DetailBaseWindowController {
         let daysAgo = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: Date())).day ?? 0
 
         let sql = """
-        SELECT model, COUNT(*),
+        SELECT source, model, COALESCE(SUM(request_count),0),
             COALESCE(SUM(input_tokens+output_tokens+cache_read_tokens+cache_creation_tokens),0),
             COALESCE(SUM(cache_read_tokens),0)
-        FROM proxy_request_logs
+        FROM usage_all
         WHERE date(created_at,'unixepoch','localtime')=date('now','localtime','-'||?||' days')
-        GROUP BY model ORDER BY 3 DESC
+        GROUP BY source, model ORDER BY 4 DESC
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         sqlite3_bind_int(stmt, 1, Int32(daysAgo))
-        var models: [(String, Int, Int64, Int64)] = []
+        var rows: [(source: String, model: String, reqs: Int, token: Int64, cache: Int64)] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
-            models.append((String(cString: sqlite3_column_text(stmt, 0)),
-                          Int(sqlite3_column_int(stmt, 1)),
-                          sqlite3_column_int64(stmt, 2), sqlite3_column_int64(stmt, 3)))
+            rows.append((String(cString: sqlite3_column_text(stmt, 0)),
+                         String(cString: sqlite3_column_text(stmt, 1)),
+                         Int(sqlite3_column_int64(stmt, 2)),
+                         sqlite3_column_int64(stmt, 3),
+                         sqlite3_column_int64(stmt, 4)))
         }
         sqlite3_finalize(stmt)
 
         contentStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
-        if models.isEmpty {
+        if rows.isEmpty {
             let lbl = NSTextField(labelWithString: "暂无数据")
             lbl.font = NSFont.systemFont(ofSize: 14, weight: .medium)
             lbl.textColor = Design.textMuted
@@ -875,7 +893,14 @@ class ModelDetailWindowController: DetailBaseWindowController {
             return
         }
 
-        let totalToken = models.reduce(Int64(0)) { $0 + $1.2 }
+        // 环形图：跨渠道按模型合并，展示整体分布
+        var merged: [String: (token: Int64, cache: Int64)] = [:]
+        for r in rows {
+            let m = merged[r.model] ?? (0, 0)
+            merged[r.model] = (m.token + r.token, m.cache + r.cache)
+        }
+        let donutModels = merged.sorted { $0.value.token > $1.value.token }
+        let totalToken = donutModels.reduce(Int64(0)) { $0 + $1.value.token }
 
         // 环形图
         let chartBox = NSView()
@@ -886,10 +911,10 @@ class ModelDetailWindowController: DetailBaseWindowController {
 
         let colors = Design.modelColors()
         let donut = DonutChartWithLegendView(frame: .zero)
-        donut.items = models.prefix(6).enumerated().map { i, m in
-            let pct = totalToken > 0 ? String(format: "%.1f%%", Double(m.2) / Double(totalToken) * 100) : "0%"
-            let short = shortModelName(m.0)
-            return DonutChartWithLegendView.Item(value: CGFloat(m.2), color: colors[i % colors.count], label: short, percentage: pct)
+        donut.items = donutModels.prefix(6).enumerated().map { i, e in
+            let pct = totalToken > 0 ? String(format: "%.1f%%", Double(e.value.token) / Double(totalToken) * 100) : "0%"
+            let short = shortModelName(e.key)
+            return DonutChartWithLegendView.Item(value: CGFloat(e.value.token), color: colors[i % colors.count], label: short, percentage: pct)
         }
         donut.translatesAutoresizingMaskIntoConstraints = false
         chartBox.addSubview(donut)
@@ -906,18 +931,47 @@ class ModelDetailWindowController: DetailBaseWindowController {
         contentStack.addArrangedSubview(makeTableHeader(labels: ["模型", "请求", "总 Token", "缓存读"], widths: widths))
         contentStack.addArrangedSubview(makeSep())
 
+        // 表格按渠道分组（渠道按各自总量降序）
+        var groupOrder: [String] = []
+        var groups: [String: [(model: String, reqs: Int, token: Int64, cache: Int64)]] = [:]
+        for r in rows {
+            if groups[r.source] == nil {
+                groupOrder.append(r.source)
+                groups[r.source] = []
+            }
+            groups[r.source]?.append((r.model, r.reqs, r.token, r.cache))
+        }
+        groupOrder.sort {
+            groups[$0]!.reduce(Int64(0)) { $0 + $1.token } > groups[$1]!.reduce(Int64(0)) { $0 + $1.token }
+        }
+
         var totR = 0; var totT: Int64 = 0; var totC: Int64 = 0
-        for m in models {
-            totR += m.1; totT += m.2; totC += m.3
-            let color: NSColor = m.2 == 0 ? Design.textMuted : Design.dataHighlightColor
-            let row = makeTableRow(columns: [
-                (shortModelName(m.0), widths[0], false, color),
-                (m.1 == 0 ? "-" : "\(m.1)", widths[1], false, m.1 == 0 ? Design.textMuted : Design.textPrimary),
-                (fmtNum(m.2), widths[2], false, m.2 == 0 ? Design.textMuted : Design.textPrimary),
-                (fmtNum(m.3), widths[3], false, m.3 == 0 ? Design.textMuted : Design.textSecondary)
+        for source in groupOrder {
+            let models = groups[source]!
+            let srcToken = models.reduce(Int64(0)) { $0 + $1.token }
+
+            // 渠道小节头：渠道名 + 该渠道总 Token
+            let headRow = makeTableRow(columns: [
+                ("● \(AppDelegate.shared?.sourceDisplayName(source) ?? source)", widths[0], true, Design.brandColor),
+                ("", widths[1], false, Design.textMuted),
+                (fmtNum(srcToken), widths[2], true, Design.dataHighlightColor),
+                ("", widths[3], false, Design.textMuted)
             ])
-            contentStack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+            contentStack.addArrangedSubview(headRow)
+            headRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+
+            for m in models {
+                totR += m.reqs; totT += m.token; totC += m.cache
+                let color: NSColor = m.token == 0 ? Design.textMuted : Design.dataHighlightColor
+                let row = makeTableRow(columns: [
+                    (shortModelName(m.model), widths[0], false, color),
+                    (m.reqs == 0 ? "-" : "\(m.reqs)", widths[1], false, m.reqs == 0 ? Design.textMuted : Design.textPrimary),
+                    (fmtNum(m.token), widths[2], false, m.token == 0 ? Design.textMuted : Design.textPrimary),
+                    (fmtNum(m.cache), widths[3], false, m.cache == 0 ? Design.textMuted : Design.textSecondary)
+                ])
+                contentStack.addArrangedSubview(row)
+                row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+            }
         }
 
         contentStack.addArrangedSubview(makeSep())
@@ -981,11 +1035,13 @@ class HourlyDetailWindowController: DetailBaseWindowController {
         let cal = Calendar.current
         let daysAgo = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: Date())).day ?? 0
 
-        var hourly: [(Int, Int64, Int64, Int64)] = Array(repeating: (0, 0, 0, 0), count: 24)
+        var hourly: [(Int, Int64, Int64, Int64, Int64)] = Array(repeating: (0, 0, 0, 0, 0), count: 24)
         let sql = """
-        SELECT strftime('%H',created_at,'unixepoch','localtime'), COUNT(*),
-            COALESCE(SUM(output_tokens+input_tokens),0), COALESCE(SUM(cache_read_tokens),0)
-        FROM proxy_request_logs
+        SELECT strftime('%H',created_at,'unixepoch','localtime'), COALESCE(SUM(request_count),0),
+            COALESCE(SUM(output_tokens+input_tokens+cache_read_tokens+cache_creation_tokens),0),
+            COALESCE(SUM(cache_read_tokens),0),
+            COALESCE(SUM(cache_creation_tokens),0)
+        FROM usage_all
         WHERE date(created_at,'unixepoch','localtime')=date('now','localtime','-'||?||' days')
         GROUP BY 1 ORDER BY 1
         """
@@ -997,7 +1053,7 @@ class HourlyDetailWindowController: DetailBaseWindowController {
                 let h = Int(String(cString: hs)) ?? 0
                 if h >= 0 && h < 24 {
                     hourly[h] = (Int(sqlite3_column_int(stmt, 1)), sqlite3_column_int64(stmt, 2),
-                                sqlite3_column_int64(stmt, 3), 0)
+                                sqlite3_column_int64(stmt, 3), sqlite3_column_int64(stmt, 4), 0)
                 }
             }
         }
@@ -1074,7 +1130,9 @@ class HourlyDetailWindowController: DetailBaseWindowController {
             row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
         }
 
-        let h = CGFloat(end - start + 2) * 24 + 100
+        // 内容高度 = 图表 80 + 表头/合计/分隔 ≈ 49 + 每行 24；
+        // 再加导航/留白 56（顶 10 + 导航 30 + 间隔 6 + 底 10）。
+        let h = CGFloat(end - start + 1) * 24 + 185
         window?.setContentSize(NSSize(width: 440, height: min(h, 650)))
     }
 }

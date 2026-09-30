@@ -18,6 +18,7 @@ class PopoverViewController: NSViewController {
         blur.state = .active
         blur.blendingMode = .behindWindow
         mainView.addSubview(blur)
+        Design.addDarkTint(overBlurIn: mainView)
 
         scrollView = NSScrollView(frame: mainView.bounds)
         scrollView.autoresizingMask = [.width, .height]
@@ -146,7 +147,18 @@ class PopoverViewController: NSViewController {
         glow.shadowBlurRadius = Theme.current.glowRadius
         glow.shadowOffset = .zero
         bigNum.shadow = glow
-        card.addArrangedSubview(bigNum)
+        let bigWrap = InteractiveRowView()
+        bigWrap.translatesAutoresizingMaskIntoConstraints = false
+        bigWrap.onTap = { _ = AppDelegate.shared?.perform(#selector(AppDelegate.openHourlyDetailToday)) }
+        bigNum.translatesAutoresizingMaskIntoConstraints = false
+        bigWrap.addSubview(bigNum)
+        NSLayoutConstraint.activate([
+            bigNum.leadingAnchor.constraint(equalTo: bigWrap.leadingAnchor),
+            bigNum.trailingAnchor.constraint(lessThanOrEqualTo: bigWrap.trailingAnchor),
+            bigNum.topAnchor.constraint(equalTo: bigWrap.topAnchor),
+            bigNum.bottomAnchor.constraint(equalTo: bigWrap.bottomAnchor)
+        ])
+        card.addArrangedSubview(bigWrap)
         addSpacer(4, to: card)
 
         // 三列统计行
@@ -166,11 +178,25 @@ class PopoverViewController: NSViewController {
             statsRow.addArrangedSubview(makeStatColumn(label: "工时", value: "\(hours)h", color: Design.textPrimary))
         }
 
-        card.addArrangedSubview(statsRow)
-        statsRow.widthAnchor.constraint(equalTo: card.widthAnchor).isActive = true
+        let statsWrap = InteractiveRowView()
+        statsWrap.translatesAutoresizingMaskIntoConstraints = false
+        statsWrap.onTap = { _ = AppDelegate.shared?.perform(#selector(AppDelegate.openHourlyDetailToday)) }
+        statsRow.translatesAutoresizingMaskIntoConstraints = false
+        statsWrap.addSubview(statsRow)
+        NSLayoutConstraint.activate([
+            statsRow.leadingAnchor.constraint(equalTo: statsWrap.leadingAnchor),
+            statsRow.trailingAnchor.constraint(equalTo: statsWrap.trailingAnchor),
+            statsRow.topAnchor.constraint(equalTo: statsWrap.topAnchor),
+            statsRow.bottomAnchor.constraint(equalTo: statsWrap.bottomAnchor)
+        ])
+        card.addArrangedSubview(statsWrap)
+        statsWrap.widthAnchor.constraint(equalTo: card.widthAnchor).isActive = true
 
         contentStack.addArrangedSubview(card)
         card.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28).isActive = true
+        // 整卡可点
+        card.addGestureRecognizer(NSClickGestureRecognizer(target: AppDelegate.shared,
+                                                           action: #selector(AppDelegate.openHourlyDetailToday)))
         addSpacer(10)
     }
 
@@ -196,6 +222,9 @@ class PopoverViewController: NSViewController {
 
         contentStack.addArrangedSubview(card)
         card.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28).isActive = true
+        // 整卡可点
+        card.addGestureRecognizer(NSClickGestureRecognizer(target: AppDelegate.shared,
+                                                           action: #selector(AppDelegate.openModelDetailToday)))
         addSpacer(8)
     }
 
@@ -295,7 +324,8 @@ class PopoverViewController: NSViewController {
             chevron.centerYAnchor.constraint(equalTo: container.centerYAnchor)
         ])
 
-        container.addGestureRecognizer(NSClickGestureRecognizer(target: AppDelegate.shared, action: action))
+        // 整行可点，不必点中右侧 › 图标
+        container.onTap = { _ = AppDelegate.shared?.perform(action) }
         return container
     }
 
@@ -374,6 +404,8 @@ class PopoverViewController: NSViewController {
             bar.trailingAnchor.constraint(equalTo: row.trailingAnchor),
             bar.heightAnchor.constraint(equalToConstant: Design.barHeight)
         ])
+        // 模型行整行可点，进模型详情
+        row.onTap = { _ = AppDelegate.shared?.perform(#selector(AppDelegate.openModelDetailToday)) }
         return row
     }
 
@@ -419,7 +451,8 @@ class PopoverViewController: NSViewController {
             chevron.centerYAnchor.constraint(equalTo: row.centerYAnchor)
         ])
 
-        row.addGestureRecognizer(NSClickGestureRecognizer(target: AppDelegate.shared, action: action))
+        // 整行可点
+        row.onTap = { _ = AppDelegate.shared?.perform(action) }
         contentStack.addArrangedSubview(row)
         row.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28).isActive = true
     }
@@ -466,7 +499,7 @@ class PopoverViewController: NSViewController {
             title.centerYAnchor.constraint(equalTo: container.centerYAnchor)
         ])
 
-        container.addGestureRecognizer(NSClickGestureRecognizer(target: AppDelegate.shared, action: action))
+        container.onTap = { _ = AppDelegate.shared?.perform(action) }
         return container
     }
 
