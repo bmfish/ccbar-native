@@ -16,21 +16,52 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Env info
+        run: |
+          {
+            echo "### 构建环境"
+            echo '```'
+            sw_vers
+            xcodebuild -version 2>/dev/null || true
+            swift --version
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build (universal)
         id: build_universal
         continue-on-error: true
-        run: swift build -c release --arch arm64 --arch x86_64
+        run: |
+          set -o pipefail
+          swift build -c release --arch arm64 --arch x86_64 2>&1 | tee build_universal.log
 
       - name: Build (arm64 fallback)
-        if: steps.build_universal.outcome == 'failure'
-        run: swift build -c release
+        id: build_fallback
+        if: steps.build_universal.outcome != 'success'
+        run: |
+          set -o pipefail
+          swift build -c release 2>&1 | tee build_arm64.log
+
+      - name: Build log to summary
+        if: always()
+        run: |
+          {
+            for f in build_universal.log build_arm64.log; do
+              if [ -f "$f" ]; then
+                echo "### $f（末 40 行）"
+                echo '```'
+                tail -40 "$f"
+                echo '```'
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if all builds failed
+        if: steps.build_universal.outcome != 'success' && steps.build_fallback.outcome != 'success'
+        run: exit 1
 
       - name: Assemble & codesign
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          if [ -f .build/release/CCBar ]; then
-            echo "使用 universal 构建"
-          fi
           APP=CCBar.app
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cat > "$APP/Contents/Info.plist" <<PLIST
