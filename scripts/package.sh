@@ -36,12 +36,33 @@ fi
 echo "==> swift build ${BUILD_ARGS[*]}"
 swift build "${BUILD_ARGS[@]}"
 
-APP="CCBar.app"
-BIN=".build/release/CCBar"
-if [ ! -f "$BIN" ]; then
-  echo "错误: 找不到 $BIN" >&2
-  exit 1
+# 产物路径：单架构在 .build/release；多架构（--arch ... --arch ...）在
+# .build/apple/Products/Release；本地若配置了自定义 scratch-path（.build/out）则在那边。
+# universal 模式下用 lipo 校验确实含 x86_64，避免捡到过期的单架构产物。
+BIN=""
+FALLBACK_BIN=""
+for p in .build/release/CCBar .build/apple/Products/Release/CCBar .build/out/Products/Release/CCBar; do
+  [ -f "$p" ] || continue
+  if [ "$UNIVERSAL" = "1" ]; then
+    if lipo -archs "$p" 2>/dev/null | grep -q x86_64; then
+      BIN="$p"; break
+    fi
+    [ -z "$FALLBACK_BIN" ] && FALLBACK_BIN="$p"
+  else
+    BIN="$p"; break
+  fi
+done
+if [ -z "$BIN" ]; then
+  if [ -n "$FALLBACK_BIN" ]; then
+    echo "警告: 未找到 universal 产物，使用已有的单架构产物" >&2
+    BIN="$FALLBACK_BIN"
+  else
+    echo "错误: 找不到构建产物" >&2
+    exit 1
+  fi
 fi
+
+APP="CCBar.app"
 
 echo "==> 组装 $APP (v$VERSION $ARCH)"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
