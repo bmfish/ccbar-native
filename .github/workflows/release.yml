@@ -16,87 +16,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Env info
+      - name: Build & package
         run: |
-          {
-            echo "### 构建环境"
-            echo '```'
-            sw_vers
-            xcodebuild -version 2>/dev/null || true
-            swift --version
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Build (universal)
-        id: build_universal
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          swift build -c release --arch arm64 --arch x86_64 2>&1 | tee build_universal.log
-
-      - name: Build (arm64 fallback)
-        id: build_fallback
-        if: steps.build_universal.outcome != 'success'
-        run: |
-          set -o pipefail
-          swift build -c release 2>&1 | tee build_arm64.log
-
-      - name: Build log to summary
-        if: always()
-        run: |
-          {
-            for f in build_universal.log build_arm64.log; do
-              if [ -f "$f" ]; then
-                echo "### $f（末 40 行）"
-                echo '```'
-                tail -40 "$f"
-                echo '```'
-              fi
-            done
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Fail if all builds failed
-        if: steps.build_universal.outcome != 'success' && steps.build_fallback.outcome != 'success'
-        run: exit 1
-
-      - name: Assemble & codesign
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          APP=CCBar.app
-          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-          cat > "$APP/Contents/Info.plist" <<PLIST
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleDisplayName</key>        <string>CCBar</string>
-              <key>CFBundleExecutable</key>         <string>CCBar</string>
-              <key>CFBundleIconFile</key>           <string>AppIcon</string>
-              <key>CFBundleIdentifier</key>         <string>com.bmfish.ccbar-native</string>
-              <key>CFBundleName</key>               <string>CCBar</string>
-              <key>CFBundlePackageType</key>        <string>APPL</string>
-              <key>CFBundleShortVersionString</key> <string>$VERSION</string>
-              <key>CFBundleVersion</key>            <string>$VERSION</string>
-              <key>LSMinimumSystemVersion</key>     <string>12.0</string>
-              <key>LSUIElement</key>                <true/>
-              <key>NSHighResolutionCapable</key>    <true/>
-          </dict>
-          </plist>
-          PLIST
-          cp .build/release/CCBar "$APP/Contents/MacOS/CCBar"
-          cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
-          codesign --force --deep -s - "$APP"
-
-      - name: Create DMG
-        run: |
-          if lipo -archs CCBar.app/Contents/MacOS/CCBar | grep -q x86_64; then
-            DMG="CCBar-${GITHUB_REF_NAME#v}-universal.dmg"
-          else
-            DMG="CCBar-${GITHUB_REF_NAME#v}-arm64.dmg"
+          if ! bash scripts/package.sh "${GITHUB_REF_NAME#v}" --universal; then
+            echo "::warning::universal 构建失败，回退 arm64"
+            bash scripts/package.sh "${GITHUB_REF_NAME#v}"
           fi
-          echo "DMG=$DMG" >> "$GITHUB_ENV"
-          rm -f "$DMG"
-          hdiutil create -volname CCBar -srcfolder CCBar.app -ov -format UDZO "$DMG"
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
