@@ -60,12 +60,13 @@ class PopoverViewController: NSViewController {
     private func buildContent() {
         contentStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
-        let today = AppDelegate.shared?.queryDayStats(days: 0)
-        let yesterday = AppDelegate.shared?.queryDayStats(days: 1)
-        let week = AppDelegate.shared?.queryDayStats(days: 7)
-        let month = AppDelegate.shared?.queryDayStats(days: 30)
-        let total = AppDelegate.shared?.queryTotalStats()
-        let models = AppDelegate.shared?.queryModelBreakdown()
+        // 全部读缓存（打开面板/定时器刷新时由 AppDelegate 在后台查询后写入）
+        let today = DataCache.shared.getCachedToday()
+        let yesterday = DataCache.shared.getCachedYesterday()
+        let week = DataCache.shared.getCachedWeek()
+        let month = DataCache.shared.getCachedMonth()
+        let total = DataCache.shared.getCachedTotal()
+        let models = DataCache.shared.getCachedModelBreakdown()
 
         // 渐变顶部条
         let gradientBar = GradientHeaderView()
@@ -128,7 +129,7 @@ class PopoverViewController: NSViewController {
 
     // MARK: - 今日统计卡片
 
-    private func buildTodayCard(_ today: (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)) {
+    private func buildTodayCard(_ today: DayStats) {
         let card = makeCard()
 
         // 标题
@@ -174,8 +175,8 @@ class PopoverViewController: NSViewController {
         statsRow.addArrangedSubview(makeStatColumn(label: "缓存命中",
                                                    value: String(format: "%.0f%%", cacheRate),
                                                    color: cacheRate > 75 ? Design.successColor : Design.warningColor))
-        if let hours = AppDelegate.shared?.queryWorkHours() {
-            statsRow.addArrangedSubview(makeStatColumn(label: "工时", value: "\(hours)h", color: Design.textPrimary))
+        if let hours = DataCache.shared.getCachedWorkHours() {
+            statsRow.addArrangedSubview(makeStatColumn(label: "工时", value: String(format: "%.1fh", hours), color: Design.textPrimary))
         }
 
         let statsWrap = InteractiveRowView()
@@ -202,7 +203,7 @@ class PopoverViewController: NSViewController {
 
     // MARK: - 模型分布
 
-    private func buildModelSection(_ models: [(model: String, input: Int64, output: Int64, total: Int64)]) {
+    private func buildModelSection(_ models: [ModelStat]) {
         let card = makeCard()
 
         let header = makeHeaderRow(title: "模型分布", sfIcon: "cpu",

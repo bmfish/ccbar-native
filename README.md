@@ -63,8 +63,8 @@ struct MyAdapter: SourceAdapter {
     let requiredTables = ["requests"]
 
     func attachSQL(fileURL: String) -> String { "ATTACH DATABASE 'file:\(fileURL)?mode=ro' AS \(alias)" }
-    func syncSQLs(alias: String, fromDay: String, today: String) -> [String] { /* INSERT OR IGNORE INTO usage_log ... */ }
-    func todayFragment(alias: String) -> String { /* usage_all 的"今日"UNION 段 */ }
+    func syncSQLs(alias: String, fromEpoch: Int64, todayEpoch: Int64) -> [String] { /* INSERT OR IGNORE INTO usage_log ... */ }
+    func todayFragment(alias: String, todayStartEpoch: Int64) -> String { /* usage_all 的"今日"UNION 段 */ }
 }
 
 // SourceRegistry.adapters 中注册
@@ -73,17 +73,28 @@ struct MyAdapter: SourceAdapter {
 ## 构建
 
 ```bash
-swift build -c release
+# 一键构建 + 组装 app + 打 DMG（版本号取 git tag，可用参数覆盖）
+scripts/package.sh
 
-# 打包 app（改 Info.plist 版本号后）
+# 出 arm64 + x86_64 双架构包
+scripts/package.sh --universal
+
+# 发布：push tag 后 GitHub Actions 自动构建 universal DMG 并发 Release
+git tag v1.2.0 && git push origin v1.2.0
+```
+
+手动构建等价于：
+
+```bash
+swift build -c release
 cp .build/release/CCBar CCBar.app/Contents/MacOS/CCBar
 codesign --force --deep -s - CCBar.app
-
-# 打安装包
-hdiutil create -volname "CCBar" -srcfolder CCBar.app -ov -format UDZO CCBar-<版本>-arm64.dmg
 ```
+
+> 通知说明：用量预警 / 里程碑使用系统通知（UNUserNotificationCenter），首次启动会请求通知权限；拒绝后不影响统计，仅收不到提醒。
 
 ## 版本
 
+- **v1.2.0** — 查询全面走索引区间（今日查询约 50×提速）、通知迁移 UNUserNotificationCenter（点通知打开面板）、开机启动接入 SMAppService、修复 +8 时区下"今日"边界偏移 8 小时的口径问题、查询/同步移至后台队列、设置页显示数据源连接状态、打包脚本 + GitHub Actions 自动发布、新增单元测试
 - **v1.1.0** — 多数据源统计架构：自建统计库 + ZCode 接入（官方口径）、模型分布按渠道分组、亮色背景可读性修复
 - **v1.0.0** — 多主题系统、柱状图、通知间隔、滚动支持

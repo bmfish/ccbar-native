@@ -1,11 +1,41 @@
 import Cocoa
 import SQLite3
 
+// MARK: - 统计结果类型
+
+/// 一天（或一段区间）的用量聚合。total 口径：input + output + 缓存读 + 缓存创建
+struct DayStats: Equatable {
+    let reqs: Int
+    let input: Int64
+    let output: Int64
+    let cacheCreate: Int64
+    let cacheRead: Int64
+    var total: Int64 { input + output + cacheCreate + cacheRead }
+}
+
+struct TotalStats: Equatable {
+    let reqs: Int
+    let total: Int64
+}
+
+struct ModelStat: Equatable {
+    let model: String
+    let input: Int64
+    let output: Int64
+    let total: Int64
+}
+
+struct SourceStat {
+    let source: String
+    let reqs: Int
+    let total: Int64
+}
+
 // MARK: - 数据源适配器协议
 //
 // 每个外部统计库实现一个适配器：负责 ATTACH、把历史同步进 usage_log、
 // 以及提供 usage_all 视图中"今日实时数据"的 UNION 段。
-// 新增数据源（codex / opencode 等）只需实现本协议并注册到 SourceAdapter.registry。
+// 新增数据源（codex / opencode 等）只需实现本协议并注册到 SourceRegistry。
 
 protocol SourceAdapter {
     /// 稳定标识，对应 Settings.SourceConfig.id
@@ -20,10 +50,13 @@ protocol SourceAdapter {
     var requiredTables: [String] { get }
 
     func attachSQL(fileURL: String) -> String
-    /// 历史补账 SQL（按本地日期字符串 fromDay 起，含回看重叠，INSERT OR IGNORE 幂等）
-    func syncSQLs(alias: String, fromDay: String, today: String) -> [String]
-    /// usage_all 视图中该源"今日"数据的 UNION ALL 段
-    func todayFragment(alias: String) -> String
+    /// 历史补账 SQL：同步 [fromEpoch, todayEpoch) 区间（本地时区的 0 点 epoch 秒，含回看重叠，INSERT OR IGNORE 幂等）
+    func syncSQLs(alias: String, fromEpoch: Int64, todayEpoch: Int64) -> [String]
+    /// usage_all 视图中该源"今日"数据的 UNION ALL 段。
+    /// todayStartEpoch 由 StatsStore 用 Calendar 算好（本地今天 0 点）在构建视图时烘进去，
+    /// 跨零点后由 refreshViewForNewDay 重建视图 —— 不在 SQL 里做时区运算（strftime 的
+    /// localtime + %s 组合会偏移一个时区）。
+    func todayFragment(alias: String, todayStartEpoch: Int64) -> String
 }
 
 // MARK: - 辅助
@@ -47,8 +80,9 @@ struct CCSwitchAdapter: SourceAdapter {
         return "ATTACH DATABASE 'file:\(fileURL)?mode=ro' AS \(alias)"
     }
 
-    func syncSQLs(alias: String, fromDay: String, today: String) -> [String] {
-        // 明细：只同步"昨天及更早"，今日走实时视图
+    func syncSQLs(alias: String, fromEpoch: Int64, todayEpoch: Int64) -> [String] {
+        // 明细：只同步"昨天及更早"，今日走实时视图。
+        // created_at 是 epoch 秒，用区间条件让源库索引可用，避免逐行 date() 全表扫描。
         let detail = """
         INSERT OR IGNORE INTO usage_log
             (source, request_id, app_type, model, input_tokens, output_tokens,
@@ -58,8 +92,7 @@ struct CCSwitchAdapter: SourceAdapter {
             cache_read_tokens, cache_creation_tokens, 0,
             CAST(total_cost_usd AS REAL), created_at, 1
         FROM \(alias).proxy_request_logs
-        WHERE date(created_at, 'unixepoch', 'localtime') < '\(today)'
-          AND date(created_at, 'unixepoch', 'localtime') >= '\(fromDay)'
+        WHERE created_at >= \(fromEpoch) AND created_at < \(todayEpoch)
         """
         // 历史聚合（早于本地已有明细最早一天的），展开成"每天每模型一行"的伪明细，
         // 请求侧无需再区分明细/聚合两套口径。created_at 取当天正午，保证 date() 落在原日期。
@@ -82,13 +115,13 @@ struct CCSwitchAdapter: SourceAdapter {
         return [detail, rollups]
     }
 
-    func todayFragment(alias: String) -> String {
+    func todayFragment(alias: String, todayStartEpoch: Int64) -> String {
         return """
         SELECT 'cc-switch' AS source, app_type, model, input_tokens, output_tokens,
                cache_read_tokens, cache_creation_tokens, 0 AS reasoning_tokens,
                CAST(total_cost_usd AS REAL) AS total_cost_usd, created_at, 1 AS request_count
         FROM \(alias).proxy_request_logs
-        WHERE date(created_at, 'unixepoch', 'localtime') = date('now', 'localtime')
+        WHERE created_at >= \(todayStartEpoch)
         """
     }
 }
@@ -106,7 +139,7 @@ struct ZCodeAdapter: SourceAdapter {
         return "ATTACH DATABASE 'file:\(fileURL)?mode=ro' AS \(alias)"
     }
 
-    func syncSQLs(alias: String, fromDay: String, today: String) -> [String] {
+    func syncSQLs(alias: String, fromEpoch: Int64, todayEpoch: Int64) -> [String] {
         // ZCode 的 started_at 是毫秒，统一折成秒。
         // 口径：按 ZCode 官方统计（computed_total_tokens = input+output），
         // 缓存命中部分不计入用量，缓存列记 0（原始值仍在 ZCode 自己的库里）。
@@ -120,13 +153,12 @@ struct ZCodeAdapter: SourceAdapter {
             started_at / 1000, 1
         FROM \(alias).model_usage
         WHERE status != 'running'
-          AND date(started_at / 1000, 'unixepoch', 'localtime') < '\(today)'
-          AND date(started_at / 1000, 'unixepoch', 'localtime') >= '\(fromDay)'
+          AND started_at >= \(fromEpoch) * 1000 AND started_at < \(todayEpoch) * 1000
         """
         return [detail]
     }
 
-    func todayFragment(alias: String) -> String {
+    func todayFragment(alias: String, todayStartEpoch: Int64) -> String {
         return """
         SELECT 'zcode' AS source, 'zcode' AS app_type, model_id AS model,
                input_tokens, output_tokens,
@@ -136,7 +168,7 @@ struct ZCodeAdapter: SourceAdapter {
                started_at / 1000 AS created_at, 1 AS request_count
         FROM \(alias).model_usage
         WHERE status != 'running'
-          AND date(started_at / 1000, 'unixepoch', 'localtime') = date('now', 'localtime')
+          AND started_at >= \(todayStartEpoch) * 1000
         """
     }
 }
@@ -158,10 +190,34 @@ enum SourceRegistry {
 //   - meta         各源同步水位
 //   - usage_all    视图 = 自家历史 + 各启用源"今日"实时数据
 // 外部源库一律以只读方式 ATTACH，绝不写入。
+//
+// 线程模型：定时器查询走后台串行队列，rebuild 在主线程，detail 窗口在主线程直连。
+// 全部入口经 lock 串行，底层连接又开了 FULLMUTEX，双重保险。
 
 final class StatsStore {
     private(set) var handle: OpaquePointer?
     private(set) var attachedAdapters: [SourceAdapter] = []
+    /// 每个数据源的连接诊断信息（设置页展示）：已连接 / 未启用 / 具体失败原因
+    private(set) var sourceStatus: [String: String] = [:]
+
+    private let lock = NSLock()
+
+    /// 测试注入自定义库路径；nil 用默认路径（Application Support/ccbar/ccbar.db）
+    private let pathOverride: String?
+
+    init(storePath: String? = nil) {
+        self.pathOverride = storePath
+    }
+
+    /// 视图构建时的"今天"（yyyy-MM-dd）；外部源"今日"分支的 epoch 边界烘在视图里，
+    /// 跨零点后要靠 refreshViewForNewDay 重建
+    private var viewDay: String = ""
+
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
 
     static var storePath: String {
         let dir = "\(NSHomeDirectory())/Library/Application Support/ccbar"
@@ -169,20 +225,27 @@ final class StatsStore {
         return "\(dir)/ccbar.db"
     }
 
-    /// 把 URI 里会破坏 file: 语法的字符转义
-    private func uriEscape(_ path: String) -> String {
-        return path.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "?#").inverted) ?? path
+    /// 本地时区 N 天前（0=今天）0 点的 epoch 秒，作为查询/同步的区间边界
+    static func localMidnight(_ daysAgo: Int, now: Date = Date()) -> Int64 {
+        let cal = Calendar.current
+        let day = cal.date(byAdding: .day, value: -daysAgo, to: now) ?? now
+        return Int64(cal.startOfDay(for: day).timeIntervalSince1970)
     }
 
-    // MARK: 基础执行
+    /// 把 URI 里会破坏 file: 语法的字符转义（含单引号——URL 里转成 %27，SQLite 解 URI 时还原）
+    private func uriEscape(_ path: String) -> String {
+        return path.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "?#'").inverted) ?? path
+    }
+
+    // MARK: 基础执行（仅供内部已持锁的路径调用）
 
     @discardableResult
-    func exec(_ sql: String) -> Bool {
+    private func exec(_ sql: String) -> Bool {
         guard let db = handle else { return false }
         return sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK
     }
 
-    func scalarInt(_ sql: String) -> Int64 {
+    private func scalarInt(_ sql: String) -> Int64 {
         var stmt: OpaquePointer?
         guard let db = handle, sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
         defer { sqlite3_finalize(stmt) }
@@ -192,18 +255,47 @@ final class StatsStore {
         return 0
     }
 
+    /// 绑定 int64 参数并逐行回调（需已持锁）
+    private func forEachRow(_ sql: String, binds: [Int64] = [], _ visit: (OpaquePointer) -> Void) {
+        var stmt: OpaquePointer?
+        guard let db = handle, sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        for (i, v) in binds.enumerated() {
+            sqlite3_bind_int64(stmt, Int32(i + 1), v)
+        }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            visit(stmt!)
+        }
+    }
+
+    /// 单行聚合查询，返回首行前 columns 列（需已持锁）
+    private func aggregateRow(_ sql: String, binds: [Int64] = [], columns: Int) -> [Int64]? {
+        var out: [Int64]?
+        forEachRow(sql, binds: binds) { stmt in
+            if out == nil {
+                out = (0..<columns).map { sqlite3_column_int64(stmt, Int32($0)) }
+            }
+        }
+        return out
+    }
+
     // MARK: 重建连接（启动、设置保存后调用）
 
     func rebuild(configs: [SourceConfig]) {
+        lock.lock(); defer { lock.unlock() }
+
         close()
 
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_URI
-        if sqlite3_open_v2(Self.storePath, &handle, flags, nil) != SQLITE_OK {
-            print("[ccBar] 无法打开自建统计库: \(Self.storePath)")
+        let path = pathOverride ?? Self.storePath
+        if sqlite3_open_v2(path, &handle, flags, nil) != SQLITE_OK {
+            print("[ccBar] 无法打开自建统计库: \(path)")
             handle = nil
             return
         }
         exec("PRAGMA journal_mode=WAL")
+        // 源库正被其宿主应用写入时只读 ATTACH 也可能撞 SQLITE_BUSY，等 2 秒而不是直接失败
+        exec("PRAGMA busy_timeout = 2000")
 
         guard exec("""
         CREATE TABLE IF NOT EXISTS usage_log (
@@ -228,27 +320,36 @@ final class StatsStore {
         exec("CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_log(created_at)")
         exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
 
-        // ATTACH 各启用且可用的源
+        // ATTACH 各数据源并记录连接状态（供设置页展示）
         attachedAdapters.removeAll()
-        for config in configs where config.enabled {
+        sourceStatus.removeAll()
+        for config in configs {
             guard let adapter = SourceRegistry.adapter(for: config.id) else { continue }
-            if attach(adapter: adapter, path: config.dbPath) {
+            guard config.enabled else {
+                sourceStatus[config.id] = "未启用"
+                continue
+            }
+            if let error = attach(adapter: adapter, path: config.dbPath) {
+                sourceStatus[config.id] = error
+            } else {
                 attachedAdapters.append(adapter)
+                sourceStatus[config.id] = "已连接"
             }
         }
 
         rebuildView()
     }
 
-    private func attach(adapter: SourceAdapter, path: String) -> Bool {
+    /// 成功返回 nil，失败返回诊断信息
+    private func attach(adapter: SourceAdapter, path: String) -> String? {
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue else {
             print("[ccBar] 数据源 \(adapter.name) 文件不存在，跳过: \(path)")
-            return false
+            return "文件不存在"
         }
         guard exec(adapter.attachSQL(fileURL: uriEscape(path))) else {
             print("[ccBar] 数据源 \(adapter.name) ATTACH 失败，跳过")
-            return false
+            return "ATTACH 失败（库可能被占用或损坏）"
         }
         // 表都齐才算可用
         let list = adapter.requiredTables.joined(separator: "','")
@@ -256,13 +357,16 @@ final class StatsStore {
         if found < Int64(adapter.requiredTables.count) {
             print("[ccBar] 数据源 \(adapter.name) 缺少必需表，跳过")
             exec("DETACH DATABASE \(adapter.alias)")
-            return false
+            return "缺少必需表"
         }
-        return true
+        return nil
     }
 
     /// usage_all = 自家历史 + 各源今日实时。设置变化（启停/换路径）后重建。
     private func rebuildView() {
+        viewDay = Self.dayFormatter.string(from: Date())
+        let todayStart = Self.localMidnight(0)
+
         exec("DROP VIEW IF EXISTS temp.usage_all")
         var parts = ["""
         SELECT source, app_type, model, input_tokens, output_tokens,
@@ -271,12 +375,20 @@ final class StatsStore {
         FROM usage_log
         """]
         for adapter in attachedAdapters {
-            parts.append(adapter.todayFragment(alias: adapter.alias))
+            parts.append(adapter.todayFragment(alias: adapter.alias, todayStartEpoch: todayStart))
         }
         guard exec("CREATE TEMP VIEW usage_all AS " + parts.joined(separator: " UNION ALL ")) else {
             print("[ccBar] 创建 usage_all 视图失败")
             return
         }
+    }
+
+    /// 跨零点后重建视图（外部源"今日"分支的边界是构建时烘进去的 epoch，不能过夜）。
+    /// 随每次 syncIfNeeded 检查，零点后最多滞后一个刷新周期。
+    private func refreshViewForNewDayIfNeeded() {
+        guard !attachedAdapters.isEmpty else { return }
+        guard viewDay != Self.dayFormatter.string(from: Date()) else { return }
+        rebuildView()
     }
 
     func close() {
@@ -291,16 +403,20 @@ final class StatsStore {
     //
     // meta 里记录每个源已同步到的"最后一个完整日"（昨天及更早）。
     // 落后于昨天就补 [水位-1天, 昨天]，窗口多回看一天防跨零点迟到行；
-    // 首次水位为空 → fromDay=1970，即全量回填。INSERT OR IGNORE 幂等。
+    // 首次水位为空 → 从 1970 全量回填。INSERT OR IGNORE 幂等。
+    // 单个源失败只跳过该源（水位不推进，下个刷新重试），不影响其余源。
 
     func syncIfNeeded() {
+        lock.lock(); defer { lock.unlock() }
+
+        refreshViewForNewDayIfNeeded()
         guard !attachedAdapters.isEmpty else { return }
 
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd"
-        let today = fmt.string(from: Date())
         guard let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date()) else { return }
         let yesterdayStr = fmt.string(from: yesterday)
+        let todayEpoch = Self.localMidnight(0)
 
         for adapter in attachedAdapters {
             let key = "synced_day_\(adapter.id)"
@@ -308,19 +424,23 @@ final class StatsStore {
             guard waterLine < yesterdayStr else { continue }   // 已是最新
 
             // 回看一天；首次全量
-            var fromDay = "1970-01-01"
+            var fromEpoch: Int64 = 0
             if !waterLine.isEmpty, let d = fmt.date(from: waterLine),
                let back = Calendar.current.date(byAdding: .day, value: -1, to: d) {
-                fromDay = fmt.string(from: back)
+                fromEpoch = Self.localMidnight(0, now: back)
             }
 
-            for sql in adapter.syncSQLs(alias: adapter.alias, fromDay: fromDay, today: today) {
+            var ok = true
+            for sql in adapter.syncSQLs(alias: adapter.alias, fromEpoch: fromEpoch, todayEpoch: todayEpoch) {
                 if !exec(sql) {
                     print("[ccBar] \(adapter.name) 同步失败: \(sql.prefix(80))…")
-                    return
+                    ok = false
+                    break
                 }
             }
-            metaSet(key, value: yesterdayStr)
+            if ok {
+                metaSet(key, value: yesterdayStr)
+            }
         }
     }
 
@@ -346,5 +466,111 @@ final class StatsStore {
         sqlite3_bind_text(stmt, 1, key, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         sqlite3_bind_text(stmt, 2, value, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         sqlite3_step(stmt)
+    }
+
+    // MARK: 查询
+    //
+    // 全部用"epoch 秒区间 + 参数绑定"的条件替代逐行 date()，让 created_at 索引可用：
+    // 今日数据来自视图的外部源分支（内部已按今日 0 点过滤），历史来自 usage_log。
+
+    private static let aggColumns = """
+        COALESCE(SUM(request_count), 0),
+        COALESCE(SUM(input_tokens), 0),
+        COALESCE(SUM(output_tokens), 0),
+        COALESCE(SUM(cache_creation_tokens), 0),
+        COALESCE(SUM(cache_read_tokens), 0)
+        """
+
+    /// days == 0 今日；days == 1 昨日（单日）；其余：近 N 天（含今天，自 N 天前 0 点起）
+    func queryDayStats(days: Int) -> DayStats? {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil, !attachedAdapters.isEmpty else { return nil }
+
+        let now = Date()
+        let sql: String
+        let binds: [Int64]
+        if days == 0 {
+            sql = "SELECT \(Self.aggColumns) FROM usage_all WHERE created_at >= ? AND created_at < ?"
+            binds = [Self.localMidnight(0, now: now), Self.localMidnight(-1, now: now)]
+        } else if days == 1 {
+            sql = "SELECT \(Self.aggColumns) FROM usage_all WHERE created_at >= ? AND created_at < ?"
+            binds = [Self.localMidnight(1, now: now), Self.localMidnight(0, now: now)]
+        } else {
+            sql = "SELECT \(Self.aggColumns) FROM usage_all WHERE created_at >= ?"
+            binds = [Self.localMidnight(days, now: now)]
+        }
+
+        guard let row = aggregateRow(sql, binds: binds, columns: 5) else { return nil }
+        return DayStats(reqs: Int(row[0]), input: row[1], output: row[2],
+                        cacheCreate: row[3], cacheRead: row[4])
+    }
+
+    func queryModelBreakdown() -> [ModelStat] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+
+        var result: [ModelStat] = []
+        forEachRow("""
+        SELECT model, COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+               COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
+        FROM usage_all
+        WHERE created_at >= ? AND created_at < ?
+        GROUP BY model ORDER BY 4 DESC
+        """, binds: [Self.localMidnight(0), Self.localMidnight(-1)]) { stmt in
+            result.append(ModelStat(model: String(cString: sqlite3_column_text(stmt, 0)),
+                                    input: sqlite3_column_int64(stmt, 1),
+                                    output: sqlite3_column_int64(stmt, 2),
+                                    total: sqlite3_column_int64(stmt, 3)))
+        }
+        return result
+    }
+
+    /// 今日"工时"：今天第一条请求距现在的小时数
+    func queryWorkHours() -> Double? {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return nil }
+
+        var hours: Double?
+        forEachRow("SELECT MIN(created_at) FROM usage_all WHERE created_at >= ?",
+                   binds: [Self.localMidnight(0)]) { stmt in
+            if sqlite3_column_type(stmt, 0) != SQLITE_NULL {
+                let start = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 0)))
+                hours = Date().timeIntervalSince(start) / 3600
+            }
+        }
+        return hours
+    }
+
+    /// 历史总量（明细 + 今日实时全在 usage_all 里，单表即全量）
+    func queryTotalStats() -> TotalStats? {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil, !attachedAdapters.isEmpty else { return nil }
+
+        guard let row = aggregateRow("""
+        SELECT COALESCE(SUM(request_count), 0),
+               COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
+        FROM usage_all
+        """, columns: 2) else { return nil }
+        return TotalStats(reqs: Int(row[0]), total: row[1])
+    }
+
+    /// 今日各数据源分账
+    func querySourceBreakdown() -> [SourceStat] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil, !attachedAdapters.isEmpty else { return [] }
+
+        var result: [SourceStat] = []
+        forEachRow("""
+        SELECT source, COALESCE(SUM(request_count), 0),
+               COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
+        FROM usage_all
+        WHERE created_at >= ? AND created_at < ?
+        GROUP BY source ORDER BY 3 DESC
+        """, binds: [Self.localMidnight(0), Self.localMidnight(-1)]) { stmt in
+            result.append(SourceStat(source: String(cString: sqlite3_column_text(stmt, 0)),
+                                     reqs: Int(sqlite3_column_int64(stmt, 1)),
+                                     total: sqlite3_column_int64(stmt, 2)))
+        }
+        return result
     }
 }

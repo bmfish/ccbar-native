@@ -301,3 +301,49 @@ enum Design {
         else { return "\(n)" }
     }
 }
+
+// MARK: - 六段渐变调色板（Sparkline / BarChart 共用）
+
+enum GradientPalette {
+    /// 每次取值都重新读主题品牌色，保证切主题后立即生效
+    static var stops: [NSColor] {
+        return [
+            NSColor(red: 0.30, green: 0.52, blue: 0.95, alpha: 1.0),
+            NSColor(red: 0.35, green: 0.78, blue: 0.72, alpha: 1.0),
+            NSColor(red: 0.40, green: 0.82, blue: 0.48, alpha: 1.0),
+            NSColor(red: 0.95, green: 0.76, blue: 0.30, alpha: 1.0),
+            Design.brandColor,
+            NSColor(red: 0.90, green: 0.42, blue: 0.58, alpha: 1.0)
+        ]
+    }
+
+    static func color(at progress: CGFloat, hueOffset: CGFloat, fallback: NSColor) -> NSColor {
+        let stops = self.stops
+        guard stops.count >= 2 else { return fallback }
+        let p = min(max(progress, 0), 1)
+        let scaled = p * CGFloat(stops.count - 1)
+        let idx = min(Int(scaled), stops.count - 2)
+        let t = scaled - CGFloat(idx)
+
+        guard let c1 = stops[idx].usingColorSpace(.sRGB),
+              let c2 = stops[idx + 1].usingColorSpace(.sRGB) else {
+            return stops[idx]
+        }
+
+        var r = c1.redComponent   + (c2.redComponent   - c1.redComponent)   * t
+        var g = c1.greenComponent + (c2.greenComponent - c1.greenComponent) * t
+        var b = c1.blueComponent  + (c2.blueComponent  - c1.blueComponent)  * t
+
+        if hueOffset != 0 {
+            let base = NSColor(red: r, green: g, blue: b, alpha: 1.0).usingColorSpace(.sRGB) ?? NSColor.white
+            var h: CGFloat = 0, s: CGFloat = 0, br: CGFloat = 0, a: CGFloat = 0
+            base.getHue(&h, saturation: &s, brightness: &br, alpha: &a)
+            let rotated = NSColor(hue: (h + hueOffset).truncatingRemainder(dividingBy: 1.0),
+                                  saturation: s, brightness: br, alpha: 1.0).usingColorSpace(.sRGB) ?? base
+            r = rotated.redComponent
+            g = rotated.greenComponent
+            b = rotated.blueComponent
+        }
+        return NSColor(red: r, green: g, blue: b, alpha: 1.0)
+    }
+}

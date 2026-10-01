@@ -12,6 +12,12 @@ let package = Package(
                 .linkedFramework("Cocoa"),
                 .linkedLibrary("sqlite3"),
             ]
-        )
+        ),
+        .testTarget(
+            name: "CCBarTests",
+            dependencies: ["CCBar"],
+            path: "Tests/CCBarTests",
+            linkerSettings: [.linkedLibrary("sqlite3")]
+        ),
     ]
 )

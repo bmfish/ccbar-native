@@ -68,44 +68,6 @@ class SparklineView: NSView {
     var useGradient: Bool = false
     var hueOffset: CGFloat = 0
 
-    var gradientColors: [NSColor] = [
-        NSColor(red: 0.30, green: 0.52, blue: 0.95, alpha: 1.0),
-        NSColor(red: 0.35, green: 0.78, blue: 0.72, alpha: 1.0),
-        NSColor(red: 0.40, green: 0.82, blue: 0.48, alpha: 1.0),
-        NSColor(red: 0.95, green: 0.76, blue: 0.30, alpha: 1.0),
-        Design.brandColor,
-        NSColor(red: 0.90, green: 0.42, blue: 0.58, alpha: 1.0)
-    ]
-
-    private func gradientColor(at progress: CGFloat) -> NSColor {
-        guard gradientColors.count >= 2 else { return lineColor }
-        let p = min(max(progress, 0), 1)
-        let scaled = p * CGFloat(gradientColors.count - 1)
-        let idx = min(Int(scaled), gradientColors.count - 2)
-        let t = scaled - CGFloat(idx)
-
-        guard let c1 = gradientColors[idx].usingColorSpace(.sRGB),
-              let c2 = gradientColors[idx + 1].usingColorSpace(.sRGB) else {
-            return gradientColors[idx]
-        }
-
-        var r = c1.redComponent   + (c2.redComponent   - c1.redComponent)   * t
-        var g = c1.greenComponent + (c2.greenComponent - c1.greenComponent) * t
-        var b = c1.blueComponent  + (c2.blueComponent  - c1.blueComponent)  * t
-
-        if hueOffset != 0 {
-            let base = NSColor(red: r, green: g, blue: b, alpha: 1.0).usingColorSpace(.sRGB) ?? NSColor.white
-            var h: CGFloat = 0, s: CGFloat = 0, br: CGFloat = 0, a: CGFloat = 0
-            base.getHue(&h, saturation: &s, brightness: &br, alpha: &a)
-            let rotated = NSColor(hue: (h + hueOffset).truncatingRemainder(dividingBy: 1.0),
-                                  saturation: s, brightness: br, alpha: 1.0).usingColorSpace(.sRGB) ?? base
-            r = rotated.redComponent
-            g = rotated.greenComponent
-            b = rotated.blueComponent
-        }
-        return NSColor(red: r, green: g, blue: b, alpha: 1.0)
-    }
-
     // Catmull-Rom 样条插值（比直线平滑）
     private func catmullRomPoints(from pts: [NSPoint], segments: Int = 6) -> [NSPoint] {
         guard pts.count >= 2 else { return pts }
@@ -170,7 +132,7 @@ class SparklineView: NSView {
         fillPath.close()
 
         let topColor: NSColor = useGradient
-            ? gradientColor(at: 0.5).withAlphaComponent(0.18)
+            ? GradientPalette.color(at: 0.5, hueOffset: hueOffset, fallback: lineColor).withAlphaComponent(0.18)
             : fillColor
         let bottomColor = topColor.withAlphaComponent(0.0)
 
@@ -193,7 +155,7 @@ class SparklineView: NSView {
             let color: NSColor
             if useGradient {
                 let progress = count > 1 ? CGFloat(i) / CGFloat(count - 1) : 0.5
-                color = gradientColor(at: progress)
+                color = GradientPalette.color(at: progress, hueOffset: hueOffset, fallback: lineColor)
             } else {
                 color = lineColor
             }
@@ -207,7 +169,7 @@ class SparklineView: NSView {
             let dotRect = NSRect(x: lastPoint.x - dotRadius, y: lastPoint.y - dotRadius,
                                width: dotRadius * 2, height: dotRadius * 2)
             let dotPath = NSBezierPath(ovalIn: dotRect)
-            let endColor = useGradient ? gradientColor(at: 1.0) : lineColor
+            let endColor = useGradient ? GradientPalette.color(at: 1.0, hueOffset: hueOffset, fallback: lineColor) : lineColor
             endColor.setFill()
             dotPath.fill()
 
@@ -378,37 +340,6 @@ class BarChartView: NSView {
     var useGradient: Bool = false
     var hueOffset: CGFloat = 0
 
-    var gradientColors: [NSColor] = [
-        NSColor(red: 0.30, green: 0.52, blue: 0.95, alpha: 1.0),
-        NSColor(red: 0.35, green: 0.78, blue: 0.72, alpha: 1.0),
-        NSColor(red: 0.40, green: 0.82, blue: 0.48, alpha: 1.0),
-        NSColor(red: 0.95, green: 0.76, blue: 0.30, alpha: 1.0),
-        Design.brandColor,
-        NSColor(red: 0.90, green: 0.42, blue: 0.58, alpha: 1.0)
-    ]
-
-    private func gradientColor(at progress: CGFloat) -> NSColor {
-        guard gradientColors.count >= 2 else { return barColor }
-        let p = min(max(progress, 0), 1)
-        let scaled = p * CGFloat(gradientColors.count - 1)
-        let idx = min(Int(scaled), gradientColors.count - 2)
-        let t = scaled - CGFloat(idx)
-        guard let c1 = gradientColors[idx].usingColorSpace(.sRGB),
-              let c2 = gradientColors[idx + 1].usingColorSpace(.sRGB) else { return gradientColors[idx] }
-        var r = c1.redComponent + (c2.redComponent - c1.redComponent) * t
-        var g = c1.greenComponent + (c2.greenComponent - c1.greenComponent) * t
-        var b = c1.blueComponent + (c2.blueComponent - c1.blueComponent) * t
-        if hueOffset != 0 {
-            let base = NSColor(red: r, green: g, blue: b, alpha: 1.0).usingColorSpace(.sRGB) ?? NSColor.white
-            var h: CGFloat = 0, s: CGFloat = 0, br: CGFloat = 0, a: CGFloat = 0
-            base.getHue(&h, saturation: &s, brightness: &br, alpha: &a)
-            let rotated = NSColor(hue: (h + hueOffset).truncatingRemainder(dividingBy: 1.0),
-                                  saturation: s, brightness: br, alpha: 1.0).usingColorSpace(.sRGB) ?? base
-            r = rotated.redComponent; g = rotated.greenComponent; b = rotated.blueComponent
-        }
-        return NSColor(red: r, green: g, blue: b, alpha: 1.0)
-    }
-
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard !values.isEmpty else { return }
@@ -436,7 +367,7 @@ class BarChartView: NSView {
                 color = barColors[i]
             } else if useGradient {
                 let progress = count > 1 ? CGFloat(i) / CGFloat(count - 1) : 0.5
-                color = gradientColor(at: progress)
+                color = GradientPalette.color(at: progress, hueOffset: hueOffset, fallback: barColor)
             } else {
                 color = barColor
             }

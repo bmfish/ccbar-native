@@ -12,9 +12,10 @@ class SettingsWindowController: NSWindowController {
     var launchCheck: NSButton!
     var themePopup: NSPopUpButton!
     var notifyIntervalField: NSTextField!
-    /// 数据源区块：id → 路径输入框 / 启用勾选框
+    /// 数据源区块：id → 路径输入框 / 启用勾选框 / 连接状态标签
     var sourceFields: [String: NSTextField] = [:]
     var sourceChecks: [String: NSButton] = [:]
+    var sourceStatusLabels: [String: NSTextField] = [:]
 
     init(settings: Settings, onSave: @escaping () -> Void) {
         self.settings = settings
@@ -267,8 +268,12 @@ class SettingsWindowController: NSWindowController {
     }
 
     private func makeSourceRow(adapter: SourceAdapter) -> NSView {
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+
         let row = NSView()
         row.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(row)
 
         let check = NSButton(checkboxWithTitle: "", target: nil, action: nil)
         check.font = NSFont.systemFont(ofSize: 12)
@@ -309,7 +314,21 @@ class SettingsWindowController: NSWindowController {
             browseBtn.widthAnchor.constraint(equalToConstant: 60)
         ])
         row.heightAnchor.constraint(equalToConstant: 24).isActive = true
-        return row
+
+        // 连接状态行（打开设置页时从 StatsStore 读取）
+        let status = NSTextField(labelWithString: "")
+        status.font = NSFont.systemFont(ofSize: 10)
+        status.textColor = Design.textMuted
+        status.translatesAutoresizingMaskIntoConstraints = false
+        sourceStatusLabels[adapter.id] = status
+        container.addSubview(status)
+
+        NSLayoutConstraint.activate([
+            status.topAnchor.constraint(equalTo: row.bottomAnchor, constant: 1),
+            status.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            container.bottomAnchor.constraint(equalTo: status.bottomAnchor)
+        ])
+        return container
     }
 
     private func makeButton(title: String, action: Selector) -> NSButton {
@@ -343,6 +362,23 @@ class SettingsWindowController: NSWindowController {
             sourceFields[adapter.id]?.stringValue = path
             sourceFields[adapter.id]?.toolTip = path
         }
+        refreshSourceStatus()
+    }
+
+    /// 数据源连接状态（来自 StatsStore.attach 的诊断信息）
+    func refreshSourceStatus() {
+        let statuses = AppDelegate.shared?.store.sourceStatus ?? [:]
+        for (id, label) in sourceStatusLabels {
+            let s = statuses[id] ?? ""
+            label.stringValue = s
+            if s.contains("已连接") {
+                label.textColor = NSColor.systemGreen
+            } else if s == "未启用" {
+                label.textColor = Design.textMuted
+            } else {
+                label.textColor = NSColor.systemOrange
+            }
+        }
     }
 
     @objc func browseSource(_ sender: NSButton) {
@@ -375,7 +411,7 @@ class SettingsWindowController: NSWindowController {
             settings.warningThreshold = threshold
         }
         settings.warningEnabled = warningCheck.state == .on
-        settings.launchAtLogin = launchCheck.state == .on
+        settings.setLaunchAtLogin(launchCheck.state == .on)
 
         // 通知间隔
         if let interval = Int(notifyIntervalField.stringValue), interval >= 0 {
@@ -402,7 +438,7 @@ class SettingsWindowController: NSWindowController {
         settings.resetSourceConfigs()
         settings.warningThreshold = 50
         settings.warningEnabled = true
-        settings.launchAtLogin = false
+        settings.setLaunchAtLogin(false)
         loadSettings()
     }
 }
@@ -578,6 +614,27 @@ class DetailBaseWindowController: NSWindowController {
         else { return "\(n)" }
     }
 
+    /// 某一天的聚合：请求数 / 总 Token / 缓存读（daysAgo=0 表示今天）。
+    /// 历史聚合已在补账时展开进 usage_log，这里只查统一的 usage_all；
+    /// 用 epoch 区间 + 参数绑定替代逐行 date()，让 created_at 索引可用。
+    func queryDay(db: OpaquePointer, daysAgo: Int) -> (Int, Int64, Int64) {
+        let sql = """
+        SELECT COALESCE(SUM(request_count),0), COALESCE(SUM(output_tokens+input_tokens+cache_read_tokens+cache_creation_tokens),0),
+            COALESCE(SUM(cache_read_tokens),0)
+        FROM usage_all WHERE created_at >= ? AND created_at < ?
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return (0, 0, 0) }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, StatsStore.localMidnight(daysAgo))
+        sqlite3_bind_int64(stmt, 2, StatsStore.localMidnight(daysAgo - 1))
+        var result = (0, Int64(0), Int64(0))
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            result = (Int(sqlite3_column_int64(stmt, 0)), sqlite3_column_int64(stmt, 1), sqlite3_column_int64(stmt, 2))
+        }
+        return result
+    }
+
     func addSparkline(container: NSView, values: [CGFloat], hueOffset: CGFloat = 0) {
         let sparkline = SparklineView(frame: .zero)
         sparkline.values = values
@@ -681,24 +738,6 @@ class DetailWindowController: DetailBaseWindowController {
         ])
         contentStack.addArrangedSubview(totalRow)
         totalRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
-    }
-
-    private func queryDay(db: OpaquePointer, daysAgo: Int) -> (Int, Int64, Int64) {
-        // 历史聚合已在补账时展开进 usage_log，这里只需查统一的 usage_all
-        let sql = """
-        SELECT COALESCE(SUM(request_count),0) as r, COALESCE(SUM(output_tokens+input_tokens+cache_read_tokens+cache_creation_tokens),0) as o,
-            COALESCE(SUM(cache_read_tokens),0) as c
-        FROM usage_all WHERE date(created_at,'unixepoch','localtime')=date('now','localtime','-'||?||' days')
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return (0,0,0) }
-        sqlite3_bind_int(stmt, 1, Int32(daysAgo))
-        var result = (0, Int64(0), Int64(0))
-        if sqlite3_step(stmt) == SQLITE_ROW {
-            result = (Int(sqlite3_column_int(stmt, 0)), sqlite3_column_int64(stmt, 1), sqlite3_column_int64(stmt, 2))
-        }
-        sqlite3_finalize(stmt)
-        return result
     }
 }
 
@@ -804,23 +843,6 @@ class MonthDetailWindowController: DetailBaseWindowController {
         contentStack.addArrangedSubview(totalRow)
         totalRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
     }
-
-    private func queryDay(db: OpaquePointer, daysAgo: Int) -> (Int, Int64, Int64) {
-        let sql = """
-        SELECT COALESCE(SUM(request_count),0) as r, COALESCE(SUM(output_tokens+input_tokens+cache_read_tokens+cache_creation_tokens),0) as o,
-            COALESCE(SUM(cache_read_tokens),0) as c
-        FROM usage_all WHERE date(created_at,'unixepoch','localtime')=date('now','localtime','-'||?||' days')
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return (0,0,0) }
-        sqlite3_bind_int(stmt, 1, Int32(daysAgo))
-        var result = (0, Int64(0), Int64(0))
-        if sqlite3_step(stmt) == SQLITE_ROW {
-            result = (Int(sqlite3_column_int(stmt, 0)), sqlite3_column_int64(stmt, 1), sqlite3_column_int64(stmt, 2))
-        }
-        sqlite3_finalize(stmt)
-        return result
-    }
 }
 
 // MARK: - 模型分布详情窗口
@@ -867,12 +889,13 @@ class ModelDetailWindowController: DetailBaseWindowController {
             COALESCE(SUM(input_tokens+output_tokens+cache_read_tokens+cache_creation_tokens),0),
             COALESCE(SUM(cache_read_tokens),0)
         FROM usage_all
-        WHERE date(created_at,'unixepoch','localtime')=date('now','localtime','-'||?||' days')
+        WHERE created_at >= ? AND created_at < ?
         GROUP BY source, model ORDER BY 4 DESC
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        sqlite3_bind_int(stmt, 1, Int32(daysAgo))
+        sqlite3_bind_int64(stmt, 1, StatsStore.localMidnight(daysAgo))
+        sqlite3_bind_int64(stmt, 2, StatsStore.localMidnight(daysAgo - 1))
         var rows: [(source: String, model: String, reqs: Int, token: Int64, cache: Int64)] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
             rows.append((String(cString: sqlite3_column_text(stmt, 0)),
@@ -1042,12 +1065,13 @@ class HourlyDetailWindowController: DetailBaseWindowController {
             COALESCE(SUM(cache_read_tokens),0),
             COALESCE(SUM(cache_creation_tokens),0)
         FROM usage_all
-        WHERE date(created_at,'unixepoch','localtime')=date('now','localtime','-'||?||' days')
+        WHERE created_at >= ? AND created_at < ?
         GROUP BY 1 ORDER BY 1
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        sqlite3_bind_int(stmt, 1, Int32(daysAgo))
+        sqlite3_bind_int64(stmt, 1, StatsStore.localMidnight(daysAgo))
+        sqlite3_bind_int64(stmt, 2, StatsStore.localMidnight(daysAgo - 1))
         while sqlite3_step(stmt) == SQLITE_ROW {
             if let hs = sqlite3_column_text(stmt, 0) {
                 let h = Int(String(cString: hs)) ?? 0

@@ -1,24 +1,31 @@
 import Cocoa
 import SQLite3
+import UserNotifications
 
 // MARK: - AppDelegate
 
-class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNotificationCenterDelegate {
     static var shared: AppDelegate?
 
     var statusItem: NSStatusItem!
     var timer: Timer?
     let settings = Settings()
+    let store = StatsStore()
+    /// 统计库连接（= store.handle，含 ATTACH 的各数据源），详情窗口共用
+    var db: OpaquePointer? {
+        return store.handle
+    }
+
+    /// 统计库查询/同步都走这条后台串行队列，结果回主线程更新 UI
+    private let queryQueue = DispatchQueue(label: "ccbar.query", qos: .utility)
+
     var settingsWindow: SettingsWindowController?
     var detailWindow: DetailWindowController?
     var monthWindow: MonthDetailWindowController?
     var hourlyWindow: HourlyDetailWindowController?
     var modelWindow: ModelDetailWindowController?
-    var lastNotificationDate: Date?
-    var currentHourlyDate: Date?
 
     // MARK: - 里程碑动画
-    var lastTokenTier: Int = 0
     var bubbleWindows: [NSWindow] = []
 
     // 随机问候语
@@ -49,7 +56,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         AppDelegate.shared = self
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
-        // 不设置菜单栏图标，只显示数字
+        pruneDailyUserDefaults()
 
         // 初始数据库连接（自建统计库 + ATTACH 各数据源）
         connectDB()
@@ -60,13 +67,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             button.target = self
         }
 
+        setupNotifications()
+
         // 初始更新
         updateData()
 
         // 定时器
         startTimer()
-
     }
+
+    // MARK: - Popover
 
     var popover: NSPopover?
     var eventMonitor: Any?
@@ -131,12 +141,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     // MARK: - Database
 
-    let store = StatsStore()
-    /// 统计库连接（= store.handle，含 ATTACH 的各数据源），详情窗口共用
-    var db: OpaquePointer? {
-        return store.handle
-    }
-
     func connectDB() {
         store.rebuild(configs: settings.sourceConfigs)
         if store.handle == nil {
@@ -148,287 +152,213 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     func startTimer() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(timeInterval: TimeInterval(settings.refreshInterval),
-                                     target: self,
-                                     selector: #selector(updateData),
-                                     userInfo: nil,
-                                     repeats: true)
+        let t = Timer(timeInterval: TimeInterval(settings.refreshInterval),
+                      target: self,
+                      selector: #selector(updateData),
+                      userInfo: nil,
+                      repeats: true)
+        // .common 模式：弹窗/菜单等交互期间定时器照常触发
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
     }
 
+    /// 定时刷新：后台队列跑同步与查询，结果回主线程更新缓存与 UI
     @objc func updateData() {
-        // 懒惰补账：历史（昨天及更早）落后就同步进自建库，今日走实时查询
-        store.syncIfNeeded()
+        queryQueue.async { [weak self] in
+            guard let self = self else { return }
 
-        let todayStats = queryDayStats(days: 0)
+            // 懒惰补账：历史（昨天及更早）落后就同步进自建库，今日走实时查询
+            self.store.syncIfNeeded()
 
-        var modelBreakdown: [(model: String, input: Int64, output: Int64, total: Int64)]?
-        if DataCache.shared.needsModelCache() {
-            modelBreakdown = queryModelBreakdown()
-            DataCache.shared.markModelCacheDone()
+            let todayStats = self.store.queryDayStats(days: 0)
+            let workHours = self.store.queryWorkHours()
+
+            var modelBreakdown: [ModelStat]?
+            if DataCache.shared.needsModelCache() {
+                modelBreakdown = self.store.queryModelBreakdown()
+                DataCache.shared.markModelCacheDone()
+            }
+
+            var yesterdayStats: DayStats?
+            var weekStats: DayStats?
+            var monthStats: DayStats?
+            var totalStats: TotalStats?
+            if DataCache.shared.needsDailyCache() {
+                yesterdayStats = self.store.queryDayStats(days: 1)
+                weekStats = self.store.queryDayStats(days: 7)
+                monthStats = self.store.queryDayStats(days: 30)
+                totalStats = self.store.queryTotalStats()
+                DataCache.shared.markDailyCacheDone()
+            }
+
+            DispatchQueue.main.async {
+                DataCache.shared.update(
+                    today: todayStats,
+                    yesterday: yesterdayStats,
+                    week: weekStats,
+                    month: monthStats,
+                    total: totalStats,
+                    models: modelBreakdown,
+                    workHours: workHours
+                )
+                self.applyTitle(todayStats)
+
+                if let stats = todayStats {
+                    self.checkWarning(stats: stats)
+                    self.checkTokenMilestone(stats.total)
+                }
+
+                // 如果弹窗正在显示，刷新内容（确保主题切换后立即生效）
+                if let popover = self.popover, popover.isShown,
+                   let vc = popover.contentViewController as? PopoverViewController {
+                    vc.refresh()
+                }
+            }
         }
+    }
 
-        var yesterdayStats: (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)?
-        var weekStats: (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)?
-        var monthStats: (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)?
-        var totalStats: (reqs: Int, total: Int64)?
+    /// 打开弹窗/手动刷新：只重查实时性强的今日数据，历史区间走缓存
+    @objc func refreshData() {
+        queryQueue.async { [weak self] in
+            guard let self = self else { return }
+            let todayStats = self.store.queryDayStats(days: 0)
+            let modelBreakdown = self.store.queryModelBreakdown()
+            let workHours = self.store.queryWorkHours()
 
-        if DataCache.shared.needsDailyCache() {
-            yesterdayStats = queryDayStats(days: 1)
-            weekStats = queryDayStats(days: 7)
-            monthStats = queryDayStats(days: 30)
-            totalStats = queryTotalStats()
-            DataCache.shared.markDailyCacheDone()
+            DispatchQueue.main.async {
+                DataCache.shared.update(
+                    today: todayStats,
+                    yesterday: nil,
+                    week: nil,
+                    month: nil,
+                    total: nil,
+                    models: modelBreakdown,
+                    workHours: workHours
+                )
+                self.applyTitle(todayStats)
+                self.updateMenu()
+            }
         }
+    }
 
-        DataCache.shared.update(
-            today: todayStats,
-            yesterday: yesterdayStats,
-            week: weekStats,
-            month: monthStats,
-            total: totalStats,
-            models: modelBreakdown
-        )
-
-        if let stats = todayStats {
-            let totalStr = fmtTitle(stats.total)
-            let color = titleColor(for: stats.total)
-            let attrs: [NSAttributedString.Key: Any] = [
-                .foregroundColor: color,
-                .font: NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
-            ]
-            statusItem.button?.attributedTitle = NSAttributedString(string: totalStr, attributes: attrs)
-
-            checkWarning(stats: stats)
-            checkTokenMilestone(stats.total)
-        } else {
-            statusItem.button?.title = store.attachedAdapters.isEmpty ? "未启用" : "未找到"
-        }
-
-        // 图标由 updateIcon 设置，此处不覆盖
-
-        // 如果弹窗正在显示，刷新内容（确保主题切换后立即生效）
+    func updateMenu() {
         if let popover = popover, popover.isShown,
            let vc = popover.contentViewController as? PopoverViewController {
             vc.refresh()
         }
     }
 
-    // MARK: - Query Methods
+    // MARK: - 菜单栏标题
 
-    func queryDayStats(days: Int) -> (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)? {
-        guard let db = db, !store.attachedAdapters.isEmpty else { return nil }
-
-        var stmt: OpaquePointer?
-        let sql: String
-        var bindDays: Int?
-
-        if days == 0 {
-            // 今日：用 date() 函数匹配，避免时区问题
-            sql = """
-            SELECT
-                COALESCE(SUM(request_count), 0) as reqs,
-                COALESCE(SUM(input_tokens), 0) as input,
-                COALESCE(SUM(output_tokens), 0) as output,
-                COALESCE(SUM(cache_creation_tokens), 0) as cache_create,
-                COALESCE(SUM(cache_read_tokens), 0) as cache_read
-            FROM usage_all
-            WHERE date(created_at, 'unixepoch', 'localtime') = date('now', 'localtime')
-            """
-        } else if days == 1 {
-            // 昨日
-            sql = """
-            SELECT
-                COALESCE(SUM(request_count), 0) as reqs,
-                COALESCE(SUM(input_tokens), 0) as input,
-                COALESCE(SUM(output_tokens), 0) as output,
-                COALESCE(SUM(cache_creation_tokens), 0) as cache_create,
-                COALESCE(SUM(cache_read_tokens), 0) as cache_read
-            FROM usage_all
-            WHERE date(created_at, 'unixepoch', 'localtime') = date('now', 'localtime', '-1 day')
-            """
-        } else {
-            // 近N天
-            sql = """
-            SELECT
-                COALESCE(SUM(request_count), 0) as reqs,
-                COALESCE(SUM(input_tokens), 0) as input,
-                COALESCE(SUM(output_tokens), 0) as output,
-                COALESCE(SUM(cache_creation_tokens), 0) as cache_create,
-                COALESCE(SUM(cache_read_tokens), 0) as cache_read
-            FROM usage_all
-            WHERE date(created_at, 'unixepoch', 'localtime') >= date('now', 'localtime', '-\(days) days')
-            """
-        }
-
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            return nil
-        }
-
-        var result: (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)?
-
-        if sqlite3_step(stmt) == SQLITE_ROW {
-            let reqs = Int(sqlite3_column_int(stmt, 0))
-            let input = sqlite3_column_int64(stmt, 1)
-            let output = sqlite3_column_int64(stmt, 2)
-            let cacheCreate = sqlite3_column_int64(stmt, 3)
-            let cacheRead = sqlite3_column_int64(stmt, 4)
-            let total = input + output + cacheCreate + cacheRead
-            result = (reqs, input, output, cacheCreate, cacheRead, total)
-        }
-
-        sqlite3_finalize(stmt)
-        return result
+    private var titleFont: NSFont {
+        NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
     }
 
-    func queryModelBreakdown() -> [(model: String, input: Int64, output: Int64, total: Int64)]? {
-        guard let db = db else { return nil }
-
-        var stmt: OpaquePointer?
-        let sql = """
-        SELECT
-            model,
-            COALESCE(SUM(input_tokens), 0) as input,
-            COALESCE(SUM(output_tokens), 0) as output,
-            COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0) as total
-        FROM usage_all
-        WHERE date(created_at, 'unixepoch', 'localtime') = date('now', 'localtime')
-        GROUP BY model
-        ORDER BY total DESC
-        """
-
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            return nil
+    /// 用统计结果更新菜单栏标题；无数据时显示状态文案
+    func applyTitle(_ stats: DayStats?) {
+        guard let button = statusItem.button else { return }
+        guard let stats = stats else {
+            button.attributedTitle = NSAttributedString(
+                string: store.attachedAdapters.isEmpty ? "未启用" : "未找到",
+                attributes: [.font: titleFont])
+            return
         }
-
-        var result: [(model: String, input: Int64, output: Int64, total: Int64)] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let model = String(cString: sqlite3_column_text(stmt, 0))
-            let input = sqlite3_column_int64(stmt, 1)
-            let output = sqlite3_column_int64(stmt, 2)
-            let total = sqlite3_column_int64(stmt, 3)
-            result.append((model, input, output, total))
+        var attrs: [NSAttributedString.Key: Any] = [.font: titleFont]
+        if let color = titleColor(for: stats.total) {
+            attrs[.foregroundColor] = color
         }
-        sqlite3_finalize(stmt)
-        return result
+        button.attributedTitle = NSAttributedString(string: fmtTitle(stats.total), attributes: attrs)
     }
 
-    func queryWorkHours() -> String? {
-        guard let db = db else { return nil }
-
-        var stmt: OpaquePointer?
-        let sql = """
-        SELECT MIN(created_at)
-        FROM usage_all
-        WHERE date(created_at, 'unixepoch', 'localtime') = date('now', 'localtime')
-        """
-
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+    /// 菜单栏标题颜色（按总量阈值分级）。
+    /// 默认档返回 nil → 不设置前景色，用系统默认色，浅色菜单栏下不会隐形。
+    func titleColor(for total: Int64) -> NSColor? {
+        if total >= 200_000_000 {       // ≥2亿  深红
+            return NSColor(red: 0.90, green: 0.22, blue: 0.25, alpha: 1.0)
+        } else if total >= 150_000_000 { // ≥1.5亿 浅红
+            return NSColor(red: 0.95, green: 0.45, blue: 0.40, alpha: 1.0)
+        } else if total >= 100_000_000 { // ≥1亿  深绿
+            return NSColor(red: 0.15, green: 0.72, blue: 0.40, alpha: 1.0)
+        } else if total >= 50_000_000 {  // ≥5000万 浅绿
+            return NSColor(red: 0.35, green: 0.85, blue: 0.55, alpha: 1.0)
+        } else {                         // <5000万 系统默认色
             return nil
         }
-
-        if sqlite3_step(stmt) == SQLITE_ROW {
-            let timestamp = sqlite3_column_int64(stmt, 0)
-            let startDate = Date(timeIntervalSince1970: TimeInterval(timestamp))
-            let hours = Date().timeIntervalSince(startDate) / 3600
-            sqlite3_finalize(stmt)
-            return String(format: "%.1f", hours)
-        }
-        sqlite3_finalize(stmt)
-        return nil
     }
 
-    func queryTotalStats() -> (reqs: Int, total: Int64)? {
-        guard let db = db, !store.attachedAdapters.isEmpty else { return nil }
-
-        var stmt: OpaquePointer?
-        // 历史聚合已在补账时展开进 usage_log，明细 + 今日实时全在 usage_all 里，单表即全量
-        let sql = """
-        SELECT COALESCE(SUM(request_count), 0),
-            COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
-        FROM usage_all
-        """
-
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            return nil
-        }
-
-        if sqlite3_step(stmt) == SQLITE_ROW {
-            let reqs = Int(sqlite3_column_int(stmt, 0))
-            let total = sqlite3_column_int64(stmt, 1)
-            sqlite3_finalize(stmt)
-            return (reqs, total)
-        }
-        sqlite3_finalize(stmt)
-        return nil
+    /// 立即刷新菜单栏标题（不依赖定时器）
+    func refreshTitleColor() {
+        applyTitle(DataCache.shared.getCachedToday())
     }
 
-    /// 今日各数据源分账（source, 请求数, token 总量）
-    func querySourceBreakdown() -> [(source: String, reqs: Int, total: Int64)] {
-        guard let db = db, !store.attachedAdapters.isEmpty else { return [] }
+    func flashTitle() {
+        guard let button = statusItem.button else { return }
 
-        var stmt: OpaquePointer?
-        let sql = """
-        SELECT source, COALESCE(SUM(request_count), 0),
-            COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
-        FROM usage_all
-        WHERE date(created_at, 'unixepoch', 'localtime') = date('now', 'localtime')
-        GROUP BY source
-        ORDER BY 3 DESC
-        """
+        let currentText = button.attributedTitle.string.isEmpty
+            ? button.title
+            : button.attributedTitle.string
 
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        let attrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: Design.brandColor,
+            .font: NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .bold)
+        ]
+        button.attributedTitle = NSAttributedString(string: "✨ " + currentText, attributes: attrs)
 
-        var result: [(String, Int, Int64)] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let source = String(cString: sqlite3_column_text(stmt, 0))
-            result.append((source, Int(sqlite3_column_int(stmt, 1)), sqlite3_column_int64(stmt, 2)))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self = self else { return }
+            self.applyTitle(DataCache.shared.getCachedToday())
         }
-        sqlite3_finalize(stmt)
-        return result
     }
 
-    func queryDailyBreakdown(days: Int) -> [(date: String, reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, cost: Double)]? {
-        guard let db = db else { return nil }
+    // MARK: - 通知（UNUserNotificationCenter；NSUserNotification 自 macOS 11 起废弃）
 
-        var stmt: OpaquePointer?
-        let sql = """
-        SELECT
-            date(created_at, 'unixepoch', 'localtime') as date,
-            COALESCE(SUM(request_count), 0) as reqs,
-            COALESCE(SUM(input_tokens), 0) as input,
-            COALESCE(SUM(output_tokens), 0) as output,
-            COALESCE(SUM(cache_creation_tokens), 0) as cache_create,
-            COALESCE(SUM(cache_read_tokens), 0) as cache_read,
-            COALESCE(SUM(CAST(total_cost_usd AS REAL)), 0) as cost
-        FROM usage_all
-        WHERE created_at >= strftime('%s', 'now', 'localtime', '-' || ? || ' days')
-        GROUP BY date
-        ORDER BY date DESC
-        """
-
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            return nil
+    private func setupNotifications() {
+        // UNUserNotificationCenter 只在打包 app 里可用；裸二进制开发运行时跳过
+        guard Bundle.main.bundleIdentifier != nil else {
+            print("[ccBar] 非打包环境，跳过通知初始化")
+            return
         }
-        sqlite3_bind_int(stmt, 1, Int32(days))
-
-        var result: [(date: String, reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, cost: Double)] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let date = String(cString: sqlite3_column_text(stmt, 0))
-            let reqs = Int(sqlite3_column_int(stmt, 1))
-            let input = sqlite3_column_int64(stmt, 2)
-            let output = sqlite3_column_int64(stmt, 3)
-            let cacheCreate = sqlite3_column_int64(stmt, 4)
-            let cacheRead = sqlite3_column_int64(stmt, 5)
-            let cost = sqlite3_column_double(stmt, 6)
-            result.append((date, reqs, input, output, cacheCreate, cacheRead, cost))
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        center.requestAuthorization(options: [.alert, .sound]) { granted, error in
+            if let error = error {
+                print("[ccBar] 通知授权失败: \(error.localizedDescription)")
+            } else if !granted {
+                print("[ccBar] 用户未授权通知，用量预警/里程碑将不弹系统通知")
+            }
         }
-        sqlite3_finalize(stmt)
-        return result
+    }
+
+    func sendNotification(title: String, body: String) {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+
+    /// 点击通知 → 打开面板
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            self?.showPopover()
+        }
+        completionHandler()
+    }
+
+    /// App 处于活跃状态时也显示横幅
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
     }
 
     // MARK: - Warning & Milestone
 
-    func checkWarning(stats: (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)) {
+    func checkWarning(stats: DayStats) {
         guard settings.warningEnabled else { return }
 
         let todayKey = "warningNotified_\(DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none))"
@@ -438,21 +368,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         let thresholdInTokens = Int64(settings.warningThreshold) * 10000
         if stats.total >= thresholdInTokens {
-            sendNotification(total: stats.total, threshold: thresholdInTokens)
+            sendNotification(title: "用量预警",
+                             body: "今日 Token 用量已达 \(fmtK(stats.total))，超过预警阈值 \(settings.warningThreshold)万")
             UserDefaults.standard.set(true, forKey: todayKey)
         }
     }
-
-    func sendNotification(total: Int64, threshold: Int64) {
-        let notification = NSUserNotification()
-        notification.title = "用量预警"
-        notification.informativeText = "今日 Token 用量已达 \(fmtK(total))，超过预警阈值 \(settings.warningThreshold)万"
-        notification.soundName = NSUserNotificationDefaultSoundName
-
-        NSUserNotificationCenter.default.deliver(notification)
-    }
-
-    // MARK: - 里程碑动画
 
     /// 按设定间隔触发通知（每 N 万弹一次，每个档位每天只通知一次）
     func checkTokenMilestone(_ total: Int64) {
@@ -475,13 +395,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         showBubble(delta: deltaTokens)
         flashTitle()
 
-        // 发送系统通知
-        let notification = NSUserNotification()
-        notification.title = "🎉 用量里程碑"
-        notification.informativeText = "今日 Token 已达 \(fmtK(total))（每\(intervalWan)万通知一次）"
-        notification.soundName = NSUserNotificationDefaultSoundName
-        NSUserNotificationCenter.default.deliver(notification)
+        sendNotification(title: "🎉 用量里程碑",
+                         body: "今日 Token 已达 \(fmtK(total))（每\(intervalWan)万通知一次）")
     }
+
+    /// 清理"每天一个 key"的历史标记（预警/里程碑），只保留今天的
+    private func pruneDailyUserDefaults() {
+        let today = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none)
+        for key in UserDefaults.standard.dictionaryRepresentation().keys
+        where key.hasPrefix("milestone_") || key.hasPrefix("warningNotified_") {
+            if !key.contains(today) {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+    }
+
+    // MARK: - 里程碑动画
 
     func showBubble(delta: Int64) {
         guard let button = statusItem.button, let window = button.window else { return }
@@ -547,107 +476,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         })
     }
 
-    func flashTitle() {
-        guard let button = statusItem.button else { return }
-
-        let currentText = button.attributedTitle.string.isEmpty
-            ? button.title
-            : button.attributedTitle.string
-
-        let attrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: Design.brandColor,
-            .font: NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .bold)
-        ]
-        button.attributedTitle = NSAttributedString(string: "✨ " + currentText, attributes: attrs)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            guard let self = self else { return }
-            if let stats = DataCache.shared.getCachedToday() {
-                let color = self.titleColor(for: stats.total)
-                let normalAttrs: [NSAttributedString.Key: Any] = [
-                    .foregroundColor: color,
-                    .font: NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
-                ]
-                button.attributedTitle = NSAttributedString(string: self.fmtTitle(stats.total), attributes: normalAttrs)
-            } else {
-                let fallback: [NSAttributedString.Key: Any] = [
-                    .foregroundColor: Design.textPrimary,
-                    .font: NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
-                ]
-                button.attributedTitle = NSAttributedString(string: currentText, attributes: fallback)
-            }
-        }
-    }
-
-    func updateIcon() {
-        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-
-        if let button = statusItem.button {
-            if isDark {
-                button.image = createIcon(color: NSColor.white)
-            } else {
-                button.image = createIcon(color: NSColor.black)
-            }
-        }
-    }
-
-    func createIcon(color: NSColor) -> NSImage {
-        let size = NSSize(width: 18, height: 18)
-        let image = NSImage(size: size)
-
-        image.lockFocus()
-        let ctx = NSGraphicsContext.current!
-        ctx.cgContext.setFillColor(color.cgColor)
-
-        let path = NSBezierPath()
-        path.move(to: NSPoint(x: 10, y: 18))
-        path.line(to: NSPoint(x: 6, y: 10))
-        path.line(to: NSPoint(x: 9, y: 10))
-        path.line(to: NSPoint(x: 8, y: 2))
-        path.line(to: NSPoint(x: 12, y: 10))
-        path.line(to: NSPoint(x: 9, y: 10))
-        path.close()
-        path.fill()
-
-        image.unlockFocus()
-        image.isTemplate = true
-
-        return image
-    }
-
-    func updateMenu() {
-        if let popover = popover, popover.isShown,
-           let vc = popover.contentViewController as? PopoverViewController {
-            vc.refresh()
-        }
-    }
-
-    @objc func refreshData() {
-        let todayStats = queryDayStats(days: 0)
-        let modelBreakdown = queryModelBreakdown()
-
-        DataCache.shared.update(
-            today: todayStats,
-            yesterday: nil,
-            week: nil,
-            month: nil,
-            total: nil,
-            models: modelBreakdown
-        )
-
-        if let stats = todayStats {
-            let totalStr = fmtTitle(stats.total)
-            let color = titleColor(for: stats.total)
-            let attrs: [NSAttributedString.Key: Any] = [
-                .foregroundColor: color,
-                .font: NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
-            ]
-            statusItem.button?.attributedTitle = NSAttributedString(string: totalStr, attributes: attrs)
-        }
-
-        updateMenu()
-    }
-
     func fmtK(_ n: Int64) -> String {
         if n >= 100_000_000 {
             let d = Double(n) / 100_000_000
@@ -664,15 +492,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         return Design.formatTokens(n)
     }
 
-    func fmtTotal(_ n: Int64) -> String {
-        if n >= 100_000_000 {
-            let d = Double(n) / 100_000_000
-            return String(format: "%.2f亿", d)
-        } else {
-            return fmtK(n)
-        }
-    }
-
     @objc func copyStats() {
         var text = "ccBar 今日用量统计\n"
         text += "==================\n"
@@ -684,7 +503,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             text += "输出 Token: \(fmtK(stats.output))\n"
         }
 
-        let sources = querySourceBreakdown()
+        let sources = store.querySourceBreakdown()
         if sources.count > 1 {
             text += "\n数据源分布:\n"
             for s in sources {
@@ -726,40 +545,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 self?.connectDB()
                 self?.startTimer()
                 self?.updateData()
-                // 主题切换后强制刷新标题颜色（不等定时器）
+                // 主题切换后立即刷新标题（不等定时器）
                 self?.refreshTitleColor()
             }
         }
         settingsWindow?.showWindow(nil)
         settingsWindow?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-    }
-
-    /// 菜单栏标题颜色（按总量阈值分级）
-    func titleColor(for total: Int64) -> NSColor {
-        if total >= 200_000_000 {       // ≥2亿  深红
-            return NSColor(red: 0.90, green: 0.22, blue: 0.25, alpha: 1.0)
-        } else if total >= 150_000_000 { // ≥1.5亿 浅红
-            return NSColor(red: 0.95, green: 0.45, blue: 0.40, alpha: 1.0)
-        } else if total >= 100_000_000 { // ≥1亿  深绿
-            return NSColor(red: 0.15, green: 0.72, blue: 0.40, alpha: 1.0)
-        } else if total >= 50_000_000 {  // ≥5000万 浅绿
-            return NSColor(red: 0.35, green: 0.85, blue: 0.55, alpha: 1.0)
-        } else {                         // <5000万 白色
-            return NSColor.white
-        }
-    }
-
-    /// 立即刷新菜单栏标题颜色（不依赖定时器）
-    func refreshTitleColor() {
-        guard let stats = DataCache.shared.getCachedToday() else { return }
-        let totalStr = fmtTitle(stats.total)
-        let color = titleColor(for: stats.total)
-        let attrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: color,
-            .font: NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
-        ]
-        statusItem.button?.attributedTitle = NSAttributedString(string: totalStr, attributes: attrs)
     }
 
     @objc func openSettingsAndClose() {
@@ -769,7 +561,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     @objc func openDetail() {
         closePopover()
-        print("[ccBar] openDetail called, db=\(db != nil ? "ok" : "nil")")
         if detailWindow == nil {
             detailWindow = DetailWindowController()
             detailWindow?.onDateChange = { [weak self] newWeekStart in
@@ -785,7 +576,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         detailWindow?.window?.center()
         detailWindow?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        print("[ccBar] detailWindow shown: \(detailWindow?.window?.isVisible ?? false)")
     }
 
     func openWeekDetail(for weekStart: Date) {
@@ -842,7 +632,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 self?.openHourlyDetail(for: newDate)
             }
         }
-        currentHourlyDate = date
         hourlyWindow?.reloadData(db: db, date: date)
         hourlyWindow?.showWindow(nil)
         hourlyWindow?.window?.makeKeyAndOrderFront(nil)

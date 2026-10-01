@@ -1,4 +1,5 @@
 import Cocoa
+import ServiceManagement
 
 // MARK: - Settings
 
@@ -67,6 +68,28 @@ class Settings {
         set { defaults.set(newValue, forKey: "launchAtLogin") }
     }
 
+    /// 开机启动：除记录偏好外，真正注册/注销系统登录项（SMAppService，macOS 13+）
+    func setLaunchAtLogin(_ enabled: Bool) {
+        launchAtLogin = enabled
+        guard #available(macOS 13.0, *) else {
+            print("[ccBar] 开机启动需要 macOS 13+，仅记录偏好")
+            return
+        }
+        do {
+            if enabled {
+                if SMAppService.mainApp.status != .enabled {
+                    try SMAppService.mainApp.register()
+                }
+            } else {
+                if SMAppService.mainApp.status == .enabled {
+                    try SMAppService.mainApp.unregister()
+                }
+            }
+        } catch {
+            print("[ccBar] 开机启动设置失败: \(error.localizedDescription)")
+        }
+    }
+
     /// 通知间隔（万），每累计到这个倍数弹一次通知，0=关闭
     var notifyInterval: Int {
         get {
@@ -78,97 +101,111 @@ class Settings {
 }
 
 // MARK: - Data Cache
+//
+// 定时器在后台队列查询、写入缓存；UI 在主线程读缓存。全部访问经锁串行。
 
-class DataCache {
+final class DataCache {
     static let shared = DataCache()
+    private let lock = NSLock()
 
-    private var todayStats: (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)?
-    private var yesterdayStats: (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)?
-    private var weekStats: (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)?
-    private var monthStats: (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)?
-    private var totalStats: (reqs: Int, total: Int64)?
-    private var modelBreakdown: [(model: String, input: Int64, output: Int64, total: Int64)]?
-    private var lastUpdate: Date = Date.distantPast
+    private var todayStats: DayStats?
+    private var yesterdayStats: DayStats?
+    private var weekStats: DayStats?
+    private var monthStats: DayStats?
+    private var totalStats: TotalStats?
+    private var modelBreakdown: [ModelStat]?
+    private var workHours: Double?
     private var lastDailyCacheDate: String?
-    private var lastModelCacheDate: String?
+    private var lastModelCacheHour = -1
 
-    func getCachedToday() -> (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)? {
+    func getCachedToday() -> DayStats? {
+        lock.lock(); defer { lock.unlock() }
         return todayStats
     }
 
-    func getCachedYesterday() -> (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)? {
+    func getCachedYesterday() -> DayStats? {
+        lock.lock(); defer { lock.unlock() }
         return yesterdayStats
     }
 
-    func getCachedWeek() -> (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)? {
+    func getCachedWeek() -> DayStats? {
+        lock.lock(); defer { lock.unlock() }
         return weekStats
     }
 
-    func getCachedMonth() -> (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)? {
+    func getCachedMonth() -> DayStats? {
+        lock.lock(); defer { lock.unlock() }
         return monthStats
     }
 
-    func getCachedTotal() -> (reqs: Int, total: Int64)? {
+    func getCachedTotal() -> TotalStats? {
+        lock.lock(); defer { lock.unlock() }
         return totalStats
     }
 
-    func getCachedModelBreakdown() -> [(model: String, input: Int64, output: Int64, total: Int64)]? {
+    func getCachedModelBreakdown() -> [ModelStat]? {
+        lock.lock(); defer { lock.unlock() }
         return modelBreakdown
     }
 
+    func getCachedWorkHours() -> Double? {
+        lock.lock(); defer { lock.unlock() }
+        return workHours
+    }
+
+    /// 历史区间（昨日/周/月/总量）每天重查一次
     func needsDailyCache() -> Bool {
+        lock.lock(); defer { lock.unlock() }
         let today = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none)
         return lastDailyCacheDate != today
     }
 
+    /// 模型分布每小时重查一次
     func needsModelCache() -> Bool {
-        guard let lastDate = lastModelCacheDate else { return true }
-        let now = Date()
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH"
-        let currentHour = formatter.string(from: now)
-        let lastHour = String(lastDate.prefix(2))
-        return currentHour != lastHour
+        lock.lock(); defer { lock.unlock() }
+        return Calendar.current.component(.hour, from: Date()) != lastModelCacheHour
     }
 
     func update(
-        today: (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)?,
-        yesterday: (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)?,
-        week: (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)?,
-        month: (reqs: Int, input: Int64, output: Int64, cacheCreate: Int64, cacheRead: Int64, total: Int64)?,
-        total: (reqs: Int, total: Int64)?,
-        models: [(model: String, input: Int64, output: Int64, total: Int64)]?
+        today: DayStats?,
+        yesterday: DayStats?,
+        week: DayStats?,
+        month: DayStats?,
+        total: TotalStats?,
+        models: [ModelStat]?,
+        workHours: Double?
     ) {
+        lock.lock(); defer { lock.unlock() }
         self.todayStats = today
-        if yesterday != nil {
-            self.yesterdayStats = yesterday
-        }
-        if week != nil {
-            self.weekStats = week
-        }
-        if month != nil {
-            self.monthStats = month
-        }
-        if total != nil {
-            self.totalStats = total
-        }
-        if models != nil {
-            self.modelBreakdown = models
-        }
-        self.lastUpdate = Date()
+        if let v = yesterday { self.yesterdayStats = v }
+        if let v = week { self.weekStats = v }
+        if let v = month { self.monthStats = v }
+        if let v = total { self.totalStats = v }
+        if let v = models { self.modelBreakdown = v }
+        if let v = workHours { self.workHours = v }
     }
 
     func markDailyCacheDone() {
+        lock.lock(); defer { lock.unlock() }
         lastDailyCacheDate = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none)
     }
 
     func markModelCacheDone() {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
-        lastModelCacheDate = formatter.string(from: Date())
+        lock.lock(); defer { lock.unlock() }
+        lastModelCacheHour = Calendar.current.component(.hour, from: Date())
     }
 
-    func getLastUpdateTime() -> Date {
-        return lastUpdate
+    /// 仅供测试：清空单例状态
+    func resetForTesting() {
+        lock.lock(); defer { lock.unlock() }
+        todayStats = nil
+        yesterdayStats = nil
+        weekStats = nil
+        monthStats = nil
+        totalStats = nil
+        modelBreakdown = nil
+        workHours = nil
+        lastDailyCacheDate = nil
+        lastModelCacheHour = -1
     }
 }
