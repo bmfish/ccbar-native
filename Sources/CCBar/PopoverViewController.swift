@@ -5,6 +5,10 @@ import Cocoa
 class PopoverViewController: NSViewController {
     private var scrollView: NSScrollView!
     private var contentStack: NSStackView!
+    /// 问候语在弹窗创建时随机一次（复用实例 → 弹窗期间不换）
+    private let greeting = AppDelegate.shared?.greetings.randomElement() ?? "ccBar 用量统计"
+    /// 上次渲染的数据签名；数据没变就不重建视图，消除定时刷新的闪烁
+    private var lastSignature: String?
 
     override func loadView() {
         let mainView = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 420))
@@ -21,7 +25,7 @@ class PopoverViewController: NSViewController {
         Design.addDarkTint(overBlurIn: mainView)
 
         scrollView = NSScrollView(frame: mainView.bounds)
-        scrollView.autoresizingMask = [.width, .height]
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
         scrollView.hasVerticalRuler = false
@@ -48,11 +52,60 @@ class PopoverViewController: NSViewController {
             contentStack.bottomAnchor.constraint(equalTo: clipView.bottomAnchor)
         ])
 
+        // 底部常驻操作栏：不随内容滚动，内容少时也钉在底部
+        let bar = NSStackView()
+        bar.orientation = .horizontal
+        bar.distribution = .fillEqually
+        bar.spacing = 6
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.addArrangedSubview(makeIconButton(sfSymbol: "doc.on.doc", label: "复制",
+                                              action: #selector(AppDelegate.copyStats)))
+        bar.addArrangedSubview(makeIconButton(sfSymbol: "arrow.clockwise", label: "刷新",
+                                              action: #selector(AppDelegate.refreshData)))
+        bar.addArrangedSubview(makeIconButton(sfSymbol: "gearshape", label: "设置",
+                                              action: #selector(AppDelegate.openSettingsAndClose)))
+        bar.addArrangedSubview(makeIconButton(sfSymbol: "xmark", label: "退出",
+                                              action: #selector(AppDelegate.quit)))
+        mainView.addSubview(bar)
+
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: mainView.topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: mainView.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: mainView.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: -8),
+            bar.leadingAnchor.constraint(equalTo: mainView.leadingAnchor, constant: 14),
+            bar.trailingAnchor.constraint(equalTo: mainView.trailingAnchor, constant: -14),
+            bar.bottomAnchor.constraint(equalTo: mainView.bottomAnchor, constant: -10),
+            bar.heightAnchor.constraint(equalToConstant: 40)
+        ])
+
         self.view = mainView
     }
 
     func refresh() {
+        guard renderSignature() != lastSignature else { return }
+        lastSignature = renderSignature()
+        // 重建期间关掉隐式动画，数据微变时不再闪烁
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         buildContent()
+        CATransaction.commit()
+    }
+
+    /// 影响渲染的数据签名（主题 + 各缓存值）
+    private func renderSignature() -> String {
+        let c = DataCache.shared
+        let models = c.getCachedModelBreakdown()?.map { "\($0.model):\($0.total)" }.joined(separator: ",") ?? ""
+        return [
+            Theme.current.rawValue,
+            c.getCachedToday().map { "\($0.reqs)/\($0.total)" } ?? "nil",
+            c.getCachedYesterday().map { "\($0.total)" } ?? "nil",
+            c.getCachedWeek().map { "\($0.total)" } ?? "nil",
+            c.getCachedMonth().map { "\($0.total)" } ?? "nil",
+            c.getCachedTotal().map { "\($0.total)" } ?? "nil",
+            c.getCachedWorkHours().map { String(format: "%.1f", $0) } ?? "nil",
+            models
+        ].joined(separator: "|")
     }
 
     // MARK: - 构建内容
@@ -84,6 +137,8 @@ class PopoverViewController: NSViewController {
         // 今日统计卡片
         if let today = today {
             buildTodayCard(today)
+        } else {
+            buildEmptyState()
         }
 
         // 模型分布
@@ -113,18 +168,27 @@ class PopoverViewController: NSViewController {
             if let total = total {
                 addStatRow(sfIcon: "sum", iconColor: tc.total,
                           title: "历史总量", value: Design.formatTokens(total.total),
-                          action: #selector(AppDelegate.openMonthDetail))
+                          action: #selector(AppDelegate.openAllTimeDetail))
             }
         }
 
         addSpacer(6)
         addSeparator()
-        addSpacer(4)
+    }
 
-        // 操作按钮
-        buildButtonBar()
-
-        addSpacer(2)
+    /// 无数据源/查询失败时的占位
+    private func buildEmptyState() {
+        let card = makeCard()
+        let lbl = NSTextField(wrappingLabelWithString: "暂无数据\n请检查设置里的数据源连接")
+        lbl.font = NSFont.systemFont(ofSize: 12)
+        lbl.textColor = Design.textMuted
+        lbl.alignment = .center
+        lbl.translatesAutoresizingMaskIntoConstraints = false
+        card.addArrangedSubview(lbl)
+        lbl.widthAnchor.constraint(equalTo: card.widthAnchor).isActive = true
+        contentStack.addArrangedSubview(card)
+        card.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28).isActive = true
+        addSpacer(10)
     }
 
     // MARK: - 今日统计卡片
@@ -251,28 +315,6 @@ class PopoverViewController: NSViewController {
             s = String(s.prefix(14)) + "…"
         }
         return s
-    }
-
-    // MARK: - 按钮栏
-
-    private func buildButtonBar() {
-        let bar = NSStackView()
-        bar.orientation = .horizontal
-        bar.distribution = .fillEqually
-        bar.spacing = 6
-        bar.translatesAutoresizingMaskIntoConstraints = false
-
-        bar.addArrangedSubview(makeIconButton(sfSymbol: "doc.on.doc", label: "复制",
-                                              action: #selector(AppDelegate.copyStats)))
-        bar.addArrangedSubview(makeIconButton(sfSymbol: "arrow.clockwise", label: "刷新",
-                                              action: #selector(AppDelegate.refreshData)))
-        bar.addArrangedSubview(makeIconButton(sfSymbol: "gearshape", label: "设置",
-                                              action: #selector(AppDelegate.openSettingsAndClose)))
-        bar.addArrangedSubview(makeIconButton(sfSymbol: "xmark", label: "退出",
-                                              action: #selector(AppDelegate.quit)))
-
-        contentStack.addArrangedSubview(bar)
-        bar.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28).isActive = true
     }
 
     // MARK: - 组件工厂

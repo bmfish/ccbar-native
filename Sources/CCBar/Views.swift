@@ -20,6 +20,24 @@ class InteractiveRowView: NSView {
     // 不会派发到视图，表现就是「要点两次才有反应」。
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    // 可访问性：整行是一个按钮，VoiceOver 朗读行内文本
+    // （NSAccessibility 的这些属性来自协议默认实现，直接声明 witness 即可，不能 override）
+    var isAccessibilityElement: Bool {
+        get { true }
+        set {}
+    }
+    var accessibilityRole: NSAccessibility.Role? {
+        get { .button }
+        set {}
+    }
+    var accessibilityLabel: String? {
+        get {
+            let texts = subviews.compactMap { ($0 as? NSTextField)?.stringValue }.filter { !$0.isEmpty }
+            return texts.isEmpty ? nil : texts.joined(separator: "，")
+        }
+        set {}
+    }
+
     override func mouseDown(with event: NSEvent) {
         if event.clickCount <= 1 { onTap?() }
     }
@@ -340,6 +358,49 @@ class BarChartView: NSView {
     var useGradient: Bool = false
     var hueOffset: CGFloat = 0
 
+    /// 柱子几何（draw 与 tooltip 共用）
+    private func barGeometry() -> (barWidth: CGFloat, spacing: CGFloat) {
+        let count = CGFloat(max(values.count, 1))
+        let spacing: CGFloat = max(1, min(2, (bounds.width - count * 3) / count))
+        let barWidth = max((bounds.width - spacing * (count - 1)) / count, 2)
+        return (barWidth, spacing)
+    }
+
+    private func barIndex(at x: CGFloat) -> Int? {
+        guard !values.isEmpty else { return nil }
+        let g = barGeometry()
+        let i = Int(x / (g.barWidth + g.spacing))
+        guard i >= 0, i < values.count,
+              x - CGFloat(i) * (g.barWidth + g.spacing) <= g.barWidth else { return nil }
+        return i
+    }
+
+    private var moveArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let area = moveArea { removeTrackingArea(area) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseMoved, .activeAlways],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        moveArea = area
+    }
+
+    /// hover 显示该柱的数值 tooltip
+    override func mouseMoved(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        guard let i = barIndex(at: p.x) else {
+            toolTip = nil
+            return
+        }
+        let name = labels[safe: i] ?? "第 \(i + 1) 项"
+        toolTip = "\(name)：\(Design.formatTokens(Int64(values[i])))"
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        toolTip = nil
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard !values.isEmpty else { return }
@@ -347,8 +408,9 @@ class BarChartView: NSView {
         guard maxVal > 0 else { return }
 
         let count = CGFloat(values.count)
-        let spacing: CGFloat = max(1, min(2, (bounds.width - count * 3) / count))
-        let barWidth = max((bounds.width - spacing * (count - 1)) / count, 2)
+        let geo = barGeometry()
+        let spacing = geo.spacing
+        let barWidth = geo.barWidth
         let bottomPad: CGFloat = labels.isEmpty ? 4 : 14
         let topPad: CGFloat = 3
         let availableH = bounds.height - bottomPad - topPad

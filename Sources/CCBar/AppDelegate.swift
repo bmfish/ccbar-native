@@ -24,6 +24,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     var monthWindow: MonthDetailWindowController?
     var hourlyWindow: HourlyDetailWindowController?
     var modelWindow: ModelDetailWindowController?
+    var allTimeWindow: AllTimeDetailWindowController?
 
     // MARK: - 里程碑动画
     var bubbleWindows: [NSWindow] = []
@@ -61,10 +62,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         // 初始数据库连接（自建统计库 + ATTACH 各数据源）
         connectDB()
 
-        // 设置点击事件（使用 popover 替代 menu）
+        // 左键弹面板，右键快捷菜单；数字前放一个小图标（template 自动适配深浅菜单栏）
         if let button = statusItem.button {
-            button.action = #selector(togglePopover)
+            button.image = Self.makeMenuBarIcon()
+            button.imagePosition = .imageLeading
+            button.action = #selector(statusItemClicked)
             button.target = self
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
         setupNotifications()
@@ -76,10 +80,60 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         startTimer()
     }
 
+    /// 菜单栏小闪电图标
+    static func makeMenuBarIcon() -> NSImage {
+        let image = NSImage(size: NSSize(width: 16, height: 16))
+        image.lockFocus()
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: 9.5, y: 15))
+        path.line(to: NSPoint(x: 5, y: 8))
+        path.line(to: NSPoint(x: 7.5, y: 8))
+        path.line(to: NSPoint(x: 6.5, y: 1))
+        path.line(to: NSPoint(x: 11, y: 8.5))
+        path.line(to: NSPoint(x: 8.5, y: 8.5))
+        path.close()
+        NSColor.black.setFill()
+        path.fill()
+        image.unlockFocus()
+        image.isTemplate = true
+        return image
+    }
+
+    @objc func statusItemClicked() {
+        if let event = NSApp.currentEvent, event.type == .rightMouseUp {
+            showContextMenu()
+        } else {
+            togglePopover()
+        }
+    }
+
+    /// 右键快捷菜单（弹窗之外的常规出口：详情/设置/复制/退出）
+    private func showContextMenu() {
+        let menu = NSMenu()
+        let items: [(String, Selector)] = [
+            ("今日详情", #selector(openHourlyDetailToday)),
+            ("近7天用量", #selector(openDetail)),
+            ("历史总量", #selector(openAllTimeDetail)),
+            ("复制今日统计", #selector(copyStats)),
+            ("设置", #selector(openSettings)),
+            ("退出", #selector(quit)),
+        ]
+        for (title, action) in items {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)   // 在按钮位置弹出菜单
+        statusItem.menu = nil                  // 弹完移除，左键行为不受影响
+    }
+
     // MARK: - Popover
 
     var popover: NSPopover?
     var eventMonitor: Any?
+    /// ESC 关闭弹窗（popover 非 key window，收不到 keyDown，用本地事件监视器实现）
+    var keyMonitor: Any?
 
     @objc func togglePopover() {
         if let popover = popover, popover.isShown {
@@ -116,6 +170,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                 }
             }
         }
+        if keyMonitor == nil {
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                if event.keyCode == 53, self?.popover?.isShown == true {   // ESC
+                    self?.closePopover()
+                    return nil
+                }
+                return event
+            }
+        }
     }
 
     func closePopover() {
@@ -128,10 +191,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             NSEvent.removeMonitor(monitor)
             eventMonitor = nil
         }
+        if let monitor = keyMonitor {
+            NSEvent.removeMonitor(monitor)
+            keyMonitor = nil
+        }
     }
 
+    // popover 与其 contentViewController 复用，不随关闭销毁
     func popoverDidClose(_ notification: Notification) {
-        popover = nil
         removeEventMonitor()
     }
 
@@ -270,20 +337,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         button.attributedTitle = NSAttributedString(string: fmtTitle(stats.total), attributes: attrs)
     }
 
-    /// 菜单栏标题颜色（按总量阈值分级）。
-    /// 默认档返回 nil → 不设置前景色，用系统默认色，浅色菜单栏下不会隐形。
+    /// 菜单栏标题颜色：按预警阈值进度渐变（绿→黄→橙→红），与用户设置的预警阈值联动。
+    /// 阈值为 0（关闭预警）时返回 nil → 用系统默认色。
     func titleColor(for total: Int64) -> NSColor? {
-        if total >= 200_000_000 {       // ≥2亿  深红
-            return NSColor(red: 0.90, green: 0.22, blue: 0.25, alpha: 1.0)
-        } else if total >= 150_000_000 { // ≥1.5亿 浅红
-            return NSColor(red: 0.95, green: 0.45, blue: 0.40, alpha: 1.0)
-        } else if total >= 100_000_000 { // ≥1亿  深绿
-            return NSColor(red: 0.15, green: 0.72, blue: 0.40, alpha: 1.0)
-        } else if total >= 50_000_000 {  // ≥5000万 浅绿
-            return NSColor(red: 0.35, green: 0.85, blue: 0.55, alpha: 1.0)
-        } else {                         // <5000万 系统默认色
-            return nil
-        }
+        guard settings.warningThreshold > 0 else { return nil }
+        return Design.usageColor(total: total, thresholdWan: settings.warningThreshold)
     }
 
     /// 立即刷新菜单栏标题（不依赖定时器）
@@ -573,7 +631,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         let weekStart = calendar.date(byAdding: .day, value: -(weekday - 2), to: today)!
         detailWindow?.reloadData(db: db, weekStart: weekStart)
         detailWindow?.showWindow(nil)
-        detailWindow?.window?.center()
         detailWindow?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -600,8 +657,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         monthWindow?.currentMonth = Date()
         monthWindow?.reloadData()
         monthWindow?.showWindow(nil)
-        monthWindow?.window?.center()
         monthWindow?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// 历史总量（按月汇总）
+    @objc func openAllTimeDetail() {
+        closePopover()
+        if allTimeWindow == nil {
+            allTimeWindow = AllTimeDetailWindowController()
+        }
+        allTimeWindow?.reloadData(db: db)
+        allTimeWindow?.showWindow(nil)
+        allTimeWindow?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 

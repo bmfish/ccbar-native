@@ -1,5 +1,6 @@
 import Cocoa
 import SQLite3
+import UniformTypeIdentifiers
 
 // MARK: - 设置窗口
 
@@ -29,6 +30,7 @@ class SettingsWindowController: NSWindowController {
         )
         window.title = "ccBar 设置"
         window.center()
+        window.setFrameAutosaveName("CCBarSettings")
         window.backgroundColor = Design.backgroundDark
 
         // 毛玻璃背景
@@ -292,6 +294,10 @@ class SettingsWindowController: NSWindowController {
         field.placeholderString = adapter.defaultPath
         sourceFields[adapter.id] = field
         row.addSubview(field)
+        // 路径改动即时校验（回车或失焦触发），tag 同浏览按钮一样映射到适配器序号
+        field.tag = SourceRegistry.adapters.firstIndex { $0.id == adapter.id } ?? 0
+        field.target = self
+        field.action = #selector(sourcePathEdited(_:))
 
         let browseBtn = NSButton(title: "浏览", target: self, action: #selector(browseSource(_:)))
         browseBtn.bezelStyle = .rounded
@@ -381,6 +387,59 @@ class SettingsWindowController: NSWindowController {
         }
     }
 
+    // MARK: 路径即时校验
+
+    @objc func sourcePathEdited(_ sender: NSTextField) {
+        let id = SourceRegistry.adapters[safe: sender.tag]?.id ?? ""
+        validateSource(id: id, path: sender.stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// 失焦时也校验一次（NSTextField 只有回车才发 action）。
+    /// NSWindowController 是 window 的 delegate，field editor 的编辑结束会转发到这里。
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField,
+              sourceFields.values.contains(where: { $0 === field }) else { return }
+        sourcePathEdited(field)
+    }
+
+    /// 只读试开一次源库并检查必需表，结果就地显示在状态行（不重建连接，保存时才生效）
+    private func validateSource(id: String, path: String) {
+        guard !path.isEmpty,
+              let adapter = SourceRegistry.adapter(for: id),
+              let label = sourceStatusLabels[id] else { return }
+
+        var msg: String
+        var color = NSColor.systemOrange
+        if !FileManager.default.fileExists(atPath: path) {
+            msg = "文件不存在"
+        } else if let error = Self.validateDB(path: path, requiredTables: adapter.requiredTables) {
+            msg = error
+        } else {
+            msg = "表结构正确（保存后生效）"
+            color = NSColor.systemGreen
+        }
+        label.stringValue = msg
+        label.textColor = color
+    }
+
+    private static func validateDB(path: String, requiredTables: [String]) -> String? {
+        var db: OpaquePointer?
+        let escaped = path.replacingOccurrences(of: "'", with: "%27")
+        guard sqlite3_open_v2("file:\(escaped)?mode=ro", &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK else {
+            return "打不开（被占用或损坏）"
+        }
+        defer { sqlite3_close_v2(db) }
+        let list = requiredTables.joined(separator: "','")
+        var stmt: OpaquePointer?
+        let sql = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('\(list)')"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return "校验失败" }
+        defer { sqlite3_finalize(stmt) }
+        if sqlite3_step(stmt) == SQLITE_ROW, sqlite3_column_int64(stmt, 0) >= Int64(requiredTables.count) {
+            return nil
+        }
+        return "缺少必需表"
+    }
+
     @objc func browseSource(_ sender: NSButton) {
         guard let adapter = SourceRegistry.adapters[safe: sender.tag] else { return }
         let panel = NSOpenPanel()
@@ -397,9 +456,25 @@ class SettingsWindowController: NSWindowController {
     }
 
     @objc func saveSettings() {
-        if let interval = Int(intervalField.stringValue), interval >= 5 && interval <= 3000 {
-            settings.refreshInterval = interval
+        // 数字字段先整体校验，任一无效就阻止保存并指出（原来非法值会被静默忽略）
+        var invalid: [String] = []
+        let interval = Int(intervalField.stringValue)
+        if interval == nil || !(5...3000).contains(interval!) { invalid.append("刷新间隔（5 ~ 3000 秒）") }
+        let threshold = Int(warningField.stringValue)
+        if threshold == nil || threshold! <= 0 { invalid.append("预警阈值（正整数，万）") }
+        let notify = Int(notifyIntervalField.stringValue)
+        if notify == nil || notify! < 0 { invalid.append("通知间隔（≥ 0 的整数，万，0=关闭）") }
+        if !invalid.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = "无法保存"
+            alert.informativeText = "以下字段无效：\n" + invalid.joined(separator: "\n")
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "好的")
+            alert.runModal()
+            return
         }
+
+        settings.refreshInterval = interval!
         // 数据源：勾选状态 + 路径（留空回落默认路径）
         settings.sourceConfigs = SourceRegistry.adapters.map { adapter in
             let enabled = sourceChecks[adapter.id]?.state == .on
@@ -407,16 +482,12 @@ class SettingsWindowController: NSWindowController {
             return SourceConfig(id: adapter.id, enabled: enabled,
                                 dbPath: path.isEmpty ? adapter.defaultPath : path)
         }
-        if let threshold = Int(warningField.stringValue), threshold > 0 {
-            settings.warningThreshold = threshold
-        }
+        settings.warningThreshold = threshold!
         settings.warningEnabled = warningCheck.state == .on
         settings.setLaunchAtLogin(launchCheck.state == .on)
 
         // 通知间隔
-        if let interval = Int(notifyIntervalField.stringValue), interval >= 0 {
-            settings.notifyInterval = interval
-        }
+        settings.notifyInterval = notify!
 
         // 保存主题
         let selectedTheme = Theme.allCases.first { $0.displayName == themePopup.titleOfSelectedItem } ?? .default
@@ -449,7 +520,7 @@ class DetailBaseWindowController: NSWindowController {
     var contentStack: NSStackView!
     var dateLabel: NSTextField!
 
-    func setupBaseUI(navTarget: AnyObject?, prevAction: Selector?, nextAction: Selector?) {
+    func setupBaseUI(navTarget: AnyObject?, prevAction: Selector?, nextAction: Selector?, exportAction: Selector? = nil) {
         guard let contentView = window?.contentView else { return }
 
         // 毛玻璃
@@ -502,6 +573,23 @@ class DetailBaseWindowController: NSWindowController {
             navBar.addSubview(nextBtn)
             nextBtn.trailingAnchor.constraint(equalTo: navBar.trailingAnchor).isActive = true
             nextBtn.centerYAnchor.constraint(equalTo: navBar.centerYAnchor).isActive = true
+        }
+
+        // 导出 CSV 按钮（可选；有翻页按钮时放在其左侧）
+        if let exportAction = exportAction, let navTarget = navTarget {
+            let exportBtn = NSButton(image: NSImage(systemSymbolName: "square.and.arrow.up",
+                                                    accessibilityDescription: "导出 CSV") ?? NSImage(),
+                                     target: navTarget, action: exportAction)
+            exportBtn.bezelStyle = .inline
+            exportBtn.isBordered = false
+            exportBtn.translatesAutoresizingMaskIntoConstraints = false
+            navBar.addSubview(exportBtn)
+            if nextAction != nil {
+                exportBtn.trailingAnchor.constraint(equalTo: navBar.trailingAnchor, constant: -26).isActive = true
+            } else {
+                exportBtn.trailingAnchor.constraint(equalTo: navBar.trailingAnchor).isActive = true
+            }
+            exportBtn.centerYAnchor.constraint(equalTo: navBar.centerYAnchor).isActive = true
         }
 
         // 内容栈（放在滚动视图里）
@@ -635,6 +723,28 @@ class DetailBaseWindowController: NSWindowController {
         return result
     }
 
+    /// 把当前窗口表格数据导出为 CSV（带 BOM，Excel 直接打开不乱码）
+    func exportCSV(defaultName: String, header: [String], rows: [[String]]) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = defaultName
+        panel.allowedContentTypes = [UTType.commaSeparatedText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        var csv = "\u{FEFF}" + header.joined(separator: ",") + "\n"
+        for row in rows {
+            csv += row.map { $0.contains(",") ? "\"\($0)\"" : $0 }.joined(separator: ",") + "\n"
+        }
+        do {
+            try csv.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "导出失败"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .critical
+            alert.addButton(withTitle: "好的")
+            alert.runModal()
+        }
+    }
+
     func addSparkline(container: NSView, values: [CGFloat], hueOffset: CGFloat = 0) {
         let sparkline = SparklineView(frame: .zero)
         sparkline.values = values
@@ -656,6 +766,7 @@ class DetailBaseWindowController: NSWindowController {
 class DetailWindowController: DetailBaseWindowController {
     var currentWeekStart: Date = Date()
     var onDateChange: ((Date) -> Void)?
+    private var exportRows: [[String]] = []
 
     convenience init() {
         let window = NSWindow(
@@ -665,10 +776,12 @@ class DetailWindowController: DetailBaseWindowController {
         )
         window.title = "近7天用量"
         window.center()
+        window.setFrameAutosaveName("CCBarWeekDetail")
         window.backgroundColor = Design.backgroundDark
         window.minSize = NSSize(width: 420, height: 250)
         self.init(window: window)
-        setupBaseUI(navTarget: self, prevAction: #selector(prevWeek), nextAction: #selector(nextWeek))
+        setupBaseUI(navTarget: self, prevAction: #selector(prevWeek), nextAction: #selector(nextWeek),
+                    exportAction: #selector(exportCSVClicked))
     }
 
     @objc func prevWeek() {
@@ -708,12 +821,14 @@ class DetailWindowController: DetailBaseWindowController {
         let today = cal.startOfDay(for: Date())
         var totalReqs = 0; var totalToken: Int64 = 0; var totalCache: Int64 = 0
         var dailyTokens: [CGFloat] = []
+        exportRows = []
 
         for d in 0..<7 {
             guard let date = cal.date(byAdding: .day, value: d, to: weekStart) else { continue }
             let daysAgo = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: today).day ?? 0
             let (reqs, token, cache) = queryDay(db: db, daysAgo: daysAgo)
             totalReqs += reqs; totalToken += token; totalCache += cache
+            exportRows.append([fmt.string(from: date), "\(reqs)", "\(token)", "\(cache)"])
 
             let color: NSColor = token == 0 ? Design.textMuted : Design.dataHighlightColor
             let row = makeTableRow(columns: [
@@ -739,6 +854,12 @@ class DetailWindowController: DetailBaseWindowController {
         contentStack.addArrangedSubview(totalRow)
         totalRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
     }
+
+    @objc func exportCSVClicked() {
+        exportCSV(defaultName: "ccbar-近7天.csv",
+                  header: ["日期", "请求数", "总Token", "缓存读"],
+                  rows: exportRows)
+    }
 }
 
 // MARK: - 30天详情窗口
@@ -746,6 +867,7 @@ class DetailWindowController: DetailBaseWindowController {
 class MonthDetailWindowController: DetailBaseWindowController {
     var currentMonth: Date = Date()
     var db: OpaquePointer?
+    private var exportRows: [[String]] = []
 
     convenience init() {
         let window = NSWindow(
@@ -755,10 +877,12 @@ class MonthDetailWindowController: DetailBaseWindowController {
         )
         window.title = "近30天用量"
         window.center()
+        window.setFrameAutosaveName("CCBarMonthDetail")
         window.backgroundColor = Design.backgroundDark
         window.minSize = NSSize(width: 420, height: 300)
         self.init(window: window)
-        setupBaseUI(navTarget: self, prevAction: #selector(prevMonth), nextAction: #selector(nextMonth))
+        setupBaseUI(navTarget: self, prevAction: #selector(prevMonth), nextAction: #selector(nextMonth),
+                    exportAction: #selector(exportCSVClicked))
     }
 
     @objc func prevMonth() {
@@ -798,6 +922,7 @@ class MonthDetailWindowController: DetailBaseWindowController {
         let today = cal.startOfDay(for: Date())
         var totalReqs = 0; var totalToken: Int64 = 0; var totalCache: Int64 = 0
         var dailyTokens: [CGFloat] = []
+        exportRows = []
 
         for day in 1...days {
             guard let date = cal.date(byAdding: .day, value: day - 1, to: first) else { continue }
@@ -805,6 +930,8 @@ class MonthDetailWindowController: DetailBaseWindowController {
             let daysAgo = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: today).day ?? 0
             let (reqs, token, cache) = queryDay(db: db, daysAgo: daysAgo)
             totalReqs += reqs; totalToken += token; totalCache += cache
+            exportRows.append([String(format: "%04d-%02d-%02d", comps.year ?? 0, comps.month ?? 0, day),
+                               "\(reqs)", "\(token)", "\(cache)"])
 
             let color: NSColor = token == 0 ? Design.textMuted : Design.dataHighlightColor
             let dateStr = String(format: "%02d/%02d", comps.month!, day)
@@ -843,6 +970,12 @@ class MonthDetailWindowController: DetailBaseWindowController {
         contentStack.addArrangedSubview(totalRow)
         totalRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
     }
+
+    @objc func exportCSVClicked() {
+        exportCSV(defaultName: "ccbar-近30天.csv",
+                  header: ["日期", "请求数", "总Token", "缓存读"],
+                  rows: exportRows)
+    }
 }
 
 // MARK: - 模型分布详情窗口
@@ -860,6 +993,7 @@ class ModelDetailWindowController: DetailBaseWindowController {
         )
         window.title = "模型分布详情"
         window.center()
+        window.setFrameAutosaveName("CCBarModelDetail")
         window.backgroundColor = Design.backgroundDark
         window.minSize = NSSize(width: 460, height: 300)
         self.init(window: window)
@@ -1034,6 +1168,7 @@ class HourlyDetailWindowController: DetailBaseWindowController {
         )
         window.title = "每小时用量"
         window.center()
+        window.setFrameAutosaveName("CCBarHourlyDetail")
         window.backgroundColor = Design.backgroundDark
         window.minSize = NSSize(width: 360, height: 300)
         self.init(window: window)
@@ -1158,5 +1293,119 @@ class HourlyDetailWindowController: DetailBaseWindowController {
         // 再加导航/留白 56（顶 10 + 导航 30 + 间隔 6 + 底 10）。
         let h = CGFloat(end - start + 1) * 24 + 185
         window?.setContentSize(NSSize(width: 440, height: min(h, 650)))
+    }
+}
+
+// MARK: - 历史总量窗口（按月汇总）
+
+class AllTimeDetailWindowController: DetailBaseWindowController {
+    private var exportRows: [[String]] = []
+
+    convenience init() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 480),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered, defer: false
+        )
+        window.title = "历史总量"
+        window.center()
+        window.setFrameAutosaveName("CCBarAllTimeDetail")
+        window.backgroundColor = Design.backgroundDark
+        window.minSize = NSSize(width: 420, height: 300)
+        self.init(window: window)
+        setupBaseUI(navTarget: self, prevAction: nil, nextAction: nil,
+                    exportAction: #selector(exportCSVClicked))
+        dateLabel.stringValue = "按月汇总"
+    }
+
+    func reloadData(db: OpaquePointer?) {
+        guard let db = db else { return }
+        exportRows = []
+        contentStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+
+        // 按月汇总（明细 + 今日实时都在 usage_all 里），最多展示近 36 个月
+        let sql = """
+        SELECT strftime('%Y-%m', created_at, 'unixepoch', 'localtime') AS m,
+            COALESCE(SUM(request_count),0),
+            COALESCE(SUM(input_tokens+output_tokens+cache_read_tokens+cache_creation_tokens),0),
+            COALESCE(SUM(cache_read_tokens),0)
+        FROM usage_all GROUP BY m ORDER BY m DESC LIMIT 36
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        var rows: [(month: String, reqs: Int, token: Int64, cache: Int64)] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rows.append((String(cString: sqlite3_column_text(stmt, 0)),
+                         Int(sqlite3_column_int64(stmt, 1)),
+                         sqlite3_column_int64(stmt, 2),
+                         sqlite3_column_int64(stmt, 3)))
+        }
+        sqlite3_finalize(stmt)
+
+        if rows.isEmpty {
+            let lbl = NSTextField(labelWithString: "暂无数据")
+            lbl.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+            lbl.textColor = Design.textMuted
+            contentStack.addArrangedSubview(lbl)
+            return
+        }
+
+        // 柱状图（时间正序，标签取月份）
+        let chartBox = NSView()
+        chartBox.translatesAutoresizingMaskIntoConstraints = false
+        chartBox.heightAnchor.constraint(equalToConstant: 70).isActive = true
+        contentStack.addArrangedSubview(chartBox)
+        chartBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+        contentStack.addArrangedSubview(makeSep())
+
+        let barChart = BarChartView(frame: .zero)
+        barChart.values = rows.reversed().map { CGFloat($0.token) }
+        barChart.labels = rows.reversed().map { String($0.month.suffix(2)) + "月" }
+        barChart.barColor = Design.brandColor
+        barChart.useGradient = true
+        barChart.hueOffset = CGFloat((rows.count * 3) % 8) / 8.0
+        barChart.translatesAutoresizingMaskIntoConstraints = false
+        chartBox.addSubview(barChart)
+        NSLayoutConstraint.activate([
+            barChart.topAnchor.constraint(equalTo: chartBox.topAnchor, constant: 4),
+            barChart.leadingAnchor.constraint(equalTo: chartBox.leadingAnchor, constant: 6),
+            barChart.trailingAnchor.constraint(equalTo: chartBox.trailingAnchor, constant: -6),
+            barChart.bottomAnchor.constraint(equalTo: chartBox.bottomAnchor, constant: -4)
+        ])
+
+        // 表格（最近月份在上）
+        let widths: [CGFloat] = [70, 65, 95, 95]
+        contentStack.addArrangedSubview(makeTableHeader(labels: ["月份", "请求", "总 Token", "缓存读"], widths: widths))
+        contentStack.addArrangedSubview(makeSep())
+
+        var totalReqs = 0; var totalToken: Int64 = 0; var totalCache: Int64 = 0
+        for r in rows {
+            totalReqs += r.reqs; totalToken += r.token; totalCache += r.cache
+            exportRows.append([r.month, "\(r.reqs)", "\(r.token)", "\(r.cache)"])
+
+            let color: NSColor = r.token == 0 ? Design.textMuted : Design.dataHighlightColor
+            let row = makeTableRow(columns: [
+                (r.month, widths[0], false, color),
+                (r.reqs == 0 ? "-" : "\(r.reqs)", widths[1], false, r.reqs == 0 ? Design.textMuted : Design.textPrimary),
+                (fmtNum(r.token), widths[2], false, r.token == 0 ? Design.textMuted : Design.textPrimary),
+                (fmtNum(r.cache), widths[3], false, r.cache == 0 ? Design.textMuted : Design.textSecondary)
+            ])
+            contentStack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+        }
+
+        contentStack.addArrangedSubview(makeSep())
+        let totalRow = makeTotalRow(columns: [
+            ("合计", widths[0]), ("\(totalReqs)", widths[1]),
+            (fmtNum(totalToken), widths[2]), (fmtNum(totalCache), widths[3])
+        ])
+        contentStack.addArrangedSubview(totalRow)
+        totalRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+    }
+
+    @objc func exportCSVClicked() {
+        exportCSV(defaultName: "ccbar-按月汇总.csv",
+                  header: ["月份", "请求数", "总Token", "缓存读"],
+                  rows: exportRows)
     }
 }
