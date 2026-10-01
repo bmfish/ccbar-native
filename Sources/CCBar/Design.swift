@@ -272,7 +272,13 @@ enum Design {
 
     private static func hourSeed() -> UInt64 {
         let c = Calendar.current.dateComponents([.year, .month, .day, .hour], from: Date())
-        return UInt64((c.year ?? 0) * 1_000_000 + (c.month ?? 0) * 10_000 + (c.day ?? 0) * 100 + (c.hour ?? 0))
+        // 拆开算：整条混合表达式会让旧版编译器类型检查超时
+        let year = c.year ?? 0
+        let month = c.month ?? 0
+        let day = c.day ?? 0
+        let hour = c.hour ?? 0
+        let combined = year * 1_000_000 + month * 10_000 + day * 100 + hour
+        return UInt64(combined)
     }
 
     static func modelColors(count: Int = 6) -> [NSColor] {

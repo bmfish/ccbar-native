@@ -444,7 +444,8 @@ class SettingsWindowController: NSWindowController {
         guard let adapter = SourceRegistry.adapters[safe: sender.tag] else { return }
         let panel = NSOpenPanel()
         panel.title = "选择 \(adapter.name) 数据库文件"
-        panel.allowedFileTypes = ["db", "sqlite"]
+        panel.allowedContentTypes = [UTType(filenameExtension: "db") ?? .data,
+                                     UTType(filenameExtension: "sqlite") ?? .data]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.begin { [weak self] result in
