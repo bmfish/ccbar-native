@@ -21,6 +21,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
 
     /// 菜单栏动画伴侣
     let petController = MenuPetController()
+    /// 上次刷新的今日总量（闪电 LED 变色依据）
+    private var lastLEDTotal: Int64?
 
     var settingsWindow: SettingsWindowController?
     var detailWindow: DetailWindowController?
@@ -82,8 +84,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         startTimer()
     }
 
-    /// 菜单栏小闪电图标
-    static func makeMenuBarIcon() -> NSImage {
+    /// 菜单栏小闪电图标（颜色可变：白=无变化，绿=有消耗，红=大幅消耗）
+    static func makeMenuBarIcon(fill: NSColor = .white) -> NSImage {
         let image = NSImage(size: NSSize(width: 16, height: 16))
         image.lockFocus()
         let path = NSBezierPath()
@@ -94,10 +96,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         path.line(to: NSPoint(x: 11, y: 8.5))
         path.line(to: NSPoint(x: 8.5, y: 8.5))
         path.close()
-        NSColor.black.setFill()
+        fill.setFill()
         path.fill()
+        NSColor.black.withAlphaComponent(0.5).setStroke()
+        path.lineWidth = 0.8
+        path.stroke()
         image.unlockFocus()
-        image.isTemplate = true
+        image.isTemplate = false
         return image
     }
 
@@ -110,6 +115,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         } else {
             petController.detach()
             button.image = Self.makeMenuBarIcon()
+            lastLEDTotal = nil
         }
     }
 
@@ -300,6 +306,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                 self.statusItem.button?.toolTip = tip
 
                 if let stats = todayStats {
+                    // 闪电 LED：对比上次刷新的增量变色（仅关闭动画伴侣时显示图标）
+                    if !self.settings.menuPetEnabled {
+                        let fill: NSColor
+                        if let last = self.lastLEDTotal {
+                            let delta = stats.total - last
+                            if delta >= 1_000_000 { fill = .systemRed }          // 本次增量 ≥ 100万
+                            else if delta > 0 { fill = .systemGreen }            // 有新消耗
+                            else { fill = .white }                               // 无变化
+                        } else {
+                            fill = .white                                        // 首次刷新
+                        }
+                        self.statusItem.button?.image = Self.makeMenuBarIcon(fill: fill)
+                    }
+                    self.lastLEDTotal = stats.total
                     self.checkWarning(stats: stats)
                     self.checkTokenMilestone(stats.total)
                 }
