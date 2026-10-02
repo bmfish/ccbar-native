@@ -407,9 +407,14 @@ final class StatsStore {
             print("[ccBar] 数据源 \(adapter.name) 文件不存在，跳过: \(path)")
             return "文件不存在"
         }
-        guard exec(adapter.attachSQL(fileURL: uriEscape(path))) else {
-            print("[ccBar] 数据源 \(adapter.name) ATTACH 失败，跳过")
-            return "ATTACH 失败（库可能被占用或损坏）"
+        if !exec(adapter.attachSQL(fileURL: uriEscape(path))) {
+            // 源库是 WAL 模式且 -wal 文件不在（源应用已关闭）时只读 ATTACH 会失败，
+            // 回退普通 ATTACH——本应用保证绝不写源库
+            let plain = "ATTACH DATABASE '\(uriEscape(path))' AS \(adapter.alias)"
+            guard exec(plain) else {
+                print("[ccBar] 数据源 \(adapter.name) ATTACH 失败，跳过")
+                return "ATTACH 失败（库可能被占用或损坏）"
+            }
         }
         // 表都齐才算可用
         let list = adapter.requiredTables.joined(separator: "','")
