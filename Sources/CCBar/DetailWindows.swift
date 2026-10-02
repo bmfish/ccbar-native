@@ -28,12 +28,13 @@ class SettingsWindowController: NSWindowController {
         self.onSave = onSave
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 440, height: 500),
-            styleMask: [.titled, .closable],
+            contentRect: NSRect(x: 0, y: 0, width: 440, height: 580),
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "ccBar 设置"
+        window.minSize = NSSize(width: 440, height: 420)
         window.center()
         window.setFrameAutosaveName("CCBarSettings")
         window.backgroundColor = Design.backgroundDark
@@ -62,12 +63,23 @@ class SettingsWindowController: NSWindowController {
         stack.alignment = .leading
         stack.spacing = 14
         stack.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(stack)
+
+        // 内容区可滚动：设置行越加越多，按钮栏固定在底部不再被挤出窗口
+        let scrollView = NSScrollView()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.hasVerticalScroller = true
+        scrollView.drawsBackground = false
+        scrollView.documentView = stack
+        contentView.addSubview(scrollView)
 
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 20),
-            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
-            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -20)
+            scrollView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
+            scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
+            scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -20),
+            stack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor, constant: 8),
+            stack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
+            stack.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
+            stack.bottomAnchor.constraint(equalTo: scrollView.contentView.bottomAnchor)
         ])
 
         // 标题行
@@ -165,13 +177,19 @@ class SettingsWindowController: NSWindowController {
 
         addSep(to: stack)
 
-        // 按钮栏
+        // 按钮栏（钉在窗口底部，不随内容滚动）
         let buttonBar = NSStackView()
         buttonBar.orientation = .horizontal
         buttonBar.spacing = 10
         buttonBar.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(buttonBar)
-        buttonBar.trailingAnchor.constraint(equalTo: stack.trailingAnchor).isActive = true
+        contentView.addSubview(buttonBar)
+
+        NSLayoutConstraint.activate([
+            buttonBar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
+            buttonBar.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -20),
+            buttonBar.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -14)
+        ])
+        scrollView.bottomAnchor.constraint(equalTo: buttonBar.topAnchor, constant: -8).isActive = true
 
         let resetBtn = makeButton(title: "重置", action: #selector(resetSettings))
         resetBtn.bezelStyle = .rounded
