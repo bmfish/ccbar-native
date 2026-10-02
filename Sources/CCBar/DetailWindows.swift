@@ -1019,7 +1019,7 @@ class MonthDetailWindowController: DetailBaseWindowController {
         }
 
         // 交互式柱状图（Swift Charts：拖选读数）
-        let barsHost = NSHostingView(rootView: BarReadoutChart(entries: chartEntries))
+        let barsHost = NSHostingView(rootView: BarReadoutChart(entries: chartEntries, showXAxis: false))
         barsHost.translatesAutoresizingMaskIntoConstraints = false
         chartBox.addSubview(barsHost)
         NSLayoutConstraint.activate([

@@ -116,6 +116,8 @@ struct LineTrendChart: View {
 struct BarReadoutChart: View {
     let entries: [ChartEntry]
     var barColors: [NSColor]? = nil
+    /// 类别多时（如近30天）隐藏 x 轴标签，避免挤成一团
+    var showXAxis = true
 
     @State private var selected: Int?
 
@@ -131,9 +133,11 @@ struct BarReadoutChart: View {
             }
         }
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 6)) { _ in
-                AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
-                AxisValueLabel().font(.system(size: 9))
+            if showXAxis {
+                AxisMarks(values: .automatic(desiredCount: 6)) { _ in
+                    AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
+                    AxisValueLabel().font(.system(size: 9))
+                }
             }
         }
         .chartYAxis {
