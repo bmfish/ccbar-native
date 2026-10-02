@@ -341,26 +341,78 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
     }
 
-    /// 用统计结果更新菜单栏标题（表情分级 + 颜色联动阈值），并同步宠物状态；无数据时显示状态文案
+    // 数字滚动动画状态
+    private var displayedTotal: Int64 = -1
+    private var rollTimer: Timer?
+    private var rollFrom: Int64 = 0
+    private var rollTo: Int64 = 0
+    private var rollStart = Date()
+
+    /// 标题全文（表情分级 + 数字）
+    private func titleText(for total: Int64) -> String {
+        var text = fmtTitle(total)
+        if settings.menuEmojiEnabled {
+            text = PetPose.emoji(progress: thresholdProgress(total: total)) + " " + text
+        }
+        return text
+    }
+
+    private func setMenuTitle(text: String, color: NSColor?) {
+        var attrs: [NSAttributedString.Key: Any] = [.font: titleFont]
+        if let color = color {
+            attrs[.foregroundColor] = color
+        }
+        statusItem.button?.attributedTitle = NSAttributedString(string: text, attributes: attrs)
+    }
+
+    private func cancelRoll() {
+        rollTimer?.invalidate()
+        rollTimer = nil
+    }
+
+    /// 用统计结果更新菜单栏标题：数值变化时从旧值滚动到新值（0.7s 缓出），并同步宠物状态
     func applyTitle(_ stats: DayStats?) {
         guard let button = statusItem.button else { return }
         guard let stats = stats else {
+            cancelRoll()
+            displayedTotal = -1
             button.attributedTitle = NSAttributedString(
                 string: store.attachedAdapters.isEmpty ? "未启用" : "未找到",
                 attributes: [.font: titleFont])
             return
         }
         let progress = thresholdProgress(total: stats.total)
-        var text = fmtTitle(stats.total)
-        if settings.menuEmojiEnabled {
-            text = PetPose.emoji(progress: progress) + " " + text
+        let color = titleColor(for: stats.total)
+
+        if stats.total == displayedTotal {
+            setMenuTitle(text: titleText(for: stats.total), color: color)
+            petController.refresh(progress: progress)
+            return
         }
-        var attrs: [NSAttributedString.Key: Any] = [.font: titleFont]
-        if let color = titleColor(for: stats.total) {
-            attrs[.foregroundColor] = color
+
+        // 滚动动画：displayedTotal 在启动时就指向目标，重复调用不会重启动画
+        let previous = max(displayedTotal, 0)
+        displayedTotal = stats.total
+        rollFrom = previous
+        rollTo = stats.total
+        rollStart = Date()
+        cancelRoll()
+        rollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            self?.rollTick()
         }
-        button.attributedTitle = NSAttributedString(string: text, attributes: attrs)
+        RunLoop.main.add(rollTimer!, forMode: .common)
+        rollTick()
         petController.refresh(progress: progress)
+    }
+
+    private func rollTick() {
+        let t = min(Date().timeIntervalSince(rollStart) / 0.7, 1)
+        let eased = 1 - pow(1 - t, 3)   // easeOutCubic
+        let value = Int64((Double(rollFrom) + Double(rollTo - rollFrom) * eased).rounded())
+        setMenuTitle(text: titleText(for: value), color: titleColor(for: rollTo))
+        if t >= 1 {
+            cancelRoll()
+        }
     }
 
     /// 菜单栏标题颜色：按预警阈值进度渐变（绿→黄→橙→红），与用户设置的预警阈值联动。
@@ -377,6 +429,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
 
     func flashTitle() {
         guard let button = statusItem.button else { return }
+        cancelRoll()   // 闪烁期间停止数字滚动，避免互相覆盖
 
         let currentText = button.attributedTitle.string.isEmpty
             ? button.title
