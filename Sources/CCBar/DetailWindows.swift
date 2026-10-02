@@ -69,17 +69,27 @@ class SettingsWindowController: NSWindowController {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
-        scrollView.documentView = stack
         contentView.addSubview(scrollView)
 
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
             scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
-            scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -20),
-            stack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor, constant: 8),
-            stack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
-            stack.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
-            stack.bottomAnchor.constraint(equalTo: scrollView.contentView.bottomAnchor)
+            scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -20)
+        ])
+
+        let clipView = NSClipView()
+        clipView.documentView = stack
+        clipView.drawsBackground = false
+        scrollView.contentView = clipView
+
+        // 只固定 top/leading/width + 高度下限（与详情窗口同款）：
+        // 钉 bottom 会把内容压成一屏高，超出的设置行直接消失
+        stack.edgeInsets = NSEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: clipView.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: clipView.leadingAnchor),
+            stack.widthAnchor.constraint(equalTo: clipView.widthAnchor),
+            stack.heightAnchor.constraint(greaterThanOrEqualTo: clipView.heightAnchor)
         ])
 
         // 标题行
@@ -357,6 +367,9 @@ class SettingsWindowController: NSWindowController {
         row.addSubview(browseBtn)
 
         NSLayoutConstraint.activate([
+            row.topAnchor.constraint(equalTo: container.topAnchor),
+            row.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             check.leadingAnchor.constraint(equalTo: row.leadingAnchor),
             check.centerYAnchor.constraint(equalTo: row.centerYAnchor),
             lbl.leadingAnchor.constraint(equalTo: check.trailingAnchor, constant: 4),
