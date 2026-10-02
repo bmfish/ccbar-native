@@ -17,6 +17,7 @@ class SettingsWindowController: NSWindowController {
     var wideCheck: NSButton!
     var themePopup: NSPopUpButton!
     var notifyIntervalField: NSTextField!
+    var ledThresholdField: NSTextField!
     /// 数据源区块：id → 路径输入框 / 启用勾选框 / 连接状态标签
     var sourceFields: [String: NSTextField] = [:]
     var sourceChecks: [String: NSButton] = [:]
@@ -131,6 +132,13 @@ class SettingsWindowController: NSWindowController {
                                        unit: "万", field: notifyIntervalField, hint: "每累计N万通知，0=关闭")
         stack.addArrangedSubview(notifyRow)
         notifyRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
+        // LED 红色门槛
+        ledThresholdField = makeField()
+        let ledRow = makeSettingRow(label: "红色门槛", sfIcon: "bolt.badge.automatic",
+                                    unit: "万", field: ledThresholdField, hint: "单次刷新增量达到变红，0=不变红")
+        stack.addArrangedSubview(ledRow)
+        ledRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         addSep(to: stack)
 
@@ -382,6 +390,7 @@ class SettingsWindowController: NSWindowController {
         wideCheck.state = settings.popoverWide ? .on : .off
         themePopup.selectItem(withTitle: Theme.current.displayName)
         notifyIntervalField.stringValue = "\(settings.notifyInterval)"
+        ledThresholdField.stringValue = "\(settings.ledRedThreshold)"
 
         let configs = settings.sourceConfigs
         for adapter in SourceRegistry.adapters {
@@ -488,6 +497,8 @@ class SettingsWindowController: NSWindowController {
         if threshold == nil || threshold! <= 0 { invalid.append("预警阈值（正整数，万）") }
         let notify = Int(notifyIntervalField.stringValue)
         if notify == nil || notify! < 0 { invalid.append("通知间隔（≥ 0 的整数，万，0=关闭）") }
+        let led = Int(ledThresholdField.stringValue)
+        if led == nil || led! < 0 { invalid.append("红色门槛（≥ 0 的整数，万，0=不变红）") }
         if !invalid.isEmpty {
             let alert = NSAlert()
             alert.messageText = "无法保存"
@@ -513,8 +524,9 @@ class SettingsWindowController: NSWindowController {
         settings.menuEmojiEnabled = emojiCheck.state == .on
         settings.popoverWide = wideCheck.state == .on
 
-        // 通知间隔
+        // 通知间隔 / LED 门槛
         settings.notifyInterval = notify!
+        settings.ledRedThreshold = led!
 
         // 保存主题
         let selectedTheme = Theme.allCases.first { $0.displayName == themePopup.titleOfSelectedItem } ?? .default
@@ -544,6 +556,7 @@ class SettingsWindowController: NSWindowController {
         settings.menuPetEnabled = true
         settings.menuEmojiEnabled = true
         settings.popoverWide = false
+        settings.ledRedThreshold = 100
         loadSettings()
     }
 }

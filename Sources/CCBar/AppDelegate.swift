@@ -311,11 +311,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                         let fill: NSColor
                         if let last = self.lastLEDTotal {
                             let delta = stats.total - last
-                            if delta >= 1_000_000 { fill = .systemRed }          // 本次增量 ≥ 100万
-                            else if delta > 0 { fill = .systemGreen }            // 有新消耗
-                            else { fill = .white }                               // 无变化
+                            let redLine = Int64(max(self.settings.ledRedThreshold, 0)) * 10_000
+                            if redLine > 0 && delta >= redLine { fill = .systemRed } // 增量达红色门槛
+                            else if delta > 0 { fill = .systemGreen }                // 有新消耗
+                            else { fill = .white }                                   // 无变化
                         } else {
-                            fill = .white                                        // 首次刷新
+                            fill = .white                                            // 首次刷新
                         }
                         self.statusItem.button?.image = Self.makeMenuBarIcon(fill: fill)
                     }
