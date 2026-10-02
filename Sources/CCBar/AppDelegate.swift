@@ -84,8 +84,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         startTimer()
     }
 
-    /// 菜单栏小闪电图标（颜色可变：白=无变化，绿=有消耗，红=大幅消耗）
-    static func makeMenuBarIcon(fill: NSColor = .white) -> NSImage {
+    /// 菜单栏小闪电图标。
+    /// fill 为 nil 时渲染模板单色（系统自适应深浅菜单栏，观感与系统图标一致）；
+    /// 给定颜色时表示活动状态（绿=有消耗，红=大增量），带描边保证两种菜单栏可见。
+    static func makeMenuBarIcon(fill: NSColor? = nil) -> NSImage {
         let image = NSImage(size: NSSize(width: 16, height: 16))
         image.lockFocus()
         let path = NSBezierPath()
@@ -96,13 +98,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         path.line(to: NSPoint(x: 11, y: 8.5))
         path.line(to: NSPoint(x: 8.5, y: 8.5))
         path.close()
-        fill.setFill()
-        path.fill()
-        NSColor.black.withAlphaComponent(0.5).setStroke()
-        path.lineWidth = 0.8
-        path.stroke()
+        if let fill = fill {
+            fill.setFill()
+            path.fill()
+            NSColor.black.withAlphaComponent(0.5).setStroke()
+            path.lineWidth = 0.8
+            path.stroke()
+            image.isTemplate = false
+        } else {
+            NSColor.black.setFill()
+            path.fill()
+            image.isTemplate = true
+        }
         image.unlockFocus()
-        image.isTemplate = false
         return image
     }
 
@@ -307,16 +315,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
 
                 if let stats = todayStats {
                     // 闪电 LED：对比上次刷新的增量变色（仅关闭动画伴侣时显示图标）
+                    // 无变化 → 模板单色（系统自适应）；有消耗 → 绿；达红色门槛 → 红
                     if !self.settings.menuPetEnabled {
-                        let fill: NSColor
+                        let fill: NSColor?
                         if let last = self.lastLEDTotal {
                             let delta = stats.total - last
                             let redLine = Int64(max(self.settings.ledRedThreshold, 0)) * 10_000
-                            if redLine > 0 && delta >= redLine { fill = .systemRed } // 增量达红色门槛
-                            else if delta > 0 { fill = .systemGreen }                // 有新消耗
-                            else { fill = .white }                                   // 无变化
+                            if redLine > 0 && delta >= redLine { fill = .systemRed }
+                            else if delta > 0 { fill = .systemGreen }
+                            else { fill = nil }
                         } else {
-                            fill = .white                                            // 首次刷新
+                            fill = nil
                         }
                         self.statusItem.button?.image = Self.makeMenuBarIcon(fill: fill)
                     }
