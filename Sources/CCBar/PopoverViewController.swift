@@ -115,8 +115,7 @@ class PopoverViewController: NSViewController {
             c.getCachedMonth().map { "\($0.total)" } ?? "nil",
             c.getCachedTotal().map { "\($0.total)" } ?? "nil",
             c.getCachedWorkHours().map { String(format: "%.1f", $0) } ?? "nil",
-            models,
-            AchievementStore.earned.sorted().joined(separator: ",")
+            models
         ].joined(separator: "|")
     }
 
@@ -158,8 +157,6 @@ class PopoverViewController: NSViewController {
             buildModelSection(models)
         }
 
-        // 成就徽章
-        buildAchievementsCard()
 
         // 时间段统计（颜色跟随主题）
         if yesterday != nil || week != nil || month != nil || total != nil {
@@ -317,46 +314,6 @@ class PopoverViewController: NSViewController {
         // 整卡可点
         card.addGestureRecognizer(NSClickGestureRecognizer(target: AppDelegate.shared,
                                                            action: #selector(AppDelegate.openModelDetailToday)))
-        addSpacer(8)
-    }
-
-    // MARK: - 成就徽章
-
-    private func buildAchievementsCard() {
-        let earned = AchievementStore.earned
-        let card = makeCard()
-
-        let header = makeHeaderRow(title: "成就", sfIcon: "rosette", action: nil)
-        card.addArrangedSubview(header)
-        header.widthAnchor.constraint(equalTo: card.widthAnchor).isActive = true
-
-        if earned.isEmpty {
-            let lbl = NSTextField(labelWithString: "还没有成就，肝起来 💪")
-            lbl.font = NSFont.systemFont(ofSize: 11)
-            lbl.textColor = Design.textMuted
-            card.addArrangedSubview(lbl)
-        } else {
-            let row = NSStackView()
-            row.orientation = .horizontal
-            row.spacing = 7
-            row.alignment = .centerY
-            row.translatesAutoresizingMaskIntoConstraints = false
-            for a in AchievementCatalog.all where earned.contains(a.id) {
-                let chip = NSTextField(labelWithString: a.emoji)
-                chip.font = NSFont.systemFont(ofSize: 14)
-                chip.toolTip = "\(a.title) — \(a.desc)"
-                row.addArrangedSubview(chip)
-            }
-            let count = NSTextField(labelWithString: "\(earned.count)/\(AchievementCatalog.all.count)")
-            count.font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium)
-            count.textColor = Design.textMuted
-            row.addArrangedSubview(count)
-            card.addArrangedSubview(row)
-            row.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 4).isActive = true
-        }
-
-        contentStack.addArrangedSubview(card)
-        card.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28).isActive = true
         addSpacer(8)
     }
 

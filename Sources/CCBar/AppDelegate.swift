@@ -276,20 +276,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                 monthStats = self.store.queryDayStats(days: 30)
                 totalStats = self.store.queryTotalStats()
                 DataCache.shared.markDailyCacheDone()
-
-                // 成就评估（每天一次，随历史缓存刷新）
-                var facts = self.store.achievementFacts()
-                facts.today = todayStats
-                facts.totalTokens = totalStats?.total ?? 0
-                let newly = AchievementEngine.newlyEarned(facts: facts, earned: AchievementStore.earned)
-                if !newly.isEmpty {
-                    DispatchQueue.main.async {
-                        for a in newly { AchievementStore.earn(a) }
-                        for a in newly.prefix(3) {
-                            self.sendNotification(title: "🏅 解锁成就：\(a.emoji) \(a.title)", body: a.desc)
-                        }
-                    }
-                }
             }
 
             DispatchQueue.main.async {

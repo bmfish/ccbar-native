@@ -553,28 +553,6 @@ final class StatsStore {
         sqlite3_step(stmt)
     }
 
-    // MARK: 成就派生数据
-
-    /// 一次性查好成就评估所需的原始事实（today/totalTokens 由调用方单独查询后补充）
-    func achievementFacts() -> AchievementFacts {
-        lock.lock(); defer { lock.unlock() }
-        var maxDay: Int64 = 0
-        var weekendMax: Int64 = 0
-        var early = false
-        var dates: [String] = []
-        if handle != nil {
-            maxDay = scalarInt("SELECT COALESCE(MAX(input + output + cache_create + cache_read), 0) FROM daily_agg")
-            weekendMax = scalarInt("SELECT COALESCE(MAX(input + output + cache_create + cache_read), 0) FROM daily_agg WHERE CAST(strftime('%w', date) AS INTEGER) IN (0, 6)")
-            early = scalarInt("SELECT EXISTS(SELECT 1 FROM usage_log WHERE CAST(strftime('%H', created_at, 'unixepoch', 'localtime') AS INTEGER) < 5)") == 1
-            forEachRowText("SELECT date FROM daily_agg WHERE reqs > 0 ORDER BY date") { stmt in
-                dates.append(String(cString: sqlite3_column_text(stmt, 0)))
-            }
-        }
-        return AchievementFacts(maxDayTokens: maxDay, weekendMaxTokens: weekendMax,
-                                hasEarlyMorningRequest: early, activeDates: dates,
-                                today: nil, totalTokens: 0)
-    }
-
     // MARK: 查询
     //
     // 今日数据来自视图的外部源分支（内部按今日 0 点过滤，走索引）；
