@@ -1309,10 +1309,8 @@ class HourlyDetailWindowController: DetailBaseWindowController {
         contentStack.addArrangedSubview(chartBox)
         chartBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
 
-        let colors = Design.modelColors(count: 24)
         let hourlyChart = BarReadoutChart(
-            entries: (0..<24).map { ChartEntry(label: String(format: "%02d", $0), value: hourly[$0].1) },
-            barColors: colors
+            entries: (0..<24).map { ChartEntry(label: String(format: "%02d", $0), value: hourly[$0].1) }
         )
         let hourlyHost = NSHostingView(rootView: hourlyChart)
         hourlyHost.translatesAutoresizingMaskIntoConstraints = false

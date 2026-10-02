@@ -115,7 +115,6 @@ struct LineTrendChart: View {
 // 柱状（近30天 / 每小时）
 struct BarReadoutChart: View {
     let entries: [ChartEntry]
-    var barColors: [NSColor]? = nil
     /// 类别多时（如近30天）隐藏 x 轴标签，避免挤成一团
     var showXAxis = true
 
@@ -162,11 +161,10 @@ struct BarReadoutChart: View {
         }
     }
 
+    /// 每根柱子一个颜色：主题色板按小时种子打散（稳定不闪变，整点换一批）
     private func barColor(for i: Int) -> Color {
-        if let barColors, i < barColors.count {
-            return Color(nsColor: barColors[i])
-        }
-        return Color(nsColor: Design.brandColor).opacity(0.55 + 0.35 * Double(i % 3) / 2)
+        let palette = Design.modelColors(count: max(entries.count, 1))
+        return Color(nsColor: palette[i % palette.count])
     }
 
     private func dragGesture(width: CGFloat) -> some Gesture {
