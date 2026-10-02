@@ -86,6 +86,12 @@ class Settings {
         set { defaults.set(newValue, forKey: "popoverWide") }
     }
 
+    /// 闪电 LED 红色门槛（万）：单次刷新增量达到即变红，0 = 不变红
+    var ledRedThreshold: Int {
+        get { defaults.object(forKey: "ledRedThreshold") == nil ? 100 : defaults.integer(forKey: "ledRedThreshold") }
+        set { defaults.set(newValue, forKey: "ledRedThreshold") }
+    }
+
     /// 开机启动：除记录偏好外，真正注册/注销系统登录项（SMAppService，macOS 13+）
     func setLaunchAtLogin(_ enabled: Bool) {
         launchAtLogin = enabled
