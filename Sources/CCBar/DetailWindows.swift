@@ -181,6 +181,10 @@ class SettingsWindowController: NSWindowController {
         updateBtn.bezelStyle = .rounded
         buttonBar.addArrangedSubview(updateBtn)
 
+        let backupBtn = makeButton(title: "备份数据", action: #selector(backupData))
+        backupBtn.bezelStyle = .rounded
+        buttonBar.addArrangedSubview(backupBtn)
+
         let saveBtn = NSButton(title: "保存", target: self, action: #selector(saveSettings))
         saveBtn.bezelStyle = .rounded
         saveBtn.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
@@ -545,6 +549,29 @@ class SettingsWindowController: NSWindowController {
 
     @objc func checkForUpdates() {
         UpdateChecker.check()
+    }
+
+    /// 备份统计库（用量历史是长期资产，一键导出独立 db 文件）
+    @objc func backupData() {
+        let panel = NSSavePanel()
+        let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none)
+            .replacingOccurrences(of: "/", with: "")
+        panel.nameFieldStringValue = "ccbar-backup-\(stamp).db"
+        panel.allowedContentTypes = [.data]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let ok = AppDelegate.shared?.store.backup(to: url.path) ?? false
+        let alert = NSAlert()
+        if ok {
+            alert.messageText = "备份完成"
+            alert.informativeText = "统计库已备份到：\n\(url.path)\n\n恢复方式：退出 ccBar 后用备份文件替换\n~/Library/Application Support/ccbar/ccbar.db"
+        } else {
+            alert.messageText = "备份失败"
+            alert.informativeText = "统计库未打开或目标位置不可写"
+            alert.alertStyle = .warning
+        }
+        alert.addButton(withTitle: "好的")
+        alert.runModal()
     }
 
     @objc func resetSettings() {

@@ -559,6 +559,19 @@ final class StatsStore {
         sqlite3_step(stmt)
     }
 
+    // MARK: 备份
+
+    /// 备份统计库到目标路径（VACUUM INTO 生成紧凑的独立副本，连接打开中也可安全执行）
+    func backup(to path: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let db = handle else { return false }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "VACUUM INTO ?", -1, &stmt, nil) == SQLITE_OK else { return false }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, path, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        return sqlite3_step(stmt) == SQLITE_DONE
+    }
+
     // MARK: 查询
     //
     // 今日数据来自视图的外部源分支（内部按今日 0 点过滤，走索引）；
