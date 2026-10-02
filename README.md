@@ -2,7 +2,8 @@
 
 macOS 菜单栏 AI CLI 用量统计工具。实时显示今日 token 消耗，支持**多数据源**聚合——目前内置 [cc-switch](https://github.com/farion1231/cc-switch)（Claude/Codex 等多应用代理统计）与 ZCode，后续可插拔扩展。
 
-![menu bar](https://img.shields.io/badge/platform-macOS%2012%2B-black) ![swift](https://img.shields.io/badge/swift-5.9-orange) ![windows](https://img.shields.io/badge/Windows-tray-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![menu bar](https://img.shields.io/badge/platform-macOS%2013%2B-black) ![swift](https://img.shields.io/badge/swift-5.9-orange)
+![ui](https://img.shields.io/badge/UI-SwiftUI-00A0E9) ![windows](https://img.shields.io/badge/Windows-tray-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
 <p align="center">
   <img src="docs/images/menubar.png" width="420" alt="菜单栏用量"/>

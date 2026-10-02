@@ -1,601 +1,432 @@
 import Cocoa
+import SwiftUI
 
-// MARK: - Popover View Controller
+// MARK: - 弹窗动作桥（连接旧的 AppDelegate selector 流程）
 
-class PopoverViewController: NSViewController {
-    private var scrollView: NSScrollView!
-    private var contentStack: NSStackView!
-    private var scanlineView: ScanlineOverlayView!
-    /// 问候语在弹窗创建时随机一次（复用实例 → 弹窗期间不换）
-    private let greeting = AppDelegate.shared?.greetings.randomElement() ?? "ccBar 用量统计"
-    /// 上次渲染的数据签名；数据没变就不重建视图，消除定时刷新的闪烁
-    private var lastSignature: String?
+struct PopoverActions {
+    let openHourlyToday: () -> Void
+    let openHourlyYesterday: () -> Void
+    let openWeek: () -> Void
+    let openMonth: () -> Void
+    let openModelToday: () -> Void
+    let copy: () -> Void
+    let refresh: () -> Void
+    let settings: () -> Void
+    let quit: () -> Void
 
-    override func loadView() {
-        let mainView = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 420))
-        mainView.wantsLayer = true
-        mainView.layer?.backgroundColor = Design.backgroundDark.cgColor
+    static let shared = PopoverActions(
+        openHourlyToday: { AppDelegate.shared?.openHourlyDetailToday() },
+        openHourlyYesterday: { AppDelegate.shared?.openHourlyDetailYesterday() },
+        openWeek: { AppDelegate.shared?.openDetail() },
+        openMonth: { AppDelegate.shared?.openMonthDetail() },
+        openModelToday: { AppDelegate.shared?.openModelDetailToday() },
+        copy: { AppDelegate.shared?.copyStats() },
+        refresh: { AppDelegate.shared?.refreshData() },
+        settings: { AppDelegate.shared?.openSettingsAndClose() },
+        quit: { AppDelegate.shared?.quit() }
+    )
+}
 
-        // 毛玻璃背景
-        let blur = NSVisualEffectView(frame: mainView.bounds)
-        blur.autoresizingMask = [.width, .height]
-        blur.material = .hudWindow
-        blur.state = .active
-        blur.blendingMode = .behindWindow
-        mainView.addSubview(blur)
-        Design.addDarkTint(overBlurIn: mainView)
+// MARK: - ViewModel（主线程读缓存，驱动 SwiftUI 重渲染）
 
-        scrollView = NSScrollView(frame: mainView.bounds)
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.hasVerticalScroller = true
-        scrollView.drawsBackground = false
-        scrollView.hasVerticalRuler = false
-        scrollView.hasHorizontalScroller = false
-        scrollView.scrollerStyle = .overlay
-        mainView.addSubview(scrollView)
+@MainActor
+final class PopoverViewModel: ObservableObject {
+    @Published var today: DayStats?
+    @Published var yesterday: DayStats?
+    @Published var week: DayStats?
+    @Published var month: DayStats?
+    @Published var total: TotalStats?
+    @Published var models: [ModelStat] = []
+    @Published var workHours: Double?
+    @Published var theme: Theme = .current
 
-        contentStack = NSStackView()
-        contentStack.orientation = .vertical
-        contentStack.alignment = .leading
-        contentStack.spacing = 0
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-        contentStack.edgeInsets = NSEdgeInsets(top: 10, left: 14, bottom: 6, right: 14)
+    /// 问候语在弹窗创建时随机一次（popover 实例复用，期间不换）
+    let greeting: String
 
-        let clipView = NSClipView()
-        clipView.documentView = contentStack
-        clipView.drawsBackground = false
-        scrollView.contentView = clipView
-
-        NSLayoutConstraint.activate([
-            contentStack.topAnchor.constraint(equalTo: clipView.topAnchor),
-            contentStack.leadingAnchor.constraint(equalTo: clipView.leadingAnchor),
-            contentStack.trailingAnchor.constraint(equalTo: clipView.trailingAnchor),
-            contentStack.bottomAnchor.constraint(equalTo: clipView.bottomAnchor)
-        ])
-
-        // 底部常驻操作栏：不随内容滚动，内容少时也钉在底部
-        let bar = NSStackView()
-        bar.orientation = .horizontal
-        bar.distribution = .fillEqually
-        bar.spacing = 6
-        bar.translatesAutoresizingMaskIntoConstraints = false
-        bar.addArrangedSubview(makeIconButton(sfSymbol: "doc.on.doc", label: "复制",
-                                              action: #selector(AppDelegate.copyStats)))
-        bar.addArrangedSubview(makeIconButton(sfSymbol: "arrow.clockwise", label: "刷新",
-                                              action: #selector(AppDelegate.refreshData)))
-        bar.addArrangedSubview(makeIconButton(sfSymbol: "gearshape", label: "设置",
-                                              action: #selector(AppDelegate.openSettingsAndClose)))
-        bar.addArrangedSubview(makeIconButton(sfSymbol: "xmark", label: "退出",
-                                              action: #selector(AppDelegate.quit)))
-        mainView.addSubview(bar)
-
-        // CRT 扫描线覆盖层（仅 CRT 主题显示，不拦截点击）
-        scanlineView = ScanlineOverlayView()
-        scanlineView.translatesAutoresizingMaskIntoConstraints = false
-        mainView.addSubview(scanlineView)
-
-        NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: mainView.topAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: mainView.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: mainView.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: -8),
-            bar.leadingAnchor.constraint(equalTo: mainView.leadingAnchor, constant: 14),
-            bar.trailingAnchor.constraint(equalTo: mainView.trailingAnchor, constant: -14),
-            bar.bottomAnchor.constraint(equalTo: mainView.bottomAnchor, constant: -10),
-            bar.heightAnchor.constraint(equalToConstant: 40),
-            scanlineView.topAnchor.constraint(equalTo: mainView.topAnchor),
-            scanlineView.leadingAnchor.constraint(equalTo: mainView.leadingAnchor),
-            scanlineView.trailingAnchor.constraint(equalTo: mainView.trailingAnchor),
-            scanlineView.bottomAnchor.constraint(equalTo: mainView.bottomAnchor)
-        ])
-
-        self.view = mainView
+    init(greeting: String? = nil) {
+        self.greeting = greeting ?? AppDelegate.shared?.greetings.randomElement() ?? "ccBar 用量统计"
     }
 
     func refresh() {
-        scanlineView.isHidden = Theme.current != .crt
-        guard renderSignature() != lastSignature else { return }
-        lastSignature = renderSignature()
-        // 重建期间关掉隐式动画，数据微变时不再闪烁
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        buildContent()
-        CATransaction.commit()
-    }
-
-    /// 影响渲染的数据签名（主题 + 各缓存值）
-    private func renderSignature() -> String {
         let c = DataCache.shared
-        let models = c.getCachedModelBreakdown()?.map { "\($0.model):\($0.total)" }.joined(separator: ",") ?? ""
-        return [
-            Theme.current.rawValue,
-            c.getCachedToday().map { "\($0.reqs)/\($0.total)" } ?? "nil",
-            c.getCachedYesterday().map { "\($0.total)" } ?? "nil",
-            c.getCachedWeek().map { "\($0.total)" } ?? "nil",
-            c.getCachedMonth().map { "\($0.total)" } ?? "nil",
-            c.getCachedTotal().map { "\($0.total)" } ?? "nil",
-            c.getCachedWorkHours().map { String(format: "%.1f", $0) } ?? "nil",
-            models
-        ].joined(separator: "|")
+        today = c.getCachedToday()
+        yesterday = c.getCachedYesterday()
+        week = c.getCachedWeek()
+        month = c.getCachedMonth()
+        total = c.getCachedTotal()
+        models = c.getCachedModelBreakdown() ?? []
+        workHours = c.getCachedWorkHours()
+        theme = .current
     }
 
-    // MARK: - 构建内容
+    /// 按已跑时长把今日用量折算到 24:00
+    var predictionText: String? {
+        guard let t = today, let h = workHours, h > 0.2 else { return nil }
+        let predicted = Double(t.total) / (h * 3600) * 86_400
+        return "按当前速率到 24:00 约 \(Design.formatTokens(Int64(predicted)))"
+    }
+}
 
-    private func buildContent() {
-        contentStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+// MARK: - 宿主控制器（保持类名，AppDelegate 无感切换）
 
-        // 全部读缓存（打开面板/定时器刷新时由 AppDelegate 在后台查询后写入）
-        let today = DataCache.shared.getCachedToday()
-        let yesterday = DataCache.shared.getCachedYesterday()
-        let week = DataCache.shared.getCachedWeek()
-        let month = DataCache.shared.getCachedMonth()
-        let total = DataCache.shared.getCachedTotal()
-        let models = DataCache.shared.getCachedModelBreakdown()
+final class PopoverViewController: NSHostingController<PopoverRootView> {
+    private let vm: PopoverViewModel
 
-        // 渐变顶部条
-        let gradientBar = GradientHeaderView()
-        gradientBar.translatesAutoresizingMaskIntoConstraints = false
-        gradientBar.heightAnchor.constraint(equalToConstant: 3).isActive = true
-        contentStack.addArrangedSubview(gradientBar)
-        gradientBar.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28).isActive = true
-        addSpacer(4)
+    init() {
+        let vm = PopoverViewModel()
+        self.vm = vm
+        super.init(rootView: PopoverRootView(vm: vm))
+    }
 
-        // 问候语
-        let greeting = AppDelegate.shared?.greetings.randomElement() ?? "ccBar 用量统计"
-        addCenteredLabel(greeting, size: 11, color: Design.textMuted)
-        addSpacer(6)
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-        // 今日统计卡片
-        if let today = today {
-            buildTodayCard(today)
+    func refresh() {
+        vm.refresh()
+    }
+}
+
+// MARK: - 根视图
+
+struct PopoverRootView: View {
+    @ObservedObject var vm: PopoverViewModel
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(.ultraThinMaterial)
+            Rectangle().fill(Color(nsColor: Design.backgroundDark).opacity(0.8))
+            VStack(spacing: 0) {
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 0) { content }
+                        .padding(.top, 10)
+                        .padding(.horizontal, 14)
+                }
+                bottomBar
+            }
+            if vm.theme == .crt {
+                ScanlineShape().allowsHitTesting(false)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        LinearGradient(colors: [Color(nsColor: vm.theme.accent).opacity(0.7),
+                                Color(nsColor: vm.theme.accent).opacity(0)],
+                       startPoint: .leading, endPoint: .trailing)
+            .frame(height: 3)
+            .padding(.bottom, 8)
+
+        Text(vm.greeting)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(Color(nsColor: Design.textMuted))
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.bottom, 6)
+
+        if let today = vm.today {
+            TodayCard(vm: vm, today: today)
+                .padding(.bottom, 10)
         } else {
-            buildEmptyState()
+            popoverCard {
+                Text("暂无数据\n请检查设置里的数据源连接")
+                    .font(.system(size: 12))
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            }
+            .padding(.bottom, 10)
         }
 
-        // 模型分布
-        if let models = models, !models.isEmpty {
-            buildModelSection(models)
+        if !vm.models.isEmpty {
+            ModelCard(vm: vm)
+                .padding(.bottom, 8)
         }
 
-
-        // 时间段统计（颜色跟随主题）
-        if yesterday != nil || week != nil || month != nil || total != nil {
-            let tc = Theme.current.trendIconColors
-            addSectionHeader("趋势")
-            if let yesterday = yesterday {
-                addStatRow(sfIcon: "calendar", iconColor: tc.yesterday,
-                          title: "昨日", value: Design.formatTokens(yesterday.total),
-                          action: #selector(AppDelegate.openHourlyDetailYesterday))
-            }
-            if let week = week {
-                addStatRow(sfIcon: "chart.bar", iconColor: tc.week,
-                          title: "近7天", value: Design.formatTokens(week.total),
-                          action: #selector(AppDelegate.openDetail))
-            }
-            if let month = month {
-                addStatRow(sfIcon: "calendar.badge.clock", iconColor: tc.month,
-                          title: "近30天", value: Design.formatTokens(month.total),
-                          action: #selector(AppDelegate.openMonthDetail))
-            }
-            if let total = total {
-                addStatRow(sfIcon: "sum", iconColor: tc.total,
-                          title: "历史总量", value: Design.formatTokens(total.total),
-                          action: #selector(AppDelegate.openAllTimeDetail))
-            }
+        if vm.yesterday != nil || vm.week != nil || vm.month != nil || vm.total != nil {
+            trendSection
         }
 
-        addSpacer(6)
-        addSeparator()
+        Rectangle()
+            .fill(Color(nsColor: Design.separatorColor))
+            .frame(height: 1)
+            .padding(.vertical, 6)
     }
 
-    /// 无数据源/查询失败时的占位
-    private func buildEmptyState() {
-        let card = makeCard()
-        let lbl = NSTextField(wrappingLabelWithString: "暂无数据\n请检查设置里的数据源连接")
-        lbl.font = NSFont.systemFont(ofSize: 12)
-        lbl.textColor = Design.textMuted
-        lbl.alignment = .center
-        lbl.translatesAutoresizingMaskIntoConstraints = false
-        card.addArrangedSubview(lbl)
-        lbl.widthAnchor.constraint(equalTo: card.widthAnchor).isActive = true
-        contentStack.addArrangedSubview(card)
-        card.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28).isActive = true
-        addSpacer(10)
-    }
+    // MARK: 今日卡片
 
-    // MARK: - 今日统计卡片
+    private struct TodayCard: View {
+        @ObservedObject var vm: PopoverViewModel
+        let today: DayStats
 
-    private func buildTodayCard(_ today: DayStats) {
-        let card = makeCard()
+        var body: some View {
+            popoverCard {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "chart.line.uptrend.xyaxis")
+                            .font(.system(size: 12))
+                            .foregroundColor(Color(nsColor: Design.textSecondary))
+                        Text("今日用量")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(Color(nsColor: Design.textPrimary))
+                        Spacer()
+                        Text("›").font(.system(size: 15, weight: .medium))
+                            .foregroundColor(Color(nsColor: Design.textMuted))
+                    }
 
-        // 标题
-        let header = makeHeaderRow(title: "今日用量", sfIcon: "chart.line.uptrend.xyaxis",
-                                   action: #selector(AppDelegate.openHourlyDetailToday))
-        card.addArrangedSubview(header)
-        header.widthAnchor.constraint(equalTo: card.widthAnchor).isActive = true
+                    Text(Design.formatTokens(today.total))
+                        .font(.system(size: vm.theme.bigNumberFontSize,
+                                      weight: swiftUIFontWeight(vm.theme.bigNumberWeight),
+                                      design: .rounded))
+                        .monospacedDigit()
+                        .foregroundColor(Color(nsColor: Design.bigNumberColor))
+                        .shadow(color: Color(nsColor: Design.bigNumberColor).opacity(vm.theme.glowAlpha),
+                                radius: vm.theme.glowRadius)
+                        .contentTransition(.numericText())
+                        .animation(.easeOut(duration: 0.35), value: today.total)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-        // 大数字（用主题专属色、字号、字重、发光）
-        let bigNum = NSTextField(labelWithString: Design.formatTokens(today.total))
-        bigNum.font = NSFont.monospacedDigitSystemFont(ofSize: Theme.current.bigNumberFontSize,
-                                                        weight: Theme.current.bigNumberWeight)
-        bigNum.textColor = Design.bigNumberColor
-        let glow = NSShadow()
-        glow.shadowColor = Design.bigNumberColor.withAlphaComponent(Theme.current.glowAlpha)
-        glow.shadowBlurRadius = Theme.current.glowRadius
-        glow.shadowOffset = .zero
-        bigNum.shadow = glow
-        let bigWrap = InteractiveRowView()
-        bigWrap.translatesAutoresizingMaskIntoConstraints = false
-        bigWrap.onTap = { _ = AppDelegate.shared?.perform(#selector(AppDelegate.openHourlyDetailToday)) }
-        bigNum.translatesAutoresizingMaskIntoConstraints = false
-        bigWrap.addSubview(bigNum)
-        NSLayoutConstraint.activate([
-            bigNum.leadingAnchor.constraint(equalTo: bigWrap.leadingAnchor),
-            bigNum.trailingAnchor.constraint(lessThanOrEqualTo: bigWrap.trailingAnchor),
-            bigNum.topAnchor.constraint(equalTo: bigWrap.topAnchor),
-            bigNum.bottomAnchor.constraint(equalTo: bigWrap.bottomAnchor)
-        ])
-        card.addArrangedSubview(bigWrap)
-        addSpacer(4, to: card)
+                    HStack(alignment: .center, spacing: 0) {
+                        statColumn("请求数", "\(today.reqs)", Design.textPrimary)
+                        statColumn("缓存命中", cacheRateText, cacheRateColor)
+                        if let h = vm.workHours {
+                            statColumn("工时", String(format: "%.1fh", h), Design.textPrimary)
+                        }
+                    }
 
-        // 三列统计行
-        let totalInput = today.input + today.cacheCreate + today.cacheRead
-        let cacheRate = totalInput > 0 ? Double(today.cacheRead) / Double(totalInput) * 100 : 0
-
-        let statsRow = NSStackView()
-        statsRow.orientation = .horizontal
-        statsRow.distribution = .fillEqually
-        statsRow.translatesAutoresizingMaskIntoConstraints = false
-
-        statsRow.addArrangedSubview(makeStatColumn(label: "请求数", value: "\(today.reqs)", color: Design.textPrimary))
-        statsRow.addArrangedSubview(makeStatColumn(label: "缓存命中",
-                                                   value: String(format: "%.0f%%", cacheRate),
-                                                   color: cacheRate > 75 ? Design.successColor : Design.warningColor))
-        if let hours = DataCache.shared.getCachedWorkHours() {
-            statsRow.addArrangedSubview(makeStatColumn(label: "工时", value: String(format: "%.1fh", hours), color: Design.textPrimary))
+                    if let prediction = vm.predictionText {
+                        Text(prediction)
+                            .font(.system(size: 10))
+                            .foregroundColor(Color(nsColor: Design.textMuted))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .onTapGesture { PopoverActions.shared.openHourlyToday() }
         }
 
-        let statsWrap = InteractiveRowView()
-        statsWrap.translatesAutoresizingMaskIntoConstraints = false
-        statsWrap.onTap = { _ = AppDelegate.shared?.perform(#selector(AppDelegate.openHourlyDetailToday)) }
-        statsRow.translatesAutoresizingMaskIntoConstraints = false
-        statsWrap.addSubview(statsRow)
-        NSLayoutConstraint.activate([
-            statsRow.leadingAnchor.constraint(equalTo: statsWrap.leadingAnchor),
-            statsRow.trailingAnchor.constraint(equalTo: statsWrap.trailingAnchor),
-            statsRow.topAnchor.constraint(equalTo: statsWrap.topAnchor),
-            statsRow.bottomAnchor.constraint(equalTo: statsWrap.bottomAnchor)
-        ])
-        card.addArrangedSubview(statsWrap)
-        statsWrap.widthAnchor.constraint(equalTo: card.widthAnchor).isActive = true
-        addSpacer(4, to: card)
-
-        // 速率预测：按已跑时长折算全天
-        if let hours = DataCache.shared.getCachedWorkHours(), hours > 0.2 {
-            let predicted = Double(today.total) / (hours * 3600) * 86_400
-            let lbl = NSTextField(labelWithString: "按当前速率到 24:00 约 \(Design.formatTokens(Int64(predicted)))")
-            lbl.font = NSFont.systemFont(ofSize: 10)
-            lbl.textColor = Design.textMuted
-            lbl.translatesAutoresizingMaskIntoConstraints = false
-            card.addArrangedSubview(lbl)
-            lbl.widthAnchor.constraint(equalTo: card.widthAnchor).isActive = true
+        private var cacheRateText: String {
+            let denom = today.input + today.cacheCreate + today.cacheRead
+            let rate = denom > 0 ? Double(today.cacheRead) / Double(denom) * 100 : 0
+            return String(format: "%.0f%%", rate)
         }
 
-        contentStack.addArrangedSubview(card)
-        card.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28).isActive = true
-        // 整卡可点
-        card.addGestureRecognizer(NSClickGestureRecognizer(target: AppDelegate.shared,
-                                                           action: #selector(AppDelegate.openHourlyDetailToday)))
-        addSpacer(10)
+        private var cacheRateColor: NSColor {
+            let denom = today.input + today.cacheCreate + today.cacheRead
+            let rate = denom > 0 ? Double(today.cacheRead) / Double(denom) * 100 : 0
+            return rate > 75 ? Design.successColor : Design.warningColor
+        }
     }
 
-    // MARK: - 模型分布
+    // MARK: 模型分布卡片
 
-    private func buildModelSection(_ models: [ModelStat]) {
-        let card = makeCard()
+    private struct ModelCard: View {
+        @ObservedObject var vm: PopoverViewModel
+        private let colors = Design.modelColors()
 
-        let header = makeHeaderRow(title: "模型分布", sfIcon: "cpu",
-                                   action: #selector(AppDelegate.openModelDetailToday))
-        card.addArrangedSubview(header)
-        header.widthAnchor.constraint(equalTo: card.widthAnchor).isActive = true
-
-        let colors = Design.modelColors()
-        let maxTotal = models.prefix(4).map { $0.total }.max() ?? 1
-
-        for (i, model) in models.prefix(4).enumerated() {
-            let row = makeModelBar(name: shortModelName(model.model), value: model.total,
-                                   maxValue: maxTotal, color: colors[i % colors.count])
-            card.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: card.widthAnchor).isActive = true
+        var body: some View {
+            popoverCard {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "cpu")
+                            .font(.system(size: 12))
+                            .foregroundColor(Color(nsColor: Design.textSecondary))
+                        Text("模型分布")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(Color(nsColor: Design.textPrimary))
+                        Spacer()
+                        Text("›").font(.system(size: 15, weight: .medium))
+                            .foregroundColor(Color(nsColor: Design.textMuted))
+                    }
+                    ForEach(Array(vm.models.prefix(4).enumerated()), id: \.offset) { i, m in
+                        modelRow(index: i, model: m)
+                    }
+                }
+            }
+            .onTapGesture { PopoverActions.shared.openModelToday() }
         }
 
-        contentStack.addArrangedSubview(card)
-        card.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28).isActive = true
-        // 整卡可点
-        card.addGestureRecognizer(NSClickGestureRecognizer(target: AppDelegate.shared,
-                                                           action: #selector(AppDelegate.openModelDetailToday)))
-        addSpacer(8)
-    }
-
-    /// 缩短模型名：claude-sonnet-4-20250514 → sonnet-4
-    private func shortModelName(_ name: String) -> String {        var s = name.lowercased()
-        // 去掉日期后缀 (YYYYMMDD)
-        if let dashRange = s.range(of: "-", options: .backwards) {
-            let after = s[dashRange.upperBound...]
-            if after.count == 8, Int(after) != nil {
-                s = String(s[..<dashRange.lowerBound])
+        private func modelRow(index: Int, model: ModelStat) -> some View {
+            let maxTotal = vm.models.prefix(4).map { $0.total }.max() ?? 1
+            let progress = maxTotal > 0 ? CGFloat(model.total) / CGFloat(maxTotal) : 0
+            return VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(Color(nsColor: colors[index % colors.count]))
+                        .frame(width: 6, height: 6)
+                    Text(shortModelName(model.model))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(Color(nsColor: Design.textPrimary))
+                        .lineLimit(1)
+                    Spacer()
+                    Text(Design.formatTokensK(model.total))
+                        .font(.system(size: 11, weight: .medium).monospacedDigit())
+                        .foregroundColor(Color(nsColor: Design.textSecondary))
+                }
+                GeometryReader { geo in
+                    Capsule()
+                        .fill(Color(nsColor: Design.brandColor))
+                        .frame(width: geo.size.width * min(max(progress, 0), 1))
+                        .animation(.easeOut(duration: 0.4), value: progress)
+                }
+                .frame(height: Design.barHeight)
             }
         }
-        // 去掉常见前缀
-        for prefix in ["claude-", "openai-", "deepseek-", "google-"] {
-            if s.hasPrefix(prefix) {
-                s = String(s.dropFirst(prefix.count))
+
+        private func shortModelName(_ name: String) -> String {
+            var s = name.lowercased()
+            if let dash = s.range(of: "-", options: .backwards) {
+                let after = s[dash.upperBound...]
+                if after.count == 8, Int(after) != nil { s = String(s[..<dash.lowerBound]) }
+            }
+            for p in ["claude-", "openai-", "deepseek-", "google-"] where s.hasPrefix(p) {
+                s = String(s.dropFirst(p.count))
                 break
             }
+            return s.count > 14 ? String(s.prefix(14)) + "…" : s
         }
-        // 截断过长名字
-        if s.count > 14 {
-            s = String(s.prefix(14)) + "…"
+    }
+
+    // MARK: 趋势
+
+    private var trendSection: some View {
+        let tc = vm.theme.trendIconColors
+        return VStack(alignment: .leading, spacing: 0) {
+            Text("趋势")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+                .padding(.top, 6)
+                .padding(.bottom, 4)
+            if let y = vm.yesterday {
+                trendRow(icon: "calendar", color: tc.yesterday, title: "昨日",
+                         value: Design.formatTokens(y.total), action: PopoverActions.shared.openHourlyYesterday)
+            }
+            if let w = vm.week {
+                trendRow(icon: "chart.bar", color: tc.week, title: "近7天",
+                         value: Design.formatTokens(w.total), action: PopoverActions.shared.openWeek)
+            }
+            if let m = vm.month {
+                trendRow(icon: "calendar.badge.clock", color: tc.month, title: "近30天",
+                         value: Design.formatTokens(m.total), action: PopoverActions.shared.openMonth)
+            }
+            if let t = vm.total {
+                trendRow(icon: "sum", color: tc.total, title: "历史总量",
+                         value: Design.formatTokens(t.total), action: PopoverActions.shared.openMonth)
+            }
         }
-        return s
     }
 
-    // MARK: - 组件工厂
-
-    private func makeCard() -> NSStackView {
-        let card = NSStackView()
-        card.orientation = .vertical
-        card.alignment = .leading
-        card.spacing = 4
-        card.translatesAutoresizingMaskIntoConstraints = false
-        card.wantsLayer = true
-        card.layer?.backgroundColor = Design.cardFillDark.cgColor
-        card.layer?.cornerRadius = Design.cardCornerRadius
-        card.layer?.borderWidth = 0.5
-        card.layer?.borderColor = Design.cardBorderDark.cgColor
-        card.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
-        return card
-    }
-
-    private func makeHeaderRow(title: String, sfIcon: String, action: Selector?) -> NSView {
-        let container = InteractiveRowView()
-        container.translatesAutoresizingMaskIntoConstraints = false
-        container.heightAnchor.constraint(equalToConstant: 22).isActive = true
-
-        let icon = NSImageView(image: NSImage(systemSymbolName: sfIcon, accessibilityDescription: nil) ?? NSImage())
-        icon.contentTintColor = Design.textSecondary
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.widthAnchor.constraint(equalToConstant: 14).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 14).isActive = true
-        container.addSubview(icon)
-
-        let label = NSTextField(labelWithString: title)
-        label.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        label.textColor = Design.textPrimary
-        label.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(label)
-
-        let chevron = NSTextField(labelWithString: "›")
-        chevron.font = NSFont.systemFont(ofSize: 15, weight: .medium)
-        chevron.textColor = Design.textMuted
-        chevron.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(chevron)
-
-        NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            icon.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 5),
-            label.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            chevron.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            chevron.centerYAnchor.constraint(equalTo: container.centerYAnchor)
-        ])
-
-        // 整行可点，不必点中右侧 › 图标
-        if let action = action {
-            container.onTap = { _ = AppDelegate.shared?.perform(action) }
+    private func trendRow(icon: String, color: NSColor, title: String, value: String, action: @escaping () -> Void) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 12))
+                .foregroundColor(Color(nsColor: color))
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(Color(nsColor: Design.textPrimary))
+            Spacer()
+            Text(value)
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .foregroundColor(Color(nsColor: Design.dataHighlightColor))
+            Text("›").font(.system(size: 15, weight: .medium))
+                .foregroundColor(Color(nsColor: Design.textMuted))
         }
-        return container
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .onTapGesture { action() }
     }
 
-    private func makeStatColumn(label: String, value: String, color: NSColor) -> NSView {
-        let col = NSView()
-        col.translatesAutoresizingMaskIntoConstraints = false
+    // MARK: 底部操作栏
 
-        let lbl = NSTextField(labelWithString: label)
-        lbl.font = NSFont.systemFont(ofSize: 10, weight: .regular)
-        lbl.textColor = Design.textMuted
-        lbl.alignment = .center
-        lbl.translatesAutoresizingMaskIntoConstraints = false
-        col.addSubview(lbl)
-
-        let val = NSTextField(labelWithString: value)
-        val.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
-        val.textColor = color
-        val.alignment = .center
-        val.translatesAutoresizingMaskIntoConstraints = false
-        col.addSubview(val)
-
-        NSLayoutConstraint.activate([
-            lbl.topAnchor.constraint(equalTo: col.topAnchor, constant: 4),
-            lbl.centerXAnchor.constraint(equalTo: col.centerXAnchor),
-            val.topAnchor.constraint(equalTo: lbl.bottomAnchor, constant: 3),
-            val.centerXAnchor.constraint(equalTo: col.centerXAnchor),
-            val.bottomAnchor.constraint(lessThanOrEqualTo: col.bottomAnchor, constant: -2)
-        ])
-        return col
+    private var bottomBar: some View {
+        HStack(spacing: 6) {
+            BarActionButton(icon: "doc.on.doc", label: "复制", action: PopoverActions.shared.copy)
+            BarActionButton(icon: "arrow.clockwise", label: "刷新", action: PopoverActions.shared.refresh)
+            BarActionButton(icon: "gearshape", label: "设置", action: PopoverActions.shared.settings)
+            BarActionButton(icon: "xmark", label: "退出", action: PopoverActions.shared.quit)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
     }
 
-    private func makeModelBar(name: String, value: Int64, maxValue: Int64, color: NSColor) -> NSView {
-        let row = InteractiveRowView()
-        row.translatesAutoresizingMaskIntoConstraints = false
-        row.heightAnchor.constraint(equalToConstant: 34).isActive = true
+    private struct BarActionButton: View {
+        let icon: String
+        let label: String
+        let action: () -> Void
+        @State private var hovering = false
 
-        let dot = NSView()
-        dot.translatesAutoresizingMaskIntoConstraints = false
-        dot.wantsLayer = true
-        dot.layer?.backgroundColor = color.cgColor
-        dot.layer?.cornerRadius = 3
-        row.addSubview(dot)
-
-        let shortName = name.count > 18 ? String(name.prefix(18)) + "…" : name
-        let nameLabel = NSTextField(labelWithString: shortName)
-        nameLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        nameLabel.textColor = Design.textPrimary
-        nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        row.addSubview(nameLabel)
-
-        let valueLabel = NSTextField(labelWithString: Design.formatTokensK(value))
-        valueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-        valueLabel.textColor = Design.textSecondary
-        valueLabel.alignment = .right
-        valueLabel.translatesAutoresizingMaskIntoConstraints = false
-        row.addSubview(valueLabel)
-
-        let bar = ProgressBarView()
-        bar.progress = maxValue > 0 ? CGFloat(value) / CGFloat(maxValue) : 0
-        bar.fillColor = Design.brandColor  // 进度条用主题主色，不是模型色
-        bar.translatesAutoresizingMaskIntoConstraints = false
-        row.addSubview(bar)
-
-        NSLayoutConstraint.activate([
-            dot.leadingAnchor.constraint(equalTo: row.leadingAnchor),
-            dot.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
-            dot.widthAnchor.constraint(equalToConstant: 6),
-            dot.heightAnchor.constraint(equalToConstant: 6),
-            nameLabel.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 6),
-            nameLabel.topAnchor.constraint(equalTo: row.topAnchor, constant: 2),
-            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: valueLabel.leadingAnchor, constant: -8),
-            valueLabel.trailingAnchor.constraint(equalTo: row.trailingAnchor),
-            valueLabel.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
-            bar.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 6),
-            bar.leadingAnchor.constraint(equalTo: row.leadingAnchor),
-            bar.trailingAnchor.constraint(equalTo: row.trailingAnchor),
-            bar.heightAnchor.constraint(equalToConstant: Design.barHeight)
-        ])
-        // 模型行整行可点，进模型详情
-        row.onTap = { _ = AppDelegate.shared?.perform(#selector(AppDelegate.openModelDetailToday)) }
-        return row
+        var body: some View {
+            Button(action: action) {
+                VStack(spacing: 2) {
+                    Image(systemName: icon).font(.system(size: 13))
+                    Text(label).font(.system(size: 10, weight: .medium))
+                }
+                .foregroundColor(Color(nsColor: Design.textSecondary))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(nsColor: hovering ? Design.activeFill : Design.cardFillDark)))
+                .overlay(RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color(nsColor: Design.cardBorderDark), lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+        }
     }
 
-    private func addStatRow(sfIcon: String, iconColor: NSColor, title: String, value: String, action: Selector) {
-        let row = InteractiveRowView()
-        row.translatesAutoresizingMaskIntoConstraints = false
-        row.heightAnchor.constraint(equalToConstant: 28).isActive = true
+}
 
-        let icon = NSImageView(image: NSImage(systemSymbolName: sfIcon, accessibilityDescription: nil) ?? NSImage())
-        icon.contentTintColor = iconColor
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.widthAnchor.constraint(equalToConstant: 14).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 14).isActive = true
-        row.addSubview(icon)
+// MARK: - 通用卡片容器（文件级，供嵌套子视图共用）
 
-        let titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        titleLabel.textColor = Design.textPrimary
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        row.addSubview(titleLabel)
+private func popoverCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+    content()
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .fill(Color(nsColor: Design.cardFillDark)))
+        .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .strokeBorder(Color(nsColor: Design.cardBorderDark), lineWidth: 0.5))
+}
 
-        let valueLabel = NSTextField(labelWithString: value)
-        valueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
-        valueLabel.textColor = Design.dataHighlightColor  // 主题专属数据色
-        valueLabel.alignment = .right
-        valueLabel.translatesAutoresizingMaskIntoConstraints = false
-        row.addSubview(valueLabel)
-
-        let chevron = NSTextField(labelWithString: "›")
-        chevron.font = NSFont.systemFont(ofSize: 15, weight: .medium)
-        chevron.textColor = Design.textMuted
-        chevron.translatesAutoresizingMaskIntoConstraints = false
-        row.addSubview(chevron)
-
-        NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 2),
-            icon.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-            titleLabel.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
-            titleLabel.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-            valueLabel.trailingAnchor.constraint(equalTo: chevron.leadingAnchor, constant: -4),
-            valueLabel.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-            chevron.trailingAnchor.constraint(equalTo: row.trailingAnchor),
-            chevron.centerYAnchor.constraint(equalTo: row.centerYAnchor)
-        ])
-
-        // 整行可点
-        row.onTap = { _ = AppDelegate.shared?.perform(action) }
-        contentStack.addArrangedSubview(row)
-        row.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28).isActive = true
+/// NSFont.Weight → SwiftUI Font.Weight
+private func swiftUIFontWeight(_ w: NSFont.Weight) -> Font.Weight {
+    switch w {
+    case .regular: return .regular
+    case .medium: return .medium
+    case .semibold: return .semibold
+    case .heavy: return .heavy
+    case .black: return .black
+    case .light: return .light
+    default: return .bold
     }
+}
 
-    private func addSectionHeader(_ title: String) {
-        addSpacer(6)
-        let label = NSTextField(labelWithString: title)
-        label.font = NSFont.systemFont(ofSize: 10, weight: .semibold)
-        label.textColor = Design.textMuted
-        label.translatesAutoresizingMaskIntoConstraints = false
-        contentStack.addArrangedSubview(label)
-        label.leadingAnchor.constraint(equalTo: contentStack.leadingAnchor, constant: 14).isActive = true
-        addSpacer(4)
+private func statColumn(_ label: String, _ value: String, _ color: NSColor) -> some View {
+    VStack(spacing: 3) {
+        Text(label)
+            .font(.system(size: 10))
+            .foregroundColor(Color(nsColor: Design.textMuted))
+        Text(value)
+            .font(.system(size: 13, weight: .semibold).monospacedDigit())
+            .foregroundColor(Color(nsColor: color))
     }
+    .frame(maxWidth: .infinity)
+}
 
-    private func makeIconButton(sfSymbol: String, label: String, action: Selector) -> NSView {
-        let container = InteractiveRowView()
-        container.hoverColor = Design.activeFill
-        container.translatesAutoresizingMaskIntoConstraints = false
-        container.heightAnchor.constraint(equalToConstant: 36).isActive = true
-        container.wantsLayer = true
-        container.layer?.backgroundColor = Design.cardFillDark.cgColor
-        container.layer?.cornerRadius = 8
-        container.layer?.borderWidth = 0.5
-        container.layer?.borderColor = Design.cardBorderDark.cgColor
+// MARK: - CRT 扫描线
 
-        let icon = NSImageView(image: NSImage(systemSymbolName: sfSymbol, accessibilityDescription: nil) ?? NSImage())
-        icon.contentTintColor = Design.textSecondary
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.widthAnchor.constraint(equalToConstant: 14).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 14).isActive = true
-        container.addSubview(icon)
-
-        let title = NSTextField(labelWithString: label)
-        title.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        title.textColor = Design.textSecondary
-        title.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(title)
-
-        NSLayoutConstraint.activate([
-            icon.centerXAnchor.constraint(equalTo: container.centerXAnchor, constant: -14),
-            icon.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 4),
-            title.centerYAnchor.constraint(equalTo: container.centerYAnchor)
-        ])
-
-        container.onTap = { _ = AppDelegate.shared?.perform(action) }
-        return container
-    }
-
-    // MARK: - 布局辅助
-
-    private func addSpacer(_ height: CGFloat, to stack: NSStackView? = nil) {
-        let spacer = NSView()
-        spacer.translatesAutoresizingMaskIntoConstraints = false
-        spacer.heightAnchor.constraint(equalToConstant: height).isActive = true
-        (stack ?? contentStack).addArrangedSubview(spacer)
-    }
-
-    private func addSeparator() {
-        let sep = NSBox()
-        sep.boxType = .separator
-        sep.borderColor = Design.separatorColor
-        contentStack.addArrangedSubview(sep)
-        sep.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28).isActive = true
-    }
-
-    private func addCenteredLabel(_ text: String, size: CGFloat, color: NSColor) {
-        let label = NSTextField(labelWithString: text)
-        label.font = NSFont.systemFont(ofSize: size, weight: .medium)
-        label.textColor = color
-        label.alignment = .center
-        label.maximumNumberOfLines = 1
-        label.lineBreakMode = .byTruncatingTail
-        contentStack.addArrangedSubview(label)
-        label.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28).isActive = true
+struct ScanlineShape: View {
+    var body: some View {
+        GeometryReader { geo in
+            Path { p in
+                var y: CGFloat = 0
+                while y < geo.size.height {
+                    p.addRect(CGRect(x: 0, y: y, width: geo.size.width, height: 1))
+                    y += 3
+                }
+            }
+            .fill(Color.black.opacity(0.10))
+        }
     }
 }
