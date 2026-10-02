@@ -667,7 +667,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         if allTimeWindow == nil {
             allTimeWindow = AllTimeDetailWindowController()
         }
-        allTimeWindow?.reloadData(db: db)
+        allTimeWindow?.reloadData(db: db, today: store.queryDayStats(days: 0))
         allTimeWindow?.showWindow(nil)
         allTimeWindow?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

@@ -11,6 +11,11 @@ struct DayStats: Equatable {
     let cacheCreate: Int64
     let cacheRead: Int64
     var total: Int64 { input + output + cacheCreate + cacheRead }
+
+    static func + (l: DayStats, r: DayStats) -> DayStats {
+        DayStats(reqs: l.reqs + r.reqs, input: l.input + r.input, output: l.output + r.output,
+                 cacheCreate: l.cacheCreate + r.cacheCreate, cacheRead: l.cacheRead + r.cacheRead)
+    }
 }
 
 struct TotalStats: Equatable {
@@ -232,6 +237,11 @@ final class StatsStore {
         return Int64(cal.startOfDay(for: day).timeIntervalSince1970)
     }
 
+    /// epoch → 本地日期字符串（daily_agg 主键格式 yyyy-MM-dd）
+    static func dayString(fromEpoch e: Int64) -> String {
+        dayFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(e)))
+    }
+
     /// 把 URI 里会破坏 file: 语法的字符转义（含单引号——URL 里转成 %27，SQLite 解 URI 时还原）
     private func uriEscape(_ path: String) -> String {
         return path.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "?#'").inverted) ?? path
@@ -268,10 +278,34 @@ final class StatsStore {
         }
     }
 
+    /// 绑定文本参数并逐行回调（需已持锁）
+    private func forEachRowText(_ sql: String, binds: [String] = [], _ visit: (OpaquePointer) -> Void) {
+        var stmt: OpaquePointer?
+        guard let db = handle, sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        for (i, v) in binds.enumerated() {
+            sqlite3_bind_text(stmt, Int32(i + 1), v, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            visit(stmt!)
+        }
+    }
+
     /// 单行聚合查询，返回首行前 columns 列（需已持锁）
     private func aggregateRow(_ sql: String, binds: [Int64] = [], columns: Int) -> [Int64]? {
         var out: [Int64]?
         forEachRow(sql, binds: binds) { stmt in
+            if out == nil {
+                out = (0..<columns).map { sqlite3_column_int64(stmt, Int32($0)) }
+            }
+        }
+        return out
+    }
+
+    /// 单行聚合查询（文本绑定），返回首行前 columns 列（需已持锁）
+    private func aggregateRowText(_ sql: String, binds: [String] = [], columns: Int) -> [Int64]? {
+        var out: [Int64]?
+        forEachRowText(sql, binds: binds) { stmt in
             if out == nil {
                 out = (0..<columns).map { sqlite3_column_int64(stmt, Int32($0)) }
             }
@@ -319,6 +353,31 @@ final class StatsStore {
         }
         exec("CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_log(created_at)")
         exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+
+        // 每日聚合缓存：区间/总量/按月查询直接读它，不再扫明细。
+        // (date, source) 主键；meta 标记控制升级后一次性全量回填。
+        exec("""
+        CREATE TABLE IF NOT EXISTS daily_agg (
+            date TEXT NOT NULL,
+            source TEXT NOT NULL,
+            reqs INTEGER NOT NULL DEFAULT 0,
+            input INTEGER NOT NULL DEFAULT 0,
+            output INTEGER NOT NULL DEFAULT 0,
+            cache_create INTEGER NOT NULL DEFAULT 0,
+            cache_read INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (date, source)
+        )
+        """)
+        if metaGet("daily_agg_full") == "" {
+            exec("""
+            INSERT OR REPLACE INTO daily_agg (date, source, reqs, input, output, cache_create, cache_read)
+            SELECT date(created_at, 'unixepoch', 'localtime'), source,
+                   SUM(request_count), SUM(input_tokens), SUM(output_tokens),
+                   SUM(cache_creation_tokens), SUM(cache_read_tokens)
+            FROM usage_log GROUP BY 1, 2
+            """)
+            metaSet("daily_agg_full", value: "1")
+        }
 
         // ATTACH 各数据源并记录连接状态（供设置页展示）
         attachedAdapters.removeAll()
@@ -440,8 +499,34 @@ final class StatsStore {
             }
             if ok {
                 metaSet(key, value: yesterdayStr)
+                refreshDailyAgg(fromEpoch: fromEpoch, toEpoch: todayEpoch)
             }
         }
+    }
+
+    /// 重算 [fromEpoch, toEpoch) 窗口的每日聚合（数据源：usage_log 明细，OR REPLACE 自愈式覆盖）
+    private func refreshDailyAgg(fromEpoch: Int64, toEpoch: Int64) {
+        exec("""
+        INSERT OR REPLACE INTO daily_agg (date, source, reqs, input, output, cache_create, cache_read)
+        SELECT date(created_at, 'unixepoch', 'localtime'), source,
+               SUM(request_count), SUM(input_tokens), SUM(output_tokens),
+               SUM(cache_creation_tokens), SUM(cache_read_tokens)
+        FROM usage_log
+        WHERE created_at >= \(fromEpoch) AND created_at < \(toEpoch)
+        GROUP BY 1, 2
+        """)
+    }
+
+    /// daily_agg 区间汇总（仅覆盖"昨天及更早"；今日数据由调用方叠加实时值）。
+    /// 聚合无 GROUP BY 时即使空区间也会返回一行全 0。
+    private func dailyAggSum(fromDay: String, toDay: String) -> DayStats? {
+        guard handle != nil else { return nil }
+        guard let row = aggregateRowText("""
+        SELECT COALESCE(SUM(reqs),0), COALESCE(SUM(input),0), COALESCE(SUM(output),0),
+               COALESCE(SUM(cache_create),0), COALESCE(SUM(cache_read),0)
+        FROM daily_agg WHERE date >= ? AND date <= ?
+        """, binds: [fromDay, toDay], columns: 5) else { return nil }
+        return DayStats(reqs: Int(row[0]), input: row[1], output: row[2], cacheCreate: row[3], cacheRead: row[4])
     }
 
     private func metaGet(_ key: String) -> String {
@@ -470,8 +555,8 @@ final class StatsStore {
 
     // MARK: 查询
     //
-    // 全部用"epoch 秒区间 + 参数绑定"的条件替代逐行 date()，让 created_at 索引可用：
-    // 今日数据来自视图的外部源分支（内部已按今日 0 点过滤），历史来自 usage_log。
+    // 今日数据来自视图的外部源分支（内部按今日 0 点过滤，走索引）；
+    // 历史区间读 daily_agg 聚合表（补账时维护），不再扫明细。
 
     private static let aggColumns = """
         COALESCE(SUM(request_count), 0),
@@ -481,28 +566,32 @@ final class StatsStore {
         COALESCE(SUM(cache_read_tokens), 0)
         """
 
-    /// days == 0 今日；days == 1 昨日（单日）；其余：近 N 天（含今天，自 N 天前 0 点起）
+    private static let zeroStats = DayStats(reqs: 0, input: 0, output: 0, cacheCreate: 0, cacheRead: 0)
+
+    /// 今日实时聚合（usage_all 的"今日"段）
+    private func todayLive(now: Date) -> DayStats? {
+        let sql = "SELECT \(Self.aggColumns) FROM usage_all WHERE created_at >= ? AND created_at < ?"
+        guard let row = aggregateRow(sql, binds: [Self.localMidnight(0, now: now), Self.localMidnight(-1, now: now)], columns: 5) else { return nil }
+        return DayStats(reqs: Int(row[0]), input: row[1], output: row[2], cacheCreate: row[3], cacheRead: row[4])
+    }
+
+    /// days == 0 今日（实时）；days == 1 昨日；其余：近 N 天（含今天，自 N 天前 0 点起）
     func queryDayStats(days: Int) -> DayStats? {
         lock.lock(); defer { lock.unlock() }
         guard handle != nil, !attachedAdapters.isEmpty else { return nil }
 
         let now = Date()
-        let sql: String
-        let binds: [Int64]
         if days == 0 {
-            sql = "SELECT \(Self.aggColumns) FROM usage_all WHERE created_at >= ? AND created_at < ?"
-            binds = [Self.localMidnight(0, now: now), Self.localMidnight(-1, now: now)]
-        } else if days == 1 {
-            sql = "SELECT \(Self.aggColumns) FROM usage_all WHERE created_at >= ? AND created_at < ?"
-            binds = [Self.localMidnight(1, now: now), Self.localMidnight(0, now: now)]
-        } else {
-            sql = "SELECT \(Self.aggColumns) FROM usage_all WHERE created_at >= ?"
-            binds = [Self.localMidnight(days, now: now)]
+            return todayLive(now: now)
         }
-
-        guard let row = aggregateRow(sql, binds: binds, columns: 5) else { return nil }
-        return DayStats(reqs: Int(row[0]), input: row[1], output: row[2],
-                        cacheCreate: row[3], cacheRead: row[4])
+        if days == 1 {
+            let y = Self.dayString(fromEpoch: Self.localMidnight(1, now: now))
+            return dailyAggSum(fromDay: y, toDay: y) ?? Self.zeroStats
+        }
+        let from = Self.dayString(fromEpoch: Self.localMidnight(days, now: now))
+        let to = Self.dayString(fromEpoch: Self.localMidnight(1, now: now))
+        let history = dailyAggSum(fromDay: from, toDay: to) ?? Self.zeroStats
+        return history + (todayLive(now: now) ?? Self.zeroStats)
     }
 
     func queryModelBreakdown() -> [ModelStat] {
@@ -541,17 +630,32 @@ final class StatsStore {
         return hours
     }
 
-    /// 历史总量（明细 + 今日实时全在 usage_all 里，单表即全量）
+    /// 历史总量：daily_agg 全量 + 今日实时
     func queryTotalStats() -> TotalStats? {
         lock.lock(); defer { lock.unlock() }
         guard handle != nil, !attachedAdapters.isEmpty else { return nil }
 
-        guard let row = aggregateRow("""
-        SELECT COALESCE(SUM(request_count), 0),
-               COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
-        FROM usage_all
-        """, columns: 2) else { return nil }
-        return TotalStats(reqs: Int(row[0]), total: row[1])
+        guard let history = dailyAggSum(fromDay: "0000-01-01", toDay: "9999-12-31") else { return nil }
+        let all = history + (todayLive(now: Date()) ?? Self.zeroStats)
+        return TotalStats(reqs: all.reqs, total: all.total)
+    }
+
+    /// 按月汇总（历史走 daily_agg，今日由调用方叠加），月份倒序，最多 limit 个月
+    func queryMonthlyTotals(limit: Int = 36) -> [(month: String, reqs: Int, token: Int64, cache: Int64)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var result: [(month: String, reqs: Int, token: Int64, cache: Int64)] = []
+        forEachRowText("""
+        SELECT substr(date, 1, 7), COALESCE(SUM(reqs),0),
+               COALESCE(SUM(input + output + cache_create + cache_read),0), COALESCE(SUM(cache_read),0)
+        FROM daily_agg GROUP BY 1 ORDER BY 1 DESC LIMIT \(max(1, limit))
+        """) { stmt in
+            result.append((month: String(cString: sqlite3_column_text(stmt, 0)),
+                           reqs: Int(sqlite3_column_int64(stmt, 1)),
+                           token: sqlite3_column_int64(stmt, 2),
+                           cache: sqlite3_column_int64(stmt, 3)))
+        }
+        return result
     }
 
     /// 今日各数据源分账

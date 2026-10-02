@@ -127,6 +127,14 @@ final class StatsStoreTests: XCTestCase {
         XCTAssertNotNil(hours)
         XCTAssertGreaterThanOrEqual(hours!, 0)
         XCTAssertLessThan(hours!, 24)
+
+        // 按月汇总（历史部分；今天实时由窗口层叠加，这里不含）
+        let monthly = store.queryMonthlyTotals()
+        XCTAssertFalse(monthly.isEmpty)
+        let monthlyToken = monthly.reduce(Int64(0)) { $0 + $1.token }
+        XCTAssertEqual(monthlyToken, 33600, "历史聚合表合计 = 昨天B + 3天前C")
+        let monthlyReqs = monthly.reduce(0) { $0 + $1.reqs }
+        XCTAssertEqual(monthlyReqs, 2)
     }
 
     func testSyncIdempotentAcrossRepeats() throws {
@@ -138,6 +146,11 @@ final class StatsStoreTests: XCTestCase {
         let first = store.queryDayStats(days: 7)?.total
         for _ in 0..<3 { store.syncIfNeeded() }
         XCTAssertEqual(store.queryDayStats(days: 7)?.total, first, "重复同步幂等")
+
+        // 再次 rebuild：daily_agg 回填标记已存在，历史不重复累计
+        store.rebuild(configs: [SourceConfig(id: "ccswitch", enabled: true, dbPath: sourcePath)])
+        store.syncIfNeeded()
+        XCTAssertEqual(store.queryTotalStats()?.total, first, "重建连接后聚合不重复")
     }
 
     func testAttachDiagnostics() {

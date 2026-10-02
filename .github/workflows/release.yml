@@ -16,6 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Run tests
+        run: swift test
+
       - name: Build & package
         run: |
           if ! bash scripts/package.sh "${GITHUB_REF_NAME#v}" --universal; then

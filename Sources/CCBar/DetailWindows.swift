@@ -703,9 +703,9 @@ class DetailBaseWindowController: NSWindowController {
         else { return "\(n)" }
     }
 
-    /// 某一天的聚合：请求数 / 总 Token / 缓存读（daysAgo=0 表示今天）。
-    /// 历史聚合已在补账时展开进 usage_log，这里只查统一的 usage_all；
-    /// 用 epoch 区间 + 参数绑定替代逐行 date()，让 created_at 索引可用。
+    /// 某一天的实时聚合：请求数 / 总 Token / 缓存读（daysAgo=0 表示今天）。
+    /// 走统一的 usage_all；epoch 区间 + 参数绑定让 created_at 索引可用。
+    /// 注意 daily_agg 不含今天，所以历史日期请用 queryDailyRows，本方法只用于今天。
     func queryDay(db: OpaquePointer, daysAgo: Int) -> (Int, Int64, Int64) {
         let sql = """
         SELECT COALESCE(SUM(request_count),0), COALESCE(SUM(output_tokens+input_tokens+cache_read_tokens+cache_creation_tokens),0),
@@ -722,6 +722,28 @@ class DetailBaseWindowController: NSWindowController {
             result = (Int(sqlite3_column_int64(stmt, 0)), sqlite3_column_int64(stmt, 1), sqlite3_column_int64(stmt, 2))
         }
         return result
+    }
+
+    /// 一次拉取 [fromDay, toDay] 的每日汇总（daily_agg，date → 请求数/总Token/缓存读），
+    /// 替代逐日循环查询；今天不在其中，调用方用 queryDay 实时补当天
+    func queryDailyRows(db: OpaquePointer, fromDay: String, toDay: String) -> [String: (reqs: Int, token: Int64, cache: Int64)] {
+        let sql = """
+        SELECT date, COALESCE(SUM(reqs),0),
+            COALESCE(SUM(input+output+cache_create+cache_read),0), COALESCE(SUM(cache_read),0)
+        FROM daily_agg WHERE date >= ? AND date <= ? GROUP BY date
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [:] }
+        defer { sqlite3_finalize(stmt) }
+        for (i, s) in [fromDay, toDay].enumerated() {
+            sqlite3_bind_text(stmt, Int32(i + 1), s, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        }
+        var out: [String: (reqs: Int, token: Int64, cache: Int64)] = [:]
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            out[String(cString: sqlite3_column_text(stmt, 0))] =
+                (Int(sqlite3_column_int64(stmt, 1)), sqlite3_column_int64(stmt, 2), sqlite3_column_int64(stmt, 3))
+        }
+        return out
     }
 
     /// 把当前窗口表格数据导出为 CSV（带 BOM，Excel 直接打开不乱码）
@@ -820,16 +842,28 @@ class DetailWindowController: DetailBaseWindowController {
 
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
+        let dayKey = DateFormatter(); dayKey.dateFormat = "yyyy-MM-dd"
         var totalReqs = 0; var totalToken: Int64 = 0; var totalCache: Int64 = 0
         var dailyTokens: [CGFloat] = []
         exportRows = []
 
+        // 整周一次从 daily_agg 拉历史，今天实时补查（daily_agg 不含今天）
+        let endOfWeek = cal.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
+        let agg = queryDailyRows(db: db, fromDay: dayKey.string(from: weekStart),
+                                 toDay: dayKey.string(from: endOfWeek))
+
         for d in 0..<7 {
             guard let date = cal.date(byAdding: .day, value: d, to: weekStart) else { continue }
+            let dateStr = dayKey.string(from: date)
             let daysAgo = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: today).day ?? 0
-            let (reqs, token, cache) = queryDay(db: db, daysAgo: daysAgo)
+            var reqs = 0; var token = Int64(0); var cache = Int64(0)
+            if daysAgo == 0 {
+                (reqs, token, cache) = queryDay(db: db, daysAgo: 0)
+            } else if let a = agg[dateStr] {
+                reqs = a.reqs; token = a.token; cache = a.cache
+            }
             totalReqs += reqs; totalToken += token; totalCache += cache
-            exportRows.append([fmt.string(from: date), "\(reqs)", "\(token)", "\(cache)"])
+            exportRows.append([dateStr, "\(reqs)", "\(token)", "\(cache)"])
 
             let color: NSColor = token == 0 ? Design.textMuted : Design.dataHighlightColor
             let row = makeTableRow(columns: [
@@ -921,18 +955,29 @@ class MonthDetailWindowController: DetailBaseWindowController {
         contentStack.addArrangedSubview(makeSep())
 
         let today = cal.startOfDay(for: Date())
+        let dayKey = DateFormatter(); dayKey.dateFormat = "yyyy-MM-dd"
         var totalReqs = 0; var totalToken: Int64 = 0; var totalCache: Int64 = 0
         var dailyTokens: [CGFloat] = []
         exportRows = []
+
+        // 整月一次从 daily_agg 拉历史，今天实时补查（daily_agg 不含今天）
+        let lastDay = cal.date(byAdding: .day, value: days - 1, to: first) ?? first
+        let agg = queryDailyRows(db: db, fromDay: dayKey.string(from: first),
+                                 toDay: dayKey.string(from: lastDay))
 
         for day in 1...days {
             guard let date = cal.date(byAdding: .day, value: day - 1, to: first) else { continue }
             if cal.startOfDay(for: date) > today { break }
             let daysAgo = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: today).day ?? 0
-            let (reqs, token, cache) = queryDay(db: db, daysAgo: daysAgo)
+            let keyStr = dayKey.string(from: date)
+            var reqs = 0; var token = Int64(0); var cache = Int64(0)
+            if daysAgo == 0 {
+                (reqs, token, cache) = queryDay(db: db, daysAgo: 0)
+            } else if let a = agg[keyStr] {
+                reqs = a.reqs; token = a.token; cache = a.cache
+            }
             totalReqs += reqs; totalToken += token; totalCache += cache
-            exportRows.append([String(format: "%04d-%02d-%02d", comps.year ?? 0, comps.month ?? 0, day),
-                               "\(reqs)", "\(token)", "\(cache)"])
+            exportRows.append([keyStr, "\(reqs)", "\(token)", "\(cache)"])
 
             let color: NSColor = token == 0 ? Design.textMuted : Design.dataHighlightColor
             let dateStr = String(format: "%02d/%02d", comps.month!, day)
@@ -1319,29 +1364,27 @@ class AllTimeDetailWindowController: DetailBaseWindowController {
         dateLabel.stringValue = "按月汇总"
     }
 
-    func reloadData(db: OpaquePointer?) {
-        guard let db = db else { return }
+    /// db 查 daily_agg 按月汇总；today 由调用方传入实时叠加到当前月
+    func reloadData(db: OpaquePointer?, today: DayStats?) {
         exportRows = []
         contentStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
-        // 按月汇总（明细 + 今日实时都在 usage_all 里），最多展示近 36 个月
-        let sql = """
-        SELECT strftime('%Y-%m', created_at, 'unixepoch', 'localtime') AS m,
-            COALESCE(SUM(request_count),0),
-            COALESCE(SUM(input_tokens+output_tokens+cache_read_tokens+cache_creation_tokens),0),
-            COALESCE(SUM(cache_read_tokens),0)
-        FROM usage_all GROUP BY m ORDER BY m DESC LIMIT 36
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         var rows: [(month: String, reqs: Int, token: Int64, cache: Int64)] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            rows.append((String(cString: sqlite3_column_text(stmt, 0)),
-                         Int(sqlite3_column_int64(stmt, 1)),
-                         sqlite3_column_int64(stmt, 2),
-                         sqlite3_column_int64(stmt, 3)))
+        if let store = AppDelegate.shared?.store {
+            rows = store.queryMonthlyTotals(limit: 36)
         }
-        sqlite3_finalize(stmt)
+
+        // 今日实时并入当前月（daily_agg 不含今天）
+        if let t = today, t.reqs > 0 || t.total > 0 {
+            let month = StatsStore.dayString(fromEpoch: StatsStore.localMidnight(0)).prefix(7)
+            if let idx = rows.firstIndex(where: { $0.month == month }) {
+                rows[idx].reqs += t.reqs
+                rows[idx].token += t.total
+                rows[idx].cache += t.cacheRead
+            } else {
+                rows.insert((month: String(month), reqs: t.reqs, token: t.total, cache: t.cacheRead), at: 0)
+            }
+        }
 
         if rows.isEmpty {
             let lbl = NSTextField(labelWithString: "暂无数据")
