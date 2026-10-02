@@ -80,6 +80,12 @@ class Settings {
         set { defaults.set(newValue, forKey: "menuEmojiEnabled") }
     }
 
+    /// 宽版弹窗
+    var popoverWide: Bool {
+        get { defaults.bool(forKey: "popoverWide") }
+        set { defaults.set(newValue, forKey: "popoverWide") }
+    }
+
     /// 开机启动：除记录偏好外，真正注册/注销系统登录项（SMAppService，macOS 13+）
     func setLaunchAtLogin(_ enabled: Bool) {
         launchAtLogin = enabled

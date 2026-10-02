@@ -100,7 +100,8 @@ struct CCSwitchAdapter: SourceAdapter {
         WHERE created_at >= \(fromEpoch) AND created_at < \(todayEpoch)
         """
         // 历史聚合（早于本地已有明细最早一天的），展开成"每天每模型一行"的伪明细，
-        // 请求侧无需再区分明细/聚合两套口径。created_at 取当天正午，保证 date() 落在原日期。
+        // 请求侧无需再区分明细/聚合两套口径。created_at 取"该日期的本地正午"：
+        // 先按 UTC 零点取 epoch，再补偿本地时区偏移 +12h，任意时区 date() 都落在原日期。
         let rollups = """
         INSERT OR IGNORE INTO usage_log
             (source, request_id, app_type, model, input_tokens, output_tokens,
@@ -111,7 +112,7 @@ struct CCSwitchAdapter: SourceAdapter {
             app_type, model, input_tokens, output_tokens,
             cache_read_tokens, cache_creation_tokens, 0,
             CAST(total_cost_usd AS REAL),
-            CAST(strftime('%s', date || ' 12:00:00') AS INTEGER),
+            CAST(strftime('%s', date || ' 00:00:00') - (strftime('%s', 'now', 'localtime') - strftime('%s', 'now')) + 43200 AS INTEGER),
             request_count
         FROM \(alias).usage_daily_rollups
         WHERE date < (SELECT date(MIN(created_at), 'unixepoch', 'localtime')

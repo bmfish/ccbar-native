@@ -166,7 +166,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     func showPopover() {
         if popover == nil {
             let popover = NSPopover()
-            popover.contentSize = NSSize(width: 300, height: 500)
+            popover.contentSize = NSSize(width: settings.popoverWide ? 380 : 300, height: 500)
             popover.behavior = .applicationDefined
             popover.animates = true
             popover.delegate = self
@@ -229,9 +229,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     // MARK: - Database
 
     func connectDB() {
-        store.rebuild(configs: settings.sourceConfigs)
-        if store.handle == nil {
-            print("无法打开统计库")
+        queryQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.store.rebuild(configs: self.settings.sourceConfigs)
+            if self.store.handle == nil {
+                print("[ccBar] 统计库打开失败")
+            }
         }
     }
 
@@ -289,6 +292,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                     workHours: workHours
                 )
                 self.applyTitle(todayStats)
+
+                // 菜单栏悬停摘要
+                var tip = "今日：\(todayStats.map { Design.formatTokens($0.total) } ?? "-")"
+                if let y = DataCache.shared.getCachedYesterday() { tip += "\n昨日：\(Design.formatTokens(y.total))" }
+                if let t = todayStats { tip += "\n请求数：\(t.reqs)" }
+                self.statusItem.button?.toolTip = tip
 
                 if let stats = todayStats {
                     self.checkWarning(stats: stats)
@@ -466,22 +475,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         }
     }
 
-    func sendNotification(title: String, body: String) {
+    func sendNotification(title: String, body: String, identifier: String = "ccbar.notice") {
         guard Bundle.main.bundleIdentifier != nil else { return }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
         UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+            UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
     }
 
-    /// 点击通知 → 打开面板
+    /// 点击通知：预警 → 打开设置调阈值；里程碑 → 打开面板
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
+        let id = response.notification.request.identifier
         DispatchQueue.main.async { [weak self] in
-            self?.showPopover()
+            if id.hasPrefix("ccbar.warning") {
+                self?.openSettings()
+            } else {
+                self?.showPopover()
+            }
         }
         completionHandler()
     }
@@ -506,7 +520,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         let thresholdInTokens = Int64(settings.warningThreshold) * 10000
         if stats.total >= thresholdInTokens {
             sendNotification(title: "用量预警",
-                             body: "今日 Token 用量已达 \(fmtK(stats.total))，超过预警阈值 \(settings.warningThreshold)万")
+                             body: "今日 Token 用量已达 \(fmtK(stats.total))，超过预警阈值 \(settings.warningThreshold)万",
+                             identifier: "ccbar.warning")
             UserDefaults.standard.set(true, forKey: todayKey)
         }
     }
@@ -533,7 +548,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         flashTitle()
 
         sendNotification(title: "🎉 用量里程碑",
-                         body: "今日 Token 已达 \(fmtK(total))（每\(intervalWan)万通知一次）")
+                         body: "今日 Token 已达 \(fmtK(total))（每\(intervalWan)万通知一次）",
+                         identifier: "ccbar.milestone")
     }
 
     /// 清理"每天一个 key"的历史标记（预警/里程碑），只保留今天的

@@ -1,5 +1,6 @@
 import Cocoa
 import SQLite3
+import SwiftUI
 import UniformTypeIdentifiers
 
 // MARK: - 设置窗口
@@ -13,6 +14,7 @@ class SettingsWindowController: NSWindowController {
     var launchCheck: NSButton!
     var petCheck: NSButton!
     var emojiCheck: NSButton!
+    var wideCheck: NSButton!
     var themePopup: NSPopUpButton!
     var notifyIntervalField: NSTextField!
     /// 数据源区块：id → 路径输入框 / 启用勾选框 / 连接状态标签
@@ -149,6 +151,10 @@ class SettingsWindowController: NSWindowController {
         emojiCheck.font = NSFont.systemFont(ofSize: 13)
         stack.addArrangedSubview(emojiCheck)
 
+        wideCheck = NSButton(checkboxWithTitle: " 宽版弹窗（380pt）", target: nil, action: nil)
+        wideCheck.font = NSFont.systemFont(ofSize: 13)
+        stack.addArrangedSubview(wideCheck)
+
         addSep(to: stack)
 
         // 按钮栏
@@ -162,6 +168,10 @@ class SettingsWindowController: NSWindowController {
         let resetBtn = makeButton(title: "重置", action: #selector(resetSettings))
         resetBtn.bezelStyle = .rounded
         buttonBar.addArrangedSubview(resetBtn)
+
+        let updateBtn = makeButton(title: "检查更新", action: #selector(checkForUpdates))
+        updateBtn.bezelStyle = .rounded
+        buttonBar.addArrangedSubview(updateBtn)
 
         let saveBtn = NSButton(title: "保存", target: self, action: #selector(saveSettings))
         saveBtn.bezelStyle = .rounded
@@ -369,6 +379,7 @@ class SettingsWindowController: NSWindowController {
         launchCheck.state = settings.launchAtLogin ? .on : .off
         petCheck.state = settings.menuPetEnabled ? .on : .off
         emojiCheck.state = settings.menuEmojiEnabled ? .on : .off
+        wideCheck.state = settings.popoverWide ? .on : .off
         themePopup.selectItem(withTitle: Theme.current.displayName)
         notifyIntervalField.stringValue = "\(settings.notifyInterval)"
 
@@ -500,6 +511,7 @@ class SettingsWindowController: NSWindowController {
         settings.setLaunchAtLogin(launchCheck.state == .on)
         settings.menuPetEnabled = petCheck.state == .on
         settings.menuEmojiEnabled = emojiCheck.state == .on
+        settings.popoverWide = wideCheck.state == .on
 
         // 通知间隔
         settings.notifyInterval = notify!
@@ -519,6 +531,10 @@ class SettingsWindowController: NSWindowController {
         window?.close()
     }
 
+    @objc func checkForUpdates() {
+        UpdateChecker.check()
+    }
+
     @objc func resetSettings() {
         settings.refreshInterval = 30
         settings.resetSourceConfigs()
@@ -527,6 +543,7 @@ class SettingsWindowController: NSWindowController {
         settings.setLaunchAtLogin(false)
         settings.menuPetEnabled = true
         settings.menuEmojiEnabled = true
+        settings.popoverWide = false
         loadSettings()
     }
 }
@@ -784,20 +801,6 @@ class DetailBaseWindowController: NSWindowController {
         }
     }
 
-    func addSparkline(container: NSView, values: [CGFloat], hueOffset: CGFloat = 0) {
-        let sparkline = SparklineView(frame: .zero)
-        sparkline.values = values
-        sparkline.useGradient = true
-        sparkline.hueOffset = hueOffset
-        sparkline.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(sparkline)
-        NSLayoutConstraint.activate([
-            sparkline.topAnchor.constraint(equalTo: container.topAnchor, constant: 6),
-            sparkline.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
-            sparkline.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
-            sparkline.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -6)
-        ])
-    }
 }
 
 // MARK: - 7天详情窗口
@@ -809,7 +812,7 @@ class DetailWindowController: DetailBaseWindowController {
 
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 320),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 356),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered, defer: false
         )
@@ -843,10 +846,10 @@ class DetailWindowController: DetailBaseWindowController {
 
         contentStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
-        // sparkline 容器
+        // 图表容器
         let chartBox = NSView()
         chartBox.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.heightAnchor.constraint(equalToConstant: 54).isActive = true
+        chartBox.heightAnchor.constraint(equalToConstant: 90).isActive = true
         contentStack.addArrangedSubview(chartBox)
         chartBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
 
@@ -860,7 +863,7 @@ class DetailWindowController: DetailBaseWindowController {
         let today = cal.startOfDay(for: Date())
         let dayKey = DateFormatter(); dayKey.dateFormat = "yyyy-MM-dd"
         var totalReqs = 0; var totalToken: Int64 = 0; var totalCache: Int64 = 0
-        var dailyTokens: [CGFloat] = []
+        var chartEntries: [ChartEntry] = []
         exportRows = []
 
         // 整周一次从 daily_agg 拉历史，今天实时补查（daily_agg 不含今天）
@@ -890,12 +893,19 @@ class DetailWindowController: DetailBaseWindowController {
             ])
             contentStack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
-            dailyTokens.append(CGFloat(token))
+            chartEntries.append(ChartEntry(label: String(dateStr.suffix(5)), value: token))
         }
 
-        // sparkline
-        let weekOf = cal.ordinality(of: .weekOfYear, in: .year, for: weekStart) ?? 0
-        addSparkline(container: chartBox, values: dailyTokens, hueOffset: CGFloat(weekOf % 8) / 8.0)
+        // 交互式趋势图（Swift Charts：拖选读数）
+        let trendHost = NSHostingView(rootView: LineTrendChart(entries: chartEntries))
+        trendHost.translatesAutoresizingMaskIntoConstraints = false
+        chartBox.addSubview(trendHost)
+        NSLayoutConstraint.activate([
+            trendHost.topAnchor.constraint(equalTo: chartBox.topAnchor, constant: 2),
+            trendHost.leadingAnchor.constraint(equalTo: chartBox.leadingAnchor, constant: 2),
+            trendHost.trailingAnchor.constraint(equalTo: chartBox.trailingAnchor, constant: -2),
+            trendHost.bottomAnchor.constraint(equalTo: chartBox.bottomAnchor, constant: -2)
+        ])
 
         contentStack.addArrangedSubview(makeSep())
         let totalRow = makeTotalRow(columns: [
@@ -958,10 +968,10 @@ class MonthDetailWindowController: DetailBaseWindowController {
 
         contentStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
-        // 柱状图容器（比折线图高一些）
+        // 柱状图容器
         let chartBox = NSView()
         chartBox.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.heightAnchor.constraint(equalToConstant: 70).isActive = true
+        chartBox.heightAnchor.constraint(equalToConstant: 100).isActive = true
         contentStack.addArrangedSubview(chartBox)
         chartBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
         contentStack.addArrangedSubview(makeSep())
@@ -973,7 +983,7 @@ class MonthDetailWindowController: DetailBaseWindowController {
         let today = cal.startOfDay(for: Date())
         let dayKey = DateFormatter(); dayKey.dateFormat = "yyyy-MM-dd"
         var totalReqs = 0; var totalToken: Int64 = 0; var totalCache: Int64 = 0
-        var dailyTokens: [CGFloat] = []
+        var chartEntries: [ChartEntry] = []
         exportRows = []
 
         // 整月一次从 daily_agg 拉历史，今天实时补查（daily_agg 不含今天）
@@ -1005,23 +1015,18 @@ class MonthDetailWindowController: DetailBaseWindowController {
             ])
             contentStack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
-            dailyTokens.append(CGFloat(token))
+            chartEntries.append(ChartEntry(label: dateStr, value: token))
         }
 
-        // 柱状图（每根柱子用渐变色，和折线图配色一致）
-        let barChart = BarChartView(frame: .zero)
-        barChart.values = dailyTokens
-        barChart.labels = (1...days).map { String(format: "%02d", $0) }
-        barChart.barColor = Design.brandColor  // 基础色（会被渐变覆盖）
-        barChart.useGradient = true
-        barChart.hueOffset = CGFloat(((comps.month ?? 1) * 3) % 8) / 8.0
-        barChart.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.addSubview(barChart)
+        // 交互式柱状图（Swift Charts：拖选读数）
+        let barsHost = NSHostingView(rootView: BarReadoutChart(entries: chartEntries))
+        barsHost.translatesAutoresizingMaskIntoConstraints = false
+        chartBox.addSubview(barsHost)
         NSLayoutConstraint.activate([
-            barChart.topAnchor.constraint(equalTo: chartBox.topAnchor, constant: 4),
-            barChart.leadingAnchor.constraint(equalTo: chartBox.leadingAnchor, constant: 6),
-            barChart.trailingAnchor.constraint(equalTo: chartBox.trailingAnchor, constant: -6),
-            barChart.bottomAnchor.constraint(equalTo: chartBox.bottomAnchor, constant: -4)
+            barsHost.topAnchor.constraint(equalTo: chartBox.topAnchor, constant: 2),
+            barsHost.leadingAnchor.constraint(equalTo: chartBox.leadingAnchor, constant: 2),
+            barsHost.trailingAnchor.constraint(equalTo: chartBox.trailingAnchor, constant: -2),
+            barsHost.bottomAnchor.constraint(equalTo: chartBox.bottomAnchor, constant: -2)
         ])
 
         contentStack.addArrangedSubview(makeSep())
@@ -1297,26 +1302,26 @@ class HourlyDetailWindowController: DetailBaseWindowController {
             return
         }
 
-        // 柱状图（每根柱子不同颜色）
+        // 交互式柱状图（Swift Charts：拖选读数，每小时一色）
         let chartBox = NSView()
         chartBox.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.heightAnchor.constraint(equalToConstant: 80).isActive = true
+        chartBox.heightAnchor.constraint(equalToConstant: 100).isActive = true
         contentStack.addArrangedSubview(chartBox)
         chartBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
 
-        let barChart = BarChartView(frame: .zero)
-        barChart.values = hourly.map { CGFloat($0.1) }
-        barChart.labels = (0..<24).map { "\($0)" }
-        // 每根柱子用不同颜色（循环使用主题模型色）
         let colors = Design.modelColors(count: 24)
-        barChart.barColors = colors
-        barChart.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.addSubview(barChart)
+        let hourlyChart = BarReadoutChart(
+            entries: (0..<24).map { ChartEntry(label: String(format: "%02d", $0), value: hourly[$0].1) },
+            barColors: colors
+        )
+        let hourlyHost = NSHostingView(rootView: hourlyChart)
+        hourlyHost.translatesAutoresizingMaskIntoConstraints = false
+        chartBox.addSubview(hourlyHost)
         NSLayoutConstraint.activate([
-            barChart.topAnchor.constraint(equalTo: chartBox.topAnchor, constant: 4),
-            barChart.leadingAnchor.constraint(equalTo: chartBox.leadingAnchor, constant: 8),
-            barChart.trailingAnchor.constraint(equalTo: chartBox.trailingAnchor, constant: -8),
-            barChart.bottomAnchor.constraint(equalTo: chartBox.bottomAnchor, constant: -4)
+            hourlyHost.topAnchor.constraint(equalTo: chartBox.topAnchor, constant: 2),
+            hourlyHost.leadingAnchor.constraint(equalTo: chartBox.leadingAnchor, constant: 2),
+            hourlyHost.trailingAnchor.constraint(equalTo: chartBox.trailingAnchor, constant: -2),
+            hourlyHost.bottomAnchor.constraint(equalTo: chartBox.bottomAnchor, constant: -2)
         ])
 
         contentStack.addArrangedSubview(makeSep())
@@ -1353,7 +1358,7 @@ class HourlyDetailWindowController: DetailBaseWindowController {
 
         // 内容高度 = 图表 80 + 表头/合计/分隔 ≈ 49 + 每行 24；
         // 再加导航/留白 56（顶 10 + 导航 30 + 间隔 6 + 底 10）。
-        let h = CGFloat(end - start + 1) * 24 + 185
+        let h = CGFloat(end - start + 1) * 24 + 205
         window?.setContentSize(NSSize(width: 440, height: min(h, 650)))
     }
 }
@@ -1410,27 +1415,23 @@ class AllTimeDetailWindowController: DetailBaseWindowController {
             return
         }
 
-        // 柱状图（时间正序，标签取月份）
+        // 交互式柱状图（Swift Charts：拖选读数）
         let chartBox = NSView()
         chartBox.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.heightAnchor.constraint(equalToConstant: 70).isActive = true
+        chartBox.heightAnchor.constraint(equalToConstant: 100).isActive = true
         contentStack.addArrangedSubview(chartBox)
         chartBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
         contentStack.addArrangedSubview(makeSep())
 
-        let barChart = BarChartView(frame: .zero)
-        barChart.values = rows.reversed().map { CGFloat($0.token) }
-        barChart.labels = rows.reversed().map { String($0.month.suffix(2)) + "月" }
-        barChart.barColor = Design.brandColor
-        barChart.useGradient = true
-        barChart.hueOffset = CGFloat((rows.count * 3) % 8) / 8.0
-        barChart.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.addSubview(barChart)
+        let monthEntries = rows.reversed().map { ChartEntry(label: $0.month, value: $0.token) }
+        let monthHost = NSHostingView(rootView: BarReadoutChart(entries: monthEntries))
+        monthHost.translatesAutoresizingMaskIntoConstraints = false
+        chartBox.addSubview(monthHost)
         NSLayoutConstraint.activate([
-            barChart.topAnchor.constraint(equalTo: chartBox.topAnchor, constant: 4),
-            barChart.leadingAnchor.constraint(equalTo: chartBox.leadingAnchor, constant: 6),
-            barChart.trailingAnchor.constraint(equalTo: chartBox.trailingAnchor, constant: -6),
-            barChart.bottomAnchor.constraint(equalTo: chartBox.bottomAnchor, constant: -4)
+            monthHost.topAnchor.constraint(equalTo: chartBox.topAnchor, constant: 2),
+            monthHost.leadingAnchor.constraint(equalTo: chartBox.leadingAnchor, constant: 2),
+            monthHost.trailingAnchor.constraint(equalTo: chartBox.trailingAnchor, constant: -2),
+            monthHost.bottomAnchor.constraint(equalTo: chartBox.bottomAnchor, constant: -2)
         ])
 
         // 表格（最近月份在上）
