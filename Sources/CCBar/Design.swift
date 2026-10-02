@@ -8,6 +8,7 @@ enum Theme: String, CaseIterable {
     case ocean     = "海蓝"
     case forest    = "翠绿"
     case purple    = "星空紫"
+    case crt       = "CRT 终端"
 
     // 主色（大数字、渐变条、品牌标识）
     var accent: NSColor {
@@ -17,6 +18,7 @@ enum Theme: String, CaseIterable {
         case .ocean: return NSColor(red: 0.18, green: 0.55, blue: 0.95, alpha: 1.0) // 海蓝
         case .forest: return NSColor(red: 0.16, green: 0.72, blue: 0.42, alpha: 1.0) // 翠绿
         case .purple: return NSColor(red: 0.55, green: 0.32, blue: 0.95, alpha: 1.0) // 星空紫
+        case .crt: return NSColor(red: 0.30, green: 0.95, blue: 0.55, alpha: 1.0) // 荧光绿
         }
     }
 
@@ -28,6 +30,7 @@ enum Theme: String, CaseIterable {
         case .ocean: return NSColor(red: 0.35, green: 0.75, blue: 1.00, alpha: 1.0) // 天蓝
         case .forest: return NSColor(red: 0.40, green: 0.88, blue: 0.55, alpha: 1.0) // 嫩绿
         case .purple: return NSColor(red: 0.72, green: 0.55, blue: 1.00, alpha: 1.0) // 淡紫
+        case .crt: return NSColor(red: 0.60, green: 1.00, blue: 0.75, alpha: 1.0)
         }
     }
 
@@ -39,6 +42,7 @@ enum Theme: String, CaseIterable {
         case .ocean: return NSColor(red: 0.25, green: 0.62, blue: 1.00, alpha: 1.0)
         case .forest: return NSColor(red: 0.22, green: 0.80, blue: 0.48, alpha: 1.0)
         case .purple: return NSColor(red: 0.62, green: 0.40, blue: 1.00, alpha: 1.0)
+        case .crt: return NSColor(red: 0.30, green: 0.95, blue: 0.55, alpha: 1.0)
         }
     }
 
@@ -57,6 +61,7 @@ enum Theme: String, CaseIterable {
     var glowRadius: CGFloat {
         switch self {
         case .kawaii01: return 20
+        case .crt: return 12
         default: return 14
         }
     }
@@ -64,6 +69,7 @@ enum Theme: String, CaseIterable {
     var glowAlpha: CGFloat {
         switch self {
         case .kawaii01: return 0.45
+        case .crt: return 0.40
         default: return 0.30
         }
     }
@@ -72,6 +78,7 @@ enum Theme: String, CaseIterable {
     var cardFillAlpha: CGFloat {
         switch self {
         case .kawaii01: return 0.08
+        case .crt: return 0.05
         default: return 0.06
         }
     }
@@ -79,6 +86,7 @@ enum Theme: String, CaseIterable {
     var cardBorderAlpha: CGFloat {
         switch self {
         case .kawaii01: return 0.15
+        case .crt: return 0.20
         default: return 0.10
         }
     }
@@ -107,6 +115,11 @@ enum Theme: String, CaseIterable {
             return (NSColor(red: 0.60, green: 0.45, blue: 0.90, alpha: 1.0),
                     NSColor(red: 0.80, green: 0.35, blue: 0.85, alpha: 1.0),
                     NSColor(red: 0.35, green: 0.55, blue: 0.90, alpha: 1.0),
+                    accent)
+        case .crt:
+            return (NSColor(red: 0.40, green: 0.90, blue: 0.55, alpha: 1.0),
+                    NSColor(red: 0.85, green: 0.90, blue: 0.40, alpha: 1.0),
+                    NSColor(red: 0.30, green: 0.85, blue: 0.70, alpha: 1.0),
                     accent)
         }
     }
@@ -149,6 +162,13 @@ enum Theme: String, CaseIterable {
                     NSColor(red: 0.95, green: 0.40, blue: 0.60, alpha: 1.0),
                     NSColor(red: 0.45, green: 0.80, blue: 0.65, alpha: 1.0),
                     NSColor(red: 0.95, green: 0.65, blue: 0.30, alpha: 1.0)]
+        case .crt:
+            return [accent,
+                    NSColor(red: 0.20, green: 0.75, blue: 0.40, alpha: 1.0),
+                    NSColor(red: 0.60, green: 1.00, blue: 0.75, alpha: 1.0),
+                    NSColor(red: 0.90, green: 0.90, blue: 0.35, alpha: 1.0),
+                    NSColor(red: 0.15, green: 0.60, blue: 0.30, alpha: 1.0),
+                    NSColor(red: 0.45, green: 0.90, blue: 0.85, alpha: 1.0)]
         }
     }
 

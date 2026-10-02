@@ -11,6 +11,8 @@ class SettingsWindowController: NSWindowController {
     var warningField: NSTextField!
     var warningCheck: NSButton!
     var launchCheck: NSButton!
+    var petCheck: NSButton!
+    var emojiCheck: NSButton!
     var themePopup: NSPopUpButton!
     var notifyIntervalField: NSTextField!
     /// 数据源区块：id → 路径输入框 / 启用勾选框 / 连接状态标签
@@ -138,6 +140,14 @@ class SettingsWindowController: NSWindowController {
         launchCheck = NSButton(checkboxWithTitle: " 开机自动启动", target: nil, action: nil)
         launchCheck.font = NSFont.systemFont(ofSize: 13)
         stack.addArrangedSubview(launchCheck)
+
+        petCheck = NSButton(checkboxWithTitle: " 菜单栏动画伴侣（小猫随用量跑动）", target: nil, action: nil)
+        petCheck.font = NSFont.systemFont(ofSize: 13)
+        stack.addArrangedSubview(petCheck)
+
+        emojiCheck = NSButton(checkboxWithTitle: " 菜单栏表情分级（🙂→🥵）", target: nil, action: nil)
+        emojiCheck.font = NSFont.systemFont(ofSize: 13)
+        stack.addArrangedSubview(emojiCheck)
 
         addSep(to: stack)
 
@@ -357,6 +367,8 @@ class SettingsWindowController: NSWindowController {
         warningField.stringValue = "\(settings.warningThreshold)"
         warningCheck.state = settings.warningEnabled ? .on : .off
         launchCheck.state = settings.launchAtLogin ? .on : .off
+        petCheck.state = settings.menuPetEnabled ? .on : .off
+        emojiCheck.state = settings.menuEmojiEnabled ? .on : .off
         themePopup.selectItem(withTitle: Theme.current.displayName)
         notifyIntervalField.stringValue = "\(settings.notifyInterval)"
 
@@ -486,6 +498,8 @@ class SettingsWindowController: NSWindowController {
         settings.warningThreshold = threshold!
         settings.warningEnabled = warningCheck.state == .on
         settings.setLaunchAtLogin(launchCheck.state == .on)
+        settings.menuPetEnabled = petCheck.state == .on
+        settings.menuEmojiEnabled = emojiCheck.state == .on
 
         // 通知间隔
         settings.notifyInterval = notify!
@@ -511,6 +525,8 @@ class SettingsWindowController: NSWindowController {
         settings.warningThreshold = 50
         settings.warningEnabled = true
         settings.setLaunchAtLogin(false)
+        settings.menuPetEnabled = true
+        settings.menuEmojiEnabled = true
         loadSettings()
     }
 }

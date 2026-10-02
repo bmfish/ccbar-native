@@ -19,6 +19,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     /// 统计库查询/同步都走这条后台串行队列，结果回主线程更新 UI
     private let queryQueue = DispatchQueue(label: "ccbar.query", qos: .utility)
 
+    /// 菜单栏动画伴侣
+    let petController = MenuPetController()
+
     var settingsWindow: SettingsWindowController?
     var detailWindow: DetailWindowController?
     var monthWindow: MonthDetailWindowController?
@@ -62,14 +65,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         // 初始数据库连接（自建统计库 + ATTACH 各数据源）
         connectDB()
 
-        // 左键弹面板，右键快捷菜单；数字前放一个小图标（template 自动适配深浅菜单栏）
+        // 左键弹面板，右键快捷菜单
         if let button = statusItem.button {
-            button.image = Self.makeMenuBarIcon()
-            button.imagePosition = .imageLeading
             button.action = #selector(statusItemClicked)
             button.target = self
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
+        rebuildStatusBarChrome()
 
         setupNotifications()
 
@@ -97,6 +99,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         image.unlockFocus()
         image.isTemplate = true
         return image
+    }
+
+    /// 依据设置装配菜单栏外观：动画伴侣（小猫）或静态闪电图标
+    func rebuildStatusBarChrome() {
+        guard let button = statusItem.button else { return }
+        button.imagePosition = .imageLeading
+        if settings.menuPetEnabled {
+            petController.attach(to: button)
+        } else {
+            petController.detach()
+            button.image = Self.makeMenuBarIcon()
+        }
+    }
+
+    /// 预警阈值进度（0~1.6，超阈值继续增长供表情/动画分级）
+    private func thresholdProgress(total: Int64) -> Double {
+        let denom = settings.warningThreshold > 0 ? Double(settings.warningThreshold) * 10_000 : 100_000_000
+        return min(Double(total) / denom, 1.6)
     }
 
     @objc func statusItemClicked() {
@@ -256,6 +276,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                 monthStats = self.store.queryDayStats(days: 30)
                 totalStats = self.store.queryTotalStats()
                 DataCache.shared.markDailyCacheDone()
+
+                // 成就评估（每天一次，随历史缓存刷新）
+                var facts = self.store.achievementFacts()
+                facts.today = todayStats
+                facts.totalTokens = totalStats?.total ?? 0
+                let newly = AchievementEngine.newlyEarned(facts: facts, earned: AchievementStore.earned)
+                if !newly.isEmpty {
+                    DispatchQueue.main.async {
+                        for a in newly { AchievementStore.earn(a) }
+                        for a in newly.prefix(3) {
+                            self.sendNotification(title: "🏅 解锁成就：\(a.emoji) \(a.title)", body: a.desc)
+                        }
+                    }
+                }
             }
 
             DispatchQueue.main.async {
@@ -321,7 +355,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
     }
 
-    /// 用统计结果更新菜单栏标题；无数据时显示状态文案
+    /// 用统计结果更新菜单栏标题（表情分级 + 颜色联动阈值），并同步宠物状态；无数据时显示状态文案
     func applyTitle(_ stats: DayStats?) {
         guard let button = statusItem.button else { return }
         guard let stats = stats else {
@@ -330,11 +364,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                 attributes: [.font: titleFont])
             return
         }
+        let progress = thresholdProgress(total: stats.total)
+        var text = fmtTitle(stats.total)
+        if settings.menuEmojiEnabled {
+            text = PetPose.emoji(progress: progress) + " " + text
+        }
         var attrs: [NSAttributedString.Key: Any] = [.font: titleFont]
         if let color = titleColor(for: stats.total) {
             attrs[.foregroundColor] = color
         }
-        button.attributedTitle = NSAttributedString(string: fmtTitle(stats.total), attributes: attrs)
+        button.attributedTitle = NSAttributedString(string: text, attributes: attrs)
+        petController.refresh(progress: progress)
     }
 
     /// 菜单栏标题颜色：按预警阈值进度渐变（绿→黄→橙→红），与用户设置的预警阈值联动。
@@ -603,7 +643,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                 self?.connectDB()
                 self?.startTimer()
                 self?.updateData()
-                // 主题切换后立即刷新标题（不等定时器）
+                // 伴侣/表情开关、主题切换立即生效
+                self?.rebuildStatusBarChrome()
                 self?.refreshTitleColor()
             }
         }

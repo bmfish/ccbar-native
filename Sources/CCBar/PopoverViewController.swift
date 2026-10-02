@@ -5,6 +5,7 @@ import Cocoa
 class PopoverViewController: NSViewController {
     private var scrollView: NSScrollView!
     private var contentStack: NSStackView!
+    private var scanlineView: ScanlineOverlayView!
     /// 问候语在弹窗创建时随机一次（复用实例 → 弹窗期间不换）
     private let greeting = AppDelegate.shared?.greetings.randomElement() ?? "ccBar 用量统计"
     /// 上次渲染的数据签名；数据没变就不重建视图，消除定时刷新的闪烁
@@ -68,6 +69,11 @@ class PopoverViewController: NSViewController {
                                               action: #selector(AppDelegate.quit)))
         mainView.addSubview(bar)
 
+        // CRT 扫描线覆盖层（仅 CRT 主题显示，不拦截点击）
+        scanlineView = ScanlineOverlayView()
+        scanlineView.translatesAutoresizingMaskIntoConstraints = false
+        mainView.addSubview(scanlineView)
+
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: mainView.topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: mainView.leadingAnchor),
@@ -76,13 +82,18 @@ class PopoverViewController: NSViewController {
             bar.leadingAnchor.constraint(equalTo: mainView.leadingAnchor, constant: 14),
             bar.trailingAnchor.constraint(equalTo: mainView.trailingAnchor, constant: -14),
             bar.bottomAnchor.constraint(equalTo: mainView.bottomAnchor, constant: -10),
-            bar.heightAnchor.constraint(equalToConstant: 40)
+            bar.heightAnchor.constraint(equalToConstant: 40),
+            scanlineView.topAnchor.constraint(equalTo: mainView.topAnchor),
+            scanlineView.leadingAnchor.constraint(equalTo: mainView.leadingAnchor),
+            scanlineView.trailingAnchor.constraint(equalTo: mainView.trailingAnchor),
+            scanlineView.bottomAnchor.constraint(equalTo: mainView.bottomAnchor)
         ])
 
         self.view = mainView
     }
 
     func refresh() {
+        scanlineView.isHidden = Theme.current != .crt
         guard renderSignature() != lastSignature else { return }
         lastSignature = renderSignature()
         // 重建期间关掉隐式动画，数据微变时不再闪烁
@@ -104,7 +115,8 @@ class PopoverViewController: NSViewController {
             c.getCachedMonth().map { "\($0.total)" } ?? "nil",
             c.getCachedTotal().map { "\($0.total)" } ?? "nil",
             c.getCachedWorkHours().map { String(format: "%.1f", $0) } ?? "nil",
-            models
+            models,
+            AchievementStore.earned.sorted().joined(separator: ",")
         ].joined(separator: "|")
     }
 
@@ -145,6 +157,9 @@ class PopoverViewController: NSViewController {
         if let models = models, !models.isEmpty {
             buildModelSection(models)
         }
+
+        // 成就徽章
+        buildAchievementsCard()
 
         // 时间段统计（颜色跟随主题）
         if yesterday != nil || week != nil || month != nil || total != nil {
@@ -256,6 +271,18 @@ class PopoverViewController: NSViewController {
         ])
         card.addArrangedSubview(statsWrap)
         statsWrap.widthAnchor.constraint(equalTo: card.widthAnchor).isActive = true
+        addSpacer(4, to: card)
+
+        // 速率预测：按已跑时长折算全天
+        if let hours = DataCache.shared.getCachedWorkHours(), hours > 0.2 {
+            let predicted = Double(today.total) / (hours * 3600) * 86_400
+            let lbl = NSTextField(labelWithString: "按当前速率到 24:00 约 \(Design.formatTokens(Int64(predicted)))")
+            lbl.font = NSFont.systemFont(ofSize: 10)
+            lbl.textColor = Design.textMuted
+            lbl.translatesAutoresizingMaskIntoConstraints = false
+            card.addArrangedSubview(lbl)
+            lbl.widthAnchor.constraint(equalTo: card.widthAnchor).isActive = true
+        }
 
         contentStack.addArrangedSubview(card)
         card.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28).isActive = true
@@ -293,9 +320,48 @@ class PopoverViewController: NSViewController {
         addSpacer(8)
     }
 
+    // MARK: - 成就徽章
+
+    private func buildAchievementsCard() {
+        let earned = AchievementStore.earned
+        let card = makeCard()
+
+        let header = makeHeaderRow(title: "成就", sfIcon: "rosette", action: nil)
+        card.addArrangedSubview(header)
+        header.widthAnchor.constraint(equalTo: card.widthAnchor).isActive = true
+
+        if earned.isEmpty {
+            let lbl = NSTextField(labelWithString: "还没有成就，肝起来 💪")
+            lbl.font = NSFont.systemFont(ofSize: 11)
+            lbl.textColor = Design.textMuted
+            card.addArrangedSubview(lbl)
+        } else {
+            let row = NSStackView()
+            row.orientation = .horizontal
+            row.spacing = 7
+            row.alignment = .centerY
+            row.translatesAutoresizingMaskIntoConstraints = false
+            for a in AchievementCatalog.all where earned.contains(a.id) {
+                let chip = NSTextField(labelWithString: a.emoji)
+                chip.font = NSFont.systemFont(ofSize: 14)
+                chip.toolTip = "\(a.title) — \(a.desc)"
+                row.addArrangedSubview(chip)
+            }
+            let count = NSTextField(labelWithString: "\(earned.count)/\(AchievementCatalog.all.count)")
+            count.font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium)
+            count.textColor = Design.textMuted
+            row.addArrangedSubview(count)
+            card.addArrangedSubview(row)
+            row.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 4).isActive = true
+        }
+
+        contentStack.addArrangedSubview(card)
+        card.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28).isActive = true
+        addSpacer(8)
+    }
+
     /// 缩短模型名：claude-sonnet-4-20250514 → sonnet-4
-    private func shortModelName(_ name: String) -> String {
-        var s = name.lowercased()
+    private func shortModelName(_ name: String) -> String {        var s = name.lowercased()
         // 去掉日期后缀 (YYYYMMDD)
         if let dashRange = s.range(of: "-", options: .backwards) {
             let after = s[dashRange.upperBound...]
@@ -334,7 +400,7 @@ class PopoverViewController: NSViewController {
         return card
     }
 
-    private func makeHeaderRow(title: String, sfIcon: String, action: Selector) -> NSView {
+    private func makeHeaderRow(title: String, sfIcon: String, action: Selector?) -> NSView {
         let container = InteractiveRowView()
         container.translatesAutoresizingMaskIntoConstraints = false
         container.heightAnchor.constraint(equalToConstant: 22).isActive = true
@@ -368,7 +434,9 @@ class PopoverViewController: NSViewController {
         ])
 
         // 整行可点，不必点中右侧 › 图标
-        container.onTap = { _ = AppDelegate.shared?.perform(action) }
+        if let action = action {
+            container.onTap = { _ = AppDelegate.shared?.perform(action) }
+        }
         return container
     }
 

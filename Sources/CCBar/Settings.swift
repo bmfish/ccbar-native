@@ -68,6 +68,18 @@ class Settings {
         set { defaults.set(newValue, forKey: "launchAtLogin") }
     }
 
+    /// 菜单栏动画伴侣（小猫随用量跑动）
+    var menuPetEnabled: Bool {
+        get { defaults.object(forKey: "menuPetEnabled") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "menuPetEnabled") }
+    }
+
+    /// 菜单栏表情分级（🙂→🥵）
+    var menuEmojiEnabled: Bool {
+        get { defaults.object(forKey: "menuEmojiEnabled") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "menuEmojiEnabled") }
+    }
+
     /// 开机启动：除记录偏好外，真正注册/注销系统登录项（SMAppService，macOS 13+）
     func setLaunchAtLogin(_ enabled: Bool) {
         launchAtLogin = enabled

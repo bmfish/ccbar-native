@@ -333,6 +333,21 @@ class DonutChartWithLegendView: NSView {
     }
 }
 
+// MARK: - CRT 扫描线覆盖层（仅 CRT 主题显示）
+
+class ScanlineOverlayView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }   // 不拦截点击
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.black.withAlphaComponent(0.10).setFill()
+        var y: CGFloat = 0
+        while y < bounds.height {
+            NSRect(x: 0, y: y, width: bounds.width, height: 1).fill()
+            y += 3
+        }
+    }
+}
+
 // MARK: - 渐变头部条
 
 class GradientHeaderView: NSView {
