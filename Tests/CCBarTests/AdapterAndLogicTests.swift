@@ -74,6 +74,9 @@ final class ModelLogicTests: XCTestCase {
     }
 
     func testFormatTokens() {
+        // 单位跟随界面语言，用例里钉住，防 CI locale 漂移
+        UserDefaults.standard.set("zh", forKey: "appLanguage")
+        defer { UserDefaults.standard.removeObject(forKey: "appLanguage") }
         XCTAssertEqual(Design.formatTokens(9999), "9999")
         XCTAssertEqual(Design.formatTokens(10_000), "1万")
         XCTAssertEqual(Design.formatTokens(123_456), "12万")

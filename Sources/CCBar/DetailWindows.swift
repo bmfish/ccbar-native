@@ -3,193 +3,250 @@ import SQLite3
 import SwiftUI
 import UniformTypeIdentifiers
 
-// MARK: - 通用详情窗口基类
+// MARK: - 详情窗口（SwiftUI）
+//
+// 原 AppKit 手写约束版整体换 SwiftUI：导航栏/表格/图表由声明式布局渲染，
+// 控制器只负责 SQL 查询与数据组装（口径与旧版逐字段一致）。
+// 手写约束时代的"行被压塌/按钮被挤出"类 bug 在此绝根。
+
+/// 表格单元格（首列左对齐、其余右对齐——与旧版口径一致）
+struct DetailCell: Identifiable {
+    let id = UUID()
+    let text: String
+    let width: CGFloat
+    let bold: Bool
+    let color: Color
+    let alignment: TextAlignment
+
+    init(text: String, width: CGFloat, bold: Bool = false,
+         color: Color, alignment: TextAlignment? = nil) {
+        self.text = text
+        self.width = width
+        self.bold = bold
+        self.color = color
+        self.alignment = alignment ?? .trailing
+    }
+}
+
+/// 表格行（isHeader 时用 10pt 半粗小字、22pt 行高）
+struct DetailRow: Identifiable {
+    let id = UUID()
+    let cells: [DetailCell]
+    let isHeader: Bool
+
+    init(cells: [DetailCell], isHeader: Bool = false) {
+        self.cells = cells
+        self.isHeader = isHeader
+    }
+}
+
+/// 图表种类（各详情窗口的头部图形）
+enum DetailChartSpec {
+    case trend([ChartEntry])                  // 近7天：面积 + 折线
+    case bars([ChartEntry], showXAxis: Bool)  // 柱状图（拖选读数）
+    case donut([DonutChartWithLegendView.Item])
+}
+
+/// 内容块（id 由 DetailContentModel.set 按序号分配）
+struct DetailBlock: Identifiable {
+    var id: Int
+    let kind: Kind
+
+    enum Kind {
+        case chart(DetailChartSpec, height: CGFloat)
+        case separator
+        case rows([DetailRow])
+        case empty(String)
+    }
+}
+
+/// 详情窗口共享的内容模型：控制器填充，视图观察
+@MainActor
+final class DetailContentModel: ObservableObject {
+    @Published var dateText = ""
+    @Published var blocks: [DetailBlock] = []
+
+    func set(_ kinds: [DetailBlock.Kind]) {
+        blocks = kinds.enumerated().map { DetailBlock(id: $0.offset, kind: $0.element) }
+    }
+}
+
+// MARK: - 根视图
+
+struct DetailRootView: View {
+    @ObservedObject var model: DetailContentModel
+    var onPrev: (() -> Void)?
+    var onNext: (() -> Void)?
+    var onExport: (() -> Void)?
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(.ultraThinMaterial)
+            Rectangle().fill(Color(nsColor: Design.backgroundDark).opacity(0.8))
+            VStack(spacing: 0) {
+                navBar
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(model.blocks) { block in
+                            blockView(block.kind)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 6)
+                    .padding(.bottom, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+
+    private var navBar: some View {
+        ZStack {
+            Text(model.dateText)
+                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                .foregroundColor(Color(nsColor: Design.textPrimary))
+            HStack {
+                if let onPrev {
+                    navButton("chevron.left", action: onPrev)
+                }
+                Spacer()
+                HStack(spacing: 16) {
+                    if let onExport {
+                        navButton("square.and.arrow.up", action: onExport)
+                    }
+                    if let onNext {
+                        navButton("chevron.right", action: onNext)
+                    }
+                }
+            }
+        }
+        .frame(height: 30)
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+    }
+
+    private func navButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(Color(nsColor: Design.textSecondary))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func blockView(_ kind: DetailBlock.Kind) -> some View {
+        switch kind {
+        case .chart(let spec, let height):
+            chartView(spec)
+                .frame(height: height)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 2)
+        case .separator:
+            Rectangle()
+                .fill(Color(nsColor: Design.separatorColor))
+                .frame(height: 1)
+        case .rows(let rows):
+            ForEach(rows) { rowView($0) }
+        case .empty(let text):
+            Text(text)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+                .padding(.top, 20)
+        }
+    }
+
+    @ViewBuilder
+    private func chartView(_ spec: DetailChartSpec) -> some View {
+        switch spec {
+        case .trend(let entries):
+            LineTrendChart(entries: entries)
+        case .bars(let entries, let showXAxis):
+            BarReadoutChart(entries: entries, showXAxis: showXAxis)
+        case .donut(let items):
+            DonutLegendRepresenter(items: items)
+        }
+    }
+
+    private func rowView(_ row: DetailRow) -> some View {
+        HStack(spacing: 0) {
+            ForEach(row.cells) { cell in
+                Text(cell.text)
+                    .font(row.isHeader
+                          ? .system(size: 10, weight: .semibold)
+                          : .system(size: cell.bold ? 12 : 11,
+                                    weight: cell.bold ? .bold : .medium).monospacedDigit())
+                    .foregroundColor(cell.color)
+                    .lineLimit(1)
+                    .frame(width: cell.width, alignment: cell.alignment == .leading ? .leading : .trailing)
+                    .padding(.leading, cell.alignment == .trailing ? 8 : 0)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(height: row.isHeader ? 22 : 24)
+    }
+}
+
+/// 环形图 + 图例（AppKit 自绘视图桥接进 SwiftUI）
+struct DonutLegendRepresenter: NSViewRepresentable {
+    let items: [DonutChartWithLegendView.Item]
+
+    func makeNSView(context: Context) -> DonutChartWithLegendView {
+        let view = DonutChartWithLegendView(frame: .zero)
+        view.items = items
+        return view
+    }
+
+    func updateNSView(_ view: DonutChartWithLegendView, context: Context) {
+        view.items = items
+    }
+}
+
+// MARK: - 基类（查询辅助 + 行构造，口径与旧版一致）
 
 class DetailBaseWindowController: NSWindowController {
-    var contentStack: NSStackView!
-    var dateLabel: NSTextField!
+    let content = DetailContentModel()
 
-    func setupBaseUI(navTarget: AnyObject?, prevAction: Selector?, nextAction: Selector?, exportAction: Selector? = nil) {
-        guard let contentView = window?.contentView else { return }
+    /// 装配 SwiftUI 内容视图；导航/导出由子类闭包提供
+    func installContent(onPrev: (() -> Void)? = nil,
+                        onNext: (() -> Void)? = nil,
+                        onExport: (() -> Void)? = nil) {
+        window?.contentViewController = NSHostingController(
+            rootView: DetailRootView(model: content, onPrev: onPrev, onNext: onNext, onExport: onExport))
+    }
 
-        // 毛玻璃
-        let blur = NSVisualEffectView(frame: contentView.bounds)
-        blur.autoresizingMask = [.width, .height]
-        blur.material = .hudWindow
-        blur.state = .active
-        blur.blendingMode = .behindWindow
-        contentView.addSubview(blur)
-        Design.addDarkTint(overBlurIn: contentView)
+    func detailCell(_ text: String, _ width: CGFloat, _ color: NSColor,
+                    bold: Bool = false, leading: Bool = false) -> DetailCell {
+        DetailCell(text: text, width: width, bold: bold,
+                   color: Color(nsColor: color), alignment: leading ? .leading : .trailing)
+    }
 
-        // 导航栏
-        let navBar = NSView()
-        navBar.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(navBar)
-
-        NSLayoutConstraint.activate([
-            navBar.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 10),
-            navBar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 14),
-            navBar.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -14),
-            navBar.heightAnchor.constraint(equalToConstant: 30)
-        ])
-
-        if let prevAction = prevAction {
-            let prevBtn = NSButton(image: NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "上一个") ?? NSImage(),
-                                   target: navTarget, action: prevAction)
-            prevBtn.bezelStyle = .inline
-            prevBtn.isBordered = false
-            prevBtn.translatesAutoresizingMaskIntoConstraints = false
-            navBar.addSubview(prevBtn)
-            prevBtn.leadingAnchor.constraint(equalTo: navBar.leadingAnchor).isActive = true
-            prevBtn.centerYAnchor.constraint(equalTo: navBar.centerYAnchor).isActive = true
-        }
-
-        dateLabel = NSTextField(labelWithString: "")
-        dateLabel.translatesAutoresizingMaskIntoConstraints = false
-        dateLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
-        dateLabel.textColor = Design.textPrimary
-        dateLabel.alignment = .center
-        navBar.addSubview(dateLabel)
-        dateLabel.centerXAnchor.constraint(equalTo: navBar.centerXAnchor).isActive = true
-        dateLabel.centerYAnchor.constraint(equalTo: navBar.centerYAnchor).isActive = true
-
-        if let nextAction = nextAction {
-            let nextBtn = NSButton(image: NSImage(systemSymbolName: "chevron.right", accessibilityDescription: "下一个") ?? NSImage(),
-                                   target: navTarget, action: nextAction)
-            nextBtn.bezelStyle = .inline
-            nextBtn.isBordered = false
-            nextBtn.translatesAutoresizingMaskIntoConstraints = false
-            navBar.addSubview(nextBtn)
-            nextBtn.trailingAnchor.constraint(equalTo: navBar.trailingAnchor).isActive = true
-            nextBtn.centerYAnchor.constraint(equalTo: navBar.centerYAnchor).isActive = true
-        }
-
-        // 导出 CSV 按钮（可选；有翻页按钮时放在其左侧）
-        if let exportAction = exportAction, let navTarget = navTarget {
-            let exportBtn = NSButton(image: NSImage(systemSymbolName: "square.and.arrow.up",
-                                                    accessibilityDescription: "导出 CSV") ?? NSImage(),
-                                     target: navTarget, action: exportAction)
-            exportBtn.bezelStyle = .inline
-            exportBtn.isBordered = false
-            exportBtn.translatesAutoresizingMaskIntoConstraints = false
-            navBar.addSubview(exportBtn)
-            if nextAction != nil {
-                exportBtn.trailingAnchor.constraint(equalTo: navBar.trailingAnchor, constant: -26).isActive = true
-            } else {
-                exportBtn.trailingAnchor.constraint(equalTo: navBar.trailingAnchor).isActive = true
-            }
-            exportBtn.centerYAnchor.constraint(equalTo: navBar.centerYAnchor).isActive = true
-        }
-
-        // 内容栈（放在滚动视图里）
-        let scrollView = NSScrollView()
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.hasVerticalScroller = true
-        scrollView.drawsBackground = false
-        scrollView.scrollerStyle = .overlay
-        scrollView.automaticallyAdjustsContentInsets = false
-        contentView.addSubview(scrollView)
-
-        NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: navBar.bottomAnchor, constant: 6),
-            scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 14),
-            scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -14),
-            scrollView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -10)
-        ])
-
-        contentStack = NSStackView()
-        contentStack.orientation = .vertical
-        contentStack.alignment = .leading
-        contentStack.spacing = 0
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-
-        let clipView = NSClipView()
-        clipView.documentView = contentStack
-        clipView.drawsBackground = false
-        scrollView.contentView = clipView
-
-        // 只固定 top/leading/width + 高度下限：
-        // 钉 bottom 会把 clipView 撑成内容高度、导致超高内容无法滚动；
-        // 不设高度下限则内容比可见区矮时会沉到下方、顶部留出大段空白。
-        NSLayoutConstraint.activate([
-            contentStack.topAnchor.constraint(equalTo: clipView.topAnchor),
-            contentStack.leadingAnchor.constraint(equalTo: clipView.leadingAnchor),
-            contentStack.widthAnchor.constraint(equalTo: clipView.widthAnchor),
-            contentStack.heightAnchor.constraint(greaterThanOrEqualTo: clipView.heightAnchor)
+    /// 数据行（日期/名称, 请求, 总Token, 缓存读）——各窗口共用同套配色口径
+    func dataRow(col0: String, reqs: Int, token: Int64, cache: Int64, widths: [CGFloat]) -> DetailRow {
+        DetailRow(cells: [
+            detailCell(col0, widths[0], token == 0 ? Design.textMuted : Design.dataHighlightColor, leading: true),
+            detailCell(reqs == 0 ? "-" : "\(reqs)", widths[1], reqs == 0 ? Design.textMuted : Design.textPrimary),
+            detailCell(fmtNum(token), widths[2], token == 0 ? Design.textMuted : Design.textPrimary),
+            detailCell(fmtNum(cache), widths[3], cache == 0 ? Design.textMuted : Design.textSecondary)
         ])
     }
 
-    // 通用表格行
-    func makeTableRow(columns: [(text: String, width: CGFloat, bold: Bool, color: NSColor)]) -> NSView {
-        let row = InteractiveRowView()
-        row.translatesAutoresizingMaskIntoConstraints = false
-        row.heightAnchor.constraint(equalToConstant: 24).isActive = true
-
-        var leading = row.leadingAnchor
-        for (i, col) in columns.enumerated() {
-            let field = NSTextField(labelWithString: col.text)
-            field.translatesAutoresizingMaskIntoConstraints = false
-            field.font = NSFont.monospacedDigitSystemFont(ofSize: col.bold ? 12 : 11,
-                                                           weight: col.bold ? .bold : .medium)
-            field.textColor = col.color
-            field.alignment = i == 0 ? .left : .right
-            row.addSubview(field)
-
-            NSLayoutConstraint.activate([
-                field.leadingAnchor.constraint(equalTo: leading, constant: i == 0 ? 0 : 8),
-                field.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-                field.widthAnchor.constraint(equalToConstant: col.width)
-            ])
-            leading = field.trailingAnchor
-        }
-        return row
+    func totalRow(_ label: String, reqs: Int, token: Int64, cache: Int64, widths: [CGFloat]) -> DetailRow {
+        DetailRow(cells: [
+            detailCell(label, widths[0], Design.textPrimary, bold: true, leading: true),
+            detailCell("\(reqs)", widths[1], Design.textPrimary, bold: true),
+            detailCell(fmtNum(token), widths[2], Design.textPrimary, bold: true),
+            detailCell(fmtNum(cache), widths[3], Design.textPrimary, bold: true)
+        ])
     }
 
-    func makeTableHeader(labels: [String], widths: [CGFloat]) -> NSView {
-        let row = NSView()
-        row.translatesAutoresizingMaskIntoConstraints = false
-        row.heightAnchor.constraint(equalToConstant: 22).isActive = true
-
-        var leading = row.leadingAnchor
-        for (i, text) in labels.enumerated() {
-            let label = NSTextField(labelWithString: text)
-            label.translatesAutoresizingMaskIntoConstraints = false
-            label.font = NSFont.systemFont(ofSize: 10, weight: .semibold)
-            label.textColor = Design.textMuted
-            label.alignment = i == 0 ? .left : .right
-            row.addSubview(label)
-
-            NSLayoutConstraint.activate([
-                label.leadingAnchor.constraint(equalTo: leading, constant: i == 0 ? 0 : 8),
-                label.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-                label.widthAnchor.constraint(equalToConstant: widths[i])
-            ])
-            leading = label.trailingAnchor
-        }
-        return row
+    func tableHeader(_ labels: [String], widths: [CGFloat]) -> DetailBlock.Kind {
+        .rows([DetailRow(cells: labels.enumerated().map { i, text in
+            detailCell(text, widths[i], Design.textMuted, leading: i == 0)
+        }, isHeader: true)])
     }
 
-    func makeSep() -> NSView {
-        let sep = NSBox()
-        sep.boxType = .separator
-        sep.borderColor = Design.separatorColor
-        sep.translatesAutoresizingMaskIntoConstraints = false
-        sep.heightAnchor.constraint(equalToConstant: 1).isActive = true
-        return sep
-    }
-
-    func makeTotalRow(columns: [(text: String, width: CGFloat)]) -> NSView {
-        return makeTableRow(columns: columns.map {
-            (text: $0.text, width: $0.width, bold: true, color: Design.textPrimary)
-        })
-    }
-
-    func fmtNum(_ n: Int64) -> String {
-        if n >= 100_000_000 { return String(format: "%.1f亿", Double(n) / 100_000_000) }
-        else if n >= 10_000 { return "\(n / 10_000)万" }
-        else if n == 0 { return "-" }
-        else { return "\(n)" }
-    }
+    // MARK: 查询辅助
 
     /// 某一天的实时聚合：请求数 / 总 Token / 缓存读（daysAgo=0 表示今天）。
     /// 走统一的 usage_all；epoch 区间 + 参数绑定让 created_at 索引可用。
@@ -248,14 +305,17 @@ class DetailBaseWindowController: NSWindowController {
             try csv.write(to: url, atomically: true, encoding: .utf8)
         } catch {
             let alert = NSAlert()
-            alert.messageText = "导出失败"
+            alert.messageText = L("导出失败")
             alert.informativeText = error.localizedDescription
             alert.alertStyle = .critical
-            alert.addButton(withTitle: "好的")
+            alert.addButton(withTitle: L("好的"))
             alert.runModal()
         }
     }
 
+    func fmtNum(_ n: Int64) -> String {
+        n == 0 ? "-" : L10n.formatTokens(n)
+    }
 }
 
 // MARK: - 7天详情窗口
@@ -271,22 +331,23 @@ class DetailWindowController: DetailBaseWindowController {
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered, defer: false
         )
-        window.title = "近7天用量"
+        window.title = L("近7天用量")
         window.center()
         window.setFrameAutosaveName("CCBarWeekDetail")
         window.backgroundColor = Design.backgroundDark
         window.minSize = NSSize(width: 420, height: 250)
         self.init(window: window)
-        setupBaseUI(navTarget: self, prevAction: #selector(prevWeek), nextAction: #selector(nextWeek),
-                    exportAction: #selector(exportCSVClicked))
+        installContent(onPrev: { [weak self] in self?.goPrevWeek() },
+                       onNext: { [weak self] in self?.goNextWeek() },
+                       onExport: { [weak self] in self?.exportCSVClicked() })
     }
 
-    @objc func prevWeek() {
+    func goPrevWeek() {
         currentWeekStart = Calendar.current.date(byAdding: .day, value: -7, to: currentWeekStart)!
         onDateChange?(currentWeekStart)
     }
 
-    @objc func nextWeek() {
+    func goNextWeek() {
         let next = Calendar.current.date(byAdding: .day, value: 7, to: currentWeekStart)!
         if next <= Date() { currentWeekStart = next; onDateChange?(next) }
     }
@@ -297,28 +358,15 @@ class DetailWindowController: DetailBaseWindowController {
 
         let fmt = DateFormatter(); fmt.dateFormat = "yy-MM-dd"
         let end = Calendar.current.date(byAdding: .day, value: 6, to: weekStart)!
-        dateLabel.stringValue = "\(fmt.string(from: weekStart))  ~  \(fmt.string(from: end))"
-
-        contentStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-
-        // 图表容器
-        let chartBox = NSView()
-        chartBox.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.heightAnchor.constraint(equalToConstant: 90).isActive = true
-        contentStack.addArrangedSubview(chartBox)
-        chartBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
-
-        contentStack.addArrangedSubview(makeSep())
+        content.dateText = "\(fmt.string(from: weekStart))  ~  \(fmt.string(from: end))"
 
         let widths: [CGFloat] = [70, 65, 95, 95]
-        contentStack.addArrangedSubview(makeTableHeader(labels: ["日期", "请求", "总 Token", "缓存读"], widths: widths))
-        contentStack.addArrangedSubview(makeSep())
-
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let dayKey = DateFormatter(); dayKey.dateFormat = "yyyy-MM-dd"
         var totalReqs = 0; var totalToken: Int64 = 0; var totalCache: Int64 = 0
         var chartEntries: [ChartEntry] = []
+        var dayRows: [DetailRow] = []
         exportRows = []
 
         // 整周一次从 daily_agg 拉历史，今天实时补查（daily_agg 不含今天）
@@ -338,42 +386,25 @@ class DetailWindowController: DetailBaseWindowController {
             }
             totalReqs += reqs; totalToken += token; totalCache += cache
             exportRows.append([dateStr, "\(reqs)", "\(token)", "\(cache)"])
-
-            let color: NSColor = token == 0 ? Design.textMuted : Design.dataHighlightColor
-            let row = makeTableRow(columns: [
-                (fmt.string(from: date), widths[0], false, color),
-                (reqs == 0 ? "-" : "\(reqs)", widths[1], false, reqs == 0 ? Design.textMuted : Design.textPrimary),
-                (fmtNum(token), widths[2], false, token == 0 ? Design.textMuted : Design.textPrimary),
-                (fmtNum(cache), widths[3], false, cache == 0 ? Design.textMuted : Design.textSecondary)
-            ])
-            contentStack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+            dayRows.append(dataRow(col0: fmt.string(from: date), reqs: reqs,
+                                   token: token, cache: cache, widths: widths))
             chartEntries.append(ChartEntry(label: String(dateStr.suffix(5)), value: token))
         }
 
-        // 交互式趋势图（Swift Charts：拖选读数）
-        let trendHost = NSHostingView(rootView: LineTrendChart(entries: chartEntries))
-        trendHost.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.addSubview(trendHost)
-        NSLayoutConstraint.activate([
-            trendHost.topAnchor.constraint(equalTo: chartBox.topAnchor, constant: 2),
-            trendHost.leadingAnchor.constraint(equalTo: chartBox.leadingAnchor, constant: 2),
-            trendHost.trailingAnchor.constraint(equalTo: chartBox.trailingAnchor, constant: -2),
-            trendHost.bottomAnchor.constraint(equalTo: chartBox.bottomAnchor, constant: -2)
+        content.set([
+            .chart(.trend(chartEntries), height: 90),
+            .separator,
+            tableHeader([L("日期"), L("请求"), L("总 Token"), L("缓存读")], widths: widths),
+            .separator,
+            .rows(dayRows),
+            .separator,
+            .rows([totalRow(L("合计"), reqs: totalReqs, token: totalToken, cache: totalCache, widths: widths)])
         ])
-
-        contentStack.addArrangedSubview(makeSep())
-        let totalRow = makeTotalRow(columns: [
-            ("合计", widths[0]), ("\(totalReqs)", widths[1]),
-            (fmtNum(totalToken), widths[2]), (fmtNum(totalCache), widths[3])
-        ])
-        contentStack.addArrangedSubview(totalRow)
-        totalRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
     }
 
-    @objc func exportCSVClicked() {
-        exportCSV(defaultName: "ccbar-近7天.csv",
-                  header: ["日期", "请求数", "总Token", "缓存读"],
+    func exportCSVClicked() {
+        exportCSV(defaultName: L("ccbar-近7天.csv"),
+                  header: [L("日期"), L("请求数"), L("总Token"), L("缓存读")],
                   rows: exportRows)
     }
 }
@@ -391,29 +422,30 @@ class MonthDetailWindowController: DetailBaseWindowController {
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered, defer: false
         )
-        window.title = "近30天用量"
+        window.title = L("近30天用量")
         window.center()
         window.setFrameAutosaveName("CCBarMonthDetail")
         window.backgroundColor = Design.backgroundDark
         window.minSize = NSSize(width: 420, height: 300)
         self.init(window: window)
-        setupBaseUI(navTarget: self, prevAction: #selector(prevMonth), nextAction: #selector(nextMonth),
-                    exportAction: #selector(exportCSVClicked))
+        installContent(onPrev: { [weak self] in self?.goPrevMonth() },
+                       onNext: { [weak self] in self?.goNextMonth() },
+                       onExport: { [weak self] in self?.exportCSVClicked() })
     }
 
-    @objc func prevMonth() {
+    func goPrevMonth() {
         currentMonth = Calendar.current.date(byAdding: .month, value: -1, to: currentMonth)!
         reloadData()
     }
 
-    @objc func nextMonth() {
+    func goNextMonth() {
         let next = Calendar.current.date(byAdding: .month, value: 1, to: currentMonth)!
         if next <= Date() { currentMonth = next; reloadData() }
     }
 
     func reloadData() {
         let fmt = DateFormatter(); fmt.dateFormat = "yy-MM"
-        dateLabel.stringValue = fmt.string(from: currentMonth)
+        content.dateText = fmt.string(from: currentMonth)
         guard let db = self.db else { return }
 
         let cal = Calendar.current
@@ -421,24 +453,12 @@ class MonthDetailWindowController: DetailBaseWindowController {
         let first = cal.date(from: comps)!
         let days = cal.range(of: .day, in: .month, for: currentMonth)!.count
 
-        contentStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-
-        // 柱状图容器
-        let chartBox = NSView()
-        chartBox.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.heightAnchor.constraint(equalToConstant: 100).isActive = true
-        contentStack.addArrangedSubview(chartBox)
-        chartBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
-        contentStack.addArrangedSubview(makeSep())
-
         let widths: [CGFloat] = [70, 65, 95, 95]
-        contentStack.addArrangedSubview(makeTableHeader(labels: ["日期", "请求", "总 Token", "缓存读"], widths: widths))
-        contentStack.addArrangedSubview(makeSep())
-
         let today = cal.startOfDay(for: Date())
         let dayKey = DateFormatter(); dayKey.dateFormat = "yyyy-MM-dd"
         var totalReqs = 0; var totalToken: Int64 = 0; var totalCache: Int64 = 0
         var chartEntries: [ChartEntry] = []
+        var dayRows: [DetailRow] = []
         exportRows = []
 
         // 整月一次从 daily_agg 拉历史，今天实时补查（daily_agg 不含今天）
@@ -459,43 +479,25 @@ class MonthDetailWindowController: DetailBaseWindowController {
             }
             totalReqs += reqs; totalToken += token; totalCache += cache
             exportRows.append([keyStr, "\(reqs)", "\(token)", "\(cache)"])
-
-            let color: NSColor = token == 0 ? Design.textMuted : Design.dataHighlightColor
             let dateStr = String(format: "%02d/%02d", comps.month!, day)
-            let row = makeTableRow(columns: [
-                (dateStr, widths[0], false, color),
-                (reqs == 0 ? "-" : "\(reqs)", widths[1], false, reqs == 0 ? Design.textMuted : Design.textPrimary),
-                (fmtNum(token), widths[2], false, token == 0 ? Design.textMuted : Design.textPrimary),
-                (fmtNum(cache), widths[3], false, cache == 0 ? Design.textMuted : Design.textSecondary)
-            ])
-            contentStack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+            dayRows.append(dataRow(col0: dateStr, reqs: reqs, token: token, cache: cache, widths: widths))
             chartEntries.append(ChartEntry(label: dateStr, value: token))
         }
 
-        // 交互式柱状图（Swift Charts：拖选读数）
-        let barsHost = NSHostingView(rootView: BarReadoutChart(entries: chartEntries, showXAxis: false))
-        barsHost.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.addSubview(barsHost)
-        NSLayoutConstraint.activate([
-            barsHost.topAnchor.constraint(equalTo: chartBox.topAnchor, constant: 2),
-            barsHost.leadingAnchor.constraint(equalTo: chartBox.leadingAnchor, constant: 2),
-            barsHost.trailingAnchor.constraint(equalTo: chartBox.trailingAnchor, constant: -2),
-            barsHost.bottomAnchor.constraint(equalTo: chartBox.bottomAnchor, constant: -2)
+        content.set([
+            .chart(.bars(chartEntries, showXAxis: false), height: 100),
+            .separator,
+            tableHeader([L("日期"), L("请求"), L("总 Token"), L("缓存读")], widths: widths),
+            .separator,
+            .rows(dayRows),
+            .separator,
+            .rows([totalRow(L("合计"), reqs: totalReqs, token: totalToken, cache: totalCache, widths: widths)])
         ])
-
-        contentStack.addArrangedSubview(makeSep())
-        let totalRow = makeTotalRow(columns: [
-            ("合计", widths[0]), ("\(totalReqs)", widths[1]),
-            (fmtNum(totalToken), widths[2]), (fmtNum(totalCache), widths[3])
-        ])
-        contentStack.addArrangedSubview(totalRow)
-        totalRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
     }
 
-    @objc func exportCSVClicked() {
-        exportCSV(defaultName: "ccbar-近30天.csv",
-                  header: ["日期", "请求数", "总Token", "缓存读"],
+    func exportCSVClicked() {
+        exportCSV(defaultName: L("ccbar-近30天.csv"),
+                  header: [L("日期"), L("请求数"), L("总Token"), L("缓存读")],
                   rows: exportRows)
     }
 }
@@ -513,20 +515,22 @@ class ModelDetailWindowController: DetailBaseWindowController {
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered, defer: false
         )
-        window.title = "模型分布详情"
+        window.title = L("模型分布详情")
         window.center()
         window.setFrameAutosaveName("CCBarModelDetail")
         window.backgroundColor = Design.backgroundDark
         window.minSize = NSSize(width: 460, height: 300)
         self.init(window: window)
-        setupBaseUI(navTarget: self, prevAction: #selector(prevDay), nextAction: #selector(nextDay))
+        installContent(onPrev: { [weak self] in self?.goPrevDay() },
+                       onNext: { [weak self] in self?.goNextDay() })
     }
 
-    @objc func prevDay() {
+    func goPrevDay() {
         currentDate = Calendar.current.date(byAdding: .day, value: -1, to: currentDate)!
         onDateChange?(currentDate)
     }
-    @objc func nextDay() {
+
+    func goNextDay() {
         let t = Calendar.current.date(byAdding: .day, value: 1, to: currentDate)!
         if t <= Date() { currentDate = t; onDateChange?(t) }
     }
@@ -535,7 +539,7 @@ class ModelDetailWindowController: DetailBaseWindowController {
         guard let db = db else { return }
         currentDate = date
         let fmt = DateFormatter(); fmt.dateFormat = "yy-MM-dd"
-        dateLabel.stringValue = fmt.string(from: date)
+        content.dateText = fmt.string(from: date)
 
         let cal = Calendar.current
         let daysAgo = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: Date())).day ?? 0
@@ -562,13 +566,8 @@ class ModelDetailWindowController: DetailBaseWindowController {
         }
         sqlite3_finalize(stmt)
 
-        contentStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-
         if rows.isEmpty {
-            let lbl = NSTextField(labelWithString: "暂无数据")
-            lbl.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-            lbl.textColor = Design.textMuted
-            contentStack.addArrangedSubview(lbl)
+            content.set([.empty(L("暂无数据"))])
             return
         }
 
@@ -581,34 +580,21 @@ class ModelDetailWindowController: DetailBaseWindowController {
         let donutModels = merged.sorted { $0.value.token > $1.value.token }
         let totalToken = donutModels.reduce(Int64(0)) { $0 + $1.value.token }
 
-        // 环形图
-        let chartBox = NSView()
-        chartBox.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.heightAnchor.constraint(equalToConstant: 140).isActive = true
-        contentStack.addArrangedSubview(chartBox)
-        chartBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
-
         let colors = Design.modelColors()
-        let donut = DonutChartWithLegendView(frame: .zero)
-        donut.items = donutModels.prefix(6).enumerated().map { i, e in
+        let donutItems = donutModels.prefix(6).enumerated().map { i, e -> DonutChartWithLegendView.Item in
             let pct = totalToken > 0 ? String(format: "%.1f%%", Double(e.value.token) / Double(totalToken) * 100) : "0%"
-            let short = shortModelName(e.key)
-            return DonutChartWithLegendView.Item(value: CGFloat(e.value.token), color: colors[i % colors.count], label: short, percentage: pct)
+            return DonutChartWithLegendView.Item(value: CGFloat(e.value.token),
+                                                 color: colors[i % colors.count],
+                                                 label: shortModelName(e.key),
+                                                 percentage: pct)
         }
-        donut.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.addSubview(donut)
-        NSLayoutConstraint.activate([
-            donut.topAnchor.constraint(equalTo: chartBox.topAnchor),
-            donut.leadingAnchor.constraint(equalTo: chartBox.leadingAnchor),
-            donut.trailingAnchor.constraint(equalTo: chartBox.trailingAnchor),
-            donut.bottomAnchor.constraint(equalTo: chartBox.bottomAnchor)
-        ])
-
-        contentStack.addArrangedSubview(makeSep())
 
         let widths: [CGFloat] = [160, 65, 100, 100]
-        contentStack.addArrangedSubview(makeTableHeader(labels: ["模型", "请求", "总 Token", "缓存读"], widths: widths))
-        contentStack.addArrangedSubview(makeSep())
+        var blocks: [DetailBlock.Kind] = [
+            .chart(.donut(donutItems), height: 140),
+            .separator,
+            tableHeader([L("模型"), L("请求"), L("总 Token"), L("缓存读")], widths: widths)
+        ]
 
         // 表格按渠道分组（渠道按各自总量降序）
         var groupOrder: [String] = []
@@ -630,36 +616,25 @@ class ModelDetailWindowController: DetailBaseWindowController {
             let srcToken = models.reduce(Int64(0)) { $0 + $1.token }
 
             // 渠道小节头：渠道名 + 该渠道总 Token
-            let headRow = makeTableRow(columns: [
-                ("● \(AppDelegate.shared?.sourceDisplayName(source) ?? source)", widths[0], true, Design.brandColor),
-                ("", widths[1], false, Design.textMuted),
-                (fmtNum(srcToken), widths[2], true, Design.dataHighlightColor),
-                ("", widths[3], false, Design.textMuted)
-            ])
-            contentStack.addArrangedSubview(headRow)
-            headRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+            blocks.append(.rows([DetailRow(cells: [
+                detailCell("● \(AppDelegate.shared?.sourceDisplayName(source) ?? source)", widths[0], Design.brandColor, bold: true, leading: true),
+                detailCell("", widths[1], Design.textMuted),
+                detailCell(fmtNum(srcToken), widths[2], Design.dataHighlightColor, bold: true),
+                detailCell("", widths[3], Design.textMuted)
+            ])]))
 
+            var modelRows: [DetailRow] = []
             for m in models {
                 totR += m.reqs; totT += m.token; totC += m.cache
-                let color: NSColor = m.token == 0 ? Design.textMuted : Design.dataHighlightColor
-                let row = makeTableRow(columns: [
-                    (shortModelName(m.model), widths[0], false, color),
-                    (m.reqs == 0 ? "-" : "\(m.reqs)", widths[1], false, m.reqs == 0 ? Design.textMuted : Design.textPrimary),
-                    (fmtNum(m.token), widths[2], false, m.token == 0 ? Design.textMuted : Design.textPrimary),
-                    (fmtNum(m.cache), widths[3], false, m.cache == 0 ? Design.textMuted : Design.textSecondary)
-                ])
-                contentStack.addArrangedSubview(row)
-                row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+                modelRows.append(dataRow(col0: shortModelName(m.model), reqs: m.reqs,
+                                         token: m.token, cache: m.cache, widths: widths))
             }
+            blocks.append(.rows(modelRows))
         }
 
-        contentStack.addArrangedSubview(makeSep())
-        let totalRow = makeTotalRow(columns: [
-            ("合计", widths[0]), ("\(totR)", widths[1]),
-            (fmtNum(totT), widths[2]), (fmtNum(totC), widths[3])
-        ])
-        contentStack.addArrangedSubview(totalRow)
-        totalRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+        blocks.append(.separator)
+        blocks.append(.rows([totalRow(L("合计"), reqs: totR, token: totT, cache: totC, widths: widths)]))
+        content.set(blocks)
     }
 
     private func shortModelName(_ name: String) -> String {
@@ -688,20 +663,22 @@ class HourlyDetailWindowController: DetailBaseWindowController {
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered, defer: false
         )
-        window.title = "每小时用量"
+        window.title = L("每小时用量")
         window.center()
         window.setFrameAutosaveName("CCBarHourlyDetail")
         window.backgroundColor = Design.backgroundDark
         window.minSize = NSSize(width: 360, height: 300)
         self.init(window: window)
-        setupBaseUI(navTarget: self, prevAction: #selector(prevDay), nextAction: #selector(nextDay))
+        installContent(onPrev: { [weak self] in self?.goPrevDay() },
+                       onNext: { [weak self] in self?.goNextDay() })
     }
 
-    @objc func prevDay() {
+    func goPrevDay() {
         currentDate = Calendar.current.date(byAdding: .day, value: -1, to: currentDate)!
         onDateChange?(currentDate)
     }
-    @objc func nextDay() {
+
+    func goNextDay() {
         let t = Calendar.current.date(byAdding: .day, value: 1, to: currentDate)!
         if t <= Date() { currentDate = t; onDateChange?(t) }
     }
@@ -710,7 +687,7 @@ class HourlyDetailWindowController: DetailBaseWindowController {
         guard let db = db else { return }
         currentDate = date
         let fmt = DateFormatter(); fmt.dateFormat = "yy-MM-dd"
-        dateLabel.stringValue = fmt.string(from: date)
+        content.dateText = fmt.string(from: date)
 
         let cal = Calendar.current
         let daysAgo = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: Date())).day ?? 0
@@ -734,13 +711,11 @@ class HourlyDetailWindowController: DetailBaseWindowController {
                 let h = Int(String(cString: hs)) ?? 0
                 if h >= 0 && h < 24 {
                     hourly[h] = (Int(sqlite3_column_int(stmt, 1)), sqlite3_column_int64(stmt, 2),
-                                sqlite3_column_int64(stmt, 3), sqlite3_column_int64(stmt, 4), 0)
+                                 sqlite3_column_int64(stmt, 3), sqlite3_column_int64(stmt, 4), 0)
                 }
             }
         }
         sqlite3_finalize(stmt)
-
-        contentStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
         // 找有数据的小时范围
         var start = 23, end = 0
@@ -750,68 +725,36 @@ class HourlyDetailWindowController: DetailBaseWindowController {
             }
         }
         if start > end {
-            let lbl = NSTextField(labelWithString: "暂无数据")
-            lbl.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-            lbl.textColor = Design.textMuted
-            contentStack.addArrangedSubview(lbl)
+            content.set([.empty(L("暂无数据"))])
             return
         }
 
-        // 交互式柱状图（Swift Charts：拖选读数，每小时一色）
-        let chartBox = NSView()
-        chartBox.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.heightAnchor.constraint(equalToConstant: 100).isActive = true
-        contentStack.addArrangedSubview(chartBox)
-        chartBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
-
-        let hourlyChart = BarReadoutChart(
-            entries: (0..<24).map { ChartEntry(label: String(format: "%02d", $0), value: hourly[$0].1) }
-        )
-        let hourlyHost = NSHostingView(rootView: hourlyChart)
-        hourlyHost.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.addSubview(hourlyHost)
-        NSLayoutConstraint.activate([
-            hourlyHost.topAnchor.constraint(equalTo: chartBox.topAnchor, constant: 2),
-            hourlyHost.leadingAnchor.constraint(equalTo: chartBox.leadingAnchor, constant: 2),
-            hourlyHost.trailingAnchor.constraint(equalTo: chartBox.trailingAnchor, constant: -2),
-            hourlyHost.bottomAnchor.constraint(equalTo: chartBox.bottomAnchor, constant: -2)
-        ])
-
-        contentStack.addArrangedSubview(makeSep())
-
-        let widths: [CGFloat] = [50, 65, 100, 100]
-        contentStack.addArrangedSubview(makeTableHeader(labels: ["时间", "请求", "总 Token", "缓存读"], widths: widths))
-        contentStack.addArrangedSubview(makeSep())
-
-        // 合计
         var totR = 0; var totT: Int64 = 0; var totC: Int64 = 0
         for h in start...end {
             let d = hourly[h]; totR += d.0; totT += d.1; totC += d.2
         }
-        let totalRow = makeTotalRow(columns: [
-            ("合计", widths[0]), ("\(totR)", widths[1]),
-            (fmtNum(totT), widths[2]), (fmtNum(totC), widths[3])
-        ])
-        contentStack.addArrangedSubview(totalRow)
-        totalRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
-        contentStack.addArrangedSubview(makeSep())
 
+        let widths: [CGFloat] = [50, 65, 100, 100]
+        var hourRows: [DetailRow] = []
         for h in start...end {
             let d = hourly[h]
-            let color: NSColor = d.1 == 0 ? Design.textMuted : Design.dataHighlightColor
-            let row = makeTableRow(columns: [
-                ("\(h)时", widths[0], false, color),
-                (d.0 == 0 ? "-" : "\(d.0)", widths[1], false, d.0 == 0 ? Design.textMuted : Design.textPrimary),
-                (fmtNum(d.1), widths[2], false, d.1 == 0 ? Design.textMuted : Design.textPrimary),
-                (fmtNum(d.2), widths[3], false, d.2 == 0 ? Design.textMuted : Design.textSecondary)
-            ])
-            contentStack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+            hourRows.append(dataRow(col0: L10n.isEnglish ? String(format: "%02d:00", h) : "\(h)时", reqs: d.0, token: d.1, cache: d.2, widths: widths))
         }
 
-        // 内容高度 = 图表 80 + 表头/合计/分隔 ≈ 49 + 每行 24；
+        content.set([
+            .chart(.bars((0..<24).map { ChartEntry(label: String(format: "%02d", $0), value: hourly[$0].1) },
+                         showXAxis: true), height: 100),
+            .separator,
+            .rows([totalRow(L("合计"), reqs: totR, token: totT, cache: totC, widths: widths)]),
+            .separator,
+            tableHeader([L("时间"), L("请求"), L("总 Token"), L("缓存读")], widths: widths),
+            .separator,
+            .rows(hourRows)
+        ])
+
+        // 内容高度 = 图表 100 + 表头/合计/分隔 ≈ 71 + 每行 24；
         // 再加导航/留白 56（顶 10 + 导航 30 + 间隔 6 + 底 10）。
-        let h = CGFloat(end - start + 1) * 24 + 205
+        let h = CGFloat(end - start + 1) * 24 + 227
         window?.setContentSize(NSSize(width: 440, height: min(h, 650)))
     }
 }
@@ -827,21 +770,19 @@ class AllTimeDetailWindowController: DetailBaseWindowController {
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered, defer: false
         )
-        window.title = "历史总量"
+        window.title = L("历史总量")
         window.center()
         window.setFrameAutosaveName("CCBarAllTimeDetail")
         window.backgroundColor = Design.backgroundDark
         window.minSize = NSSize(width: 420, height: 300)
         self.init(window: window)
-        setupBaseUI(navTarget: self, prevAction: nil, nextAction: nil,
-                    exportAction: #selector(exportCSVClicked))
-        dateLabel.stringValue = "按月汇总"
+        installContent(onExport: { [weak self] in self?.exportCSVClicked() })
+        content.dateText = L("按月汇总")
     }
 
     /// db 查 daily_agg 按月汇总；today 由调用方传入实时叠加到当前月
     func reloadData(db: OpaquePointer?, today: DayStats?) {
         exportRows = []
-        contentStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
         var rows: [(month: String, reqs: Int, token: Int64, cache: Int64)] = []
         if let store = AppDelegate.shared?.store {
@@ -861,65 +802,36 @@ class AllTimeDetailWindowController: DetailBaseWindowController {
         }
 
         if rows.isEmpty {
-            let lbl = NSTextField(labelWithString: "暂无数据")
-            lbl.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-            lbl.textColor = Design.textMuted
-            contentStack.addArrangedSubview(lbl)
+            content.set([.empty(L("暂无数据"))])
             return
         }
 
-        // 交互式柱状图（Swift Charts：拖选读数）
-        let chartBox = NSView()
-        chartBox.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.heightAnchor.constraint(equalToConstant: 100).isActive = true
-        contentStack.addArrangedSubview(chartBox)
-        chartBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
-        contentStack.addArrangedSubview(makeSep())
-
-        let monthEntries = rows.reversed().map { ChartEntry(label: $0.month, value: $0.token) }
-        let monthHost = NSHostingView(rootView: BarReadoutChart(entries: monthEntries))
-        monthHost.translatesAutoresizingMaskIntoConstraints = false
-        chartBox.addSubview(monthHost)
-        NSLayoutConstraint.activate([
-            monthHost.topAnchor.constraint(equalTo: chartBox.topAnchor, constant: 2),
-            monthHost.leadingAnchor.constraint(equalTo: chartBox.leadingAnchor, constant: 2),
-            monthHost.trailingAnchor.constraint(equalTo: chartBox.trailingAnchor, constant: -2),
-            monthHost.bottomAnchor.constraint(equalTo: chartBox.bottomAnchor, constant: -2)
-        ])
-
-        // 表格（最近月份在上）
         let widths: [CGFloat] = [70, 65, 95, 95]
-        contentStack.addArrangedSubview(makeTableHeader(labels: ["月份", "请求", "总 Token", "缓存读"], widths: widths))
-        contentStack.addArrangedSubview(makeSep())
-
+        var monthRows: [DetailRow] = []
         var totalReqs = 0; var totalToken: Int64 = 0; var totalCache: Int64 = 0
         for r in rows {
             totalReqs += r.reqs; totalToken += r.token; totalCache += r.cache
             exportRows.append([r.month, "\(r.reqs)", "\(r.token)", "\(r.cache)"])
-
-            let color: NSColor = r.token == 0 ? Design.textMuted : Design.dataHighlightColor
-            let row = makeTableRow(columns: [
-                (r.month, widths[0], false, color),
-                (r.reqs == 0 ? "-" : "\(r.reqs)", widths[1], false, r.reqs == 0 ? Design.textMuted : Design.textPrimary),
-                (fmtNum(r.token), widths[2], false, r.token == 0 ? Design.textMuted : Design.textPrimary),
-                (fmtNum(r.cache), widths[3], false, r.cache == 0 ? Design.textMuted : Design.textSecondary)
-            ])
-            contentStack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+            monthRows.append(dataRow(col0: r.month, reqs: r.reqs, token: r.token, cache: r.cache, widths: widths))
         }
 
-        contentStack.addArrangedSubview(makeSep())
-        let totalRow = makeTotalRow(columns: [
-            ("合计", widths[0]), ("\(totalReqs)", widths[1]),
-            (fmtNum(totalToken), widths[2]), (fmtNum(totalCache), widths[3])
+        // 图表（最近月份在上 → 图表用倒序让时间从左到右）
+        let monthEntries = rows.reversed().map { ChartEntry(label: $0.month, value: $0.token) }
+
+        content.set([
+            .chart(.bars(monthEntries, showXAxis: true), height: 100),
+            .separator,
+            tableHeader([L("月份"), L("请求"), L("总 Token"), L("缓存读")], widths: widths),
+            .separator,
+            .rows(monthRows),
+            .separator,
+            .rows([totalRow(L("合计"), reqs: totalReqs, token: totalToken, cache: totalCache, widths: widths)])
         ])
-        contentStack.addArrangedSubview(totalRow)
-        totalRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
     }
 
-    @objc func exportCSVClicked() {
-        exportCSV(defaultName: "ccbar-按月汇总.csv",
-                  header: ["月份", "请求数", "总Token", "缓存读"],
+    func exportCSVClicked() {
+        exportCSV(defaultName: L("ccbar-按月汇总.csv"),
+                  header: [L("月份"), L("请求数"), L("总Token"), L("缓存读")],
                   rows: exportRows)
     }
 }

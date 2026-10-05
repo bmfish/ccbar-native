@@ -19,6 +19,8 @@ final class SettingsViewModelTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        // 断言里用中文原文，钉住语言防 CI locale 漂移
+        UserDefaults.standard.set("zh", forKey: "appLanguage")
         suiteName = "ccbar.settings.tests.\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
         settings = Settings(defaults: defaults)
@@ -30,6 +32,7 @@ final class SettingsViewModelTests: XCTestCase {
 
     override func tearDown() {
         defaults.removePersistentDomain(forName: suiteName)
+        UserDefaults.standard.removeObject(forKey: "appLanguage")
         super.tearDown()
     }
 
@@ -77,7 +80,7 @@ final class SettingsViewModelTests: XCTestCase {
         vm.menuPetEnabled = false
         vm.menuEmojiEnabled = false
         vm.popoverWide = true
-        vm.theme = .crt
+        vm.theme = Theme.crt
         if let i = vm.sources.firstIndex(where: { $0.id == "zcode" }) {
             vm.sources[i].enabled = true
             vm.sources[i].path = "/tmp/fake-zcode.db"

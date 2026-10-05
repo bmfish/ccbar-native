@@ -37,25 +37,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     // 随机问候语
     let greetings = [
         "今天也要加油写 Bug 哦 ✨",
-        "代码如诗，Bug 如风 🌸",
-        "写代码不如谈恋爱 💕",
-        "需求又改了，习惯就好 🫠",
-        "今天不出 Bug，明天出什么 🎯",
-        "写代码使我快乐（并不）🎭",
-        "技术债也是债 💸",
-        "今天的需求明天再做 🌙",
-        "码农的一天从咖啡开始 ☕",
-        "Git commit -m '又一个 Bug' 🔧",
-        "产品经理说很简单 🤡",
-        "这个需求一天就能做完 📝",
-        "代码能跑就行 🏃",
-        "今天也是充满 Bug 的一天 🐛",
-        "先实现，再优化（永远不优化）⏳",
-        "这个接口我三分钟就写完 ⚡",
-        "测试？什么测试？ 🎲",
-        "线上出 Bug 了？不可能 🚫",
-        "重构？先加个 if 吧 🤔",
-        "这个功能很简单的 🎪"
+        L("代码如诗，Bug 如风 🌸"),
+        L("写代码不如谈恋爱 💕"),
+        L("需求又改了，习惯就好 🫠"),
+        L("今天不出 Bug，明天出什么 🎯"),
+        L("写代码使我快乐（并不）🎭"),
+        L("技术债也是债 💸"),
+        L("今天的需求明天再做 🌙"),
+        L("码农的一天从咖啡开始 ☕"),
+        L("Git commit -m '又一个 Bug' 🔧"),
+        L("产品经理说很简单 🤡"),
+        L("这个需求一天就能做完 📝"),
+        L("代码能跑就行 🏃"),
+        L("今天也是充满 Bug 的一天 🐛"),
+        L("先实现，再优化（永远不优化）⏳"),
+        L("这个接口我三分钟就写完 ⚡"),
+        L("测试？什么测试？ 🎲"),
+        L("线上出 Bug 了？不可能 🚫"),
+        L("重构？先加个 if 吧 🤔"),
+        L("这个功能很简单的 🎪")
     ]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -82,6 +82,41 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
 
         // 定时器
         startTimer()
+
+        // 每日家务：自动备份 + 静默检查更新
+        runDailyHousekeeping()
+    }
+
+    /// 每日家务（全部静默，失败只打日志不打扰）：
+    /// - 统计库自动备份到 ~/Library/Application Support/ccbar/backups，滚动保留最近 7 份
+    /// - 每 3 天静默检查一次更新，有新版才弹提示
+    func runDailyHousekeeping() {
+        let defaults = UserDefaults.standard
+        let today = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none)
+
+        if defaults.string(forKey: "lastAutoBackupDate") != today {
+            let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("ccbar/backups", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let target = dir.appendingPathComponent("ccbar-auto-\(today).db").path
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self, self.store.backup(to: target) else { return }
+                defaults.set(today, forKey: "lastAutoBackupDate")
+                let files = (try? FileManager.default.contentsOfDirectory(atPath: dir.path))?
+                    .filter { $0.hasPrefix("ccbar-auto-") && $0.hasSuffix(".db") }
+                    .sorted() ?? []
+                for old in files.dropLast(7) {
+                    try? FileManager.default.removeItem(atPath: dir.appendingPathComponent(old).path)
+                }
+            }
+        }
+
+        if let last = defaults.object(forKey: "lastUpdateCheckDate") as? Date,
+           Date().timeIntervalSince(last) < 3 * 24 * 3600 {
+            return
+        }
+        defaults.set(Date(), forKey: "lastUpdateCheckDate")
+        UpdateChecker.check(silent: true)
     }
 
     /// 菜单栏小闪电图标。
@@ -145,12 +180,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     private func showContextMenu() {
         let menu = NSMenu()
         let items: [(String, Selector)] = [
-            ("今日详情", #selector(openHourlyDetailToday)),
-            ("近7天用量", #selector(openDetail)),
-            ("历史总量", #selector(openAllTimeDetail)),
-            ("复制今日统计", #selector(copyStats)),
-            ("设置", #selector(openSettings)),
-            ("退出", #selector(quit)),
+            (L("今日详情"), #selector(openHourlyDetailToday)),
+            (L("近7天用量"), #selector(openDetail)),
+            (L("历史总量"), #selector(openAllTimeDetail)),
+            (L("复制今日统计"), #selector(copyStats)),
+            (L("设置"), #selector(openSettings)),
+            (L("退出"), #selector(quit)),
         ]
         for (title, action) in items {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
@@ -308,9 +343,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                 self.applyTitle(todayStats)
 
                 // 菜单栏悬停摘要
-                var tip = "今日：\(todayStats.map { Design.formatTokens($0.total) } ?? "-")"
-                if let y = DataCache.shared.getCachedYesterday() { tip += "\n昨日：\(Design.formatTokens(y.total))" }
-                if let t = todayStats { tip += "\n请求数：\(t.reqs)" }
+                var tip = String(format: L("今日：%@"), todayStats.map { Design.formatTokens($0.total) } ?? "-")
+                if let y = DataCache.shared.getCachedYesterday() { tip += String(format: L("\n昨日：%@"), Design.formatTokens(y.total)) }
+                if let t = todayStats { tip += String(format: L("\n请求数：%d"), t.reqs) }
                 self.statusItem.button?.toolTip = tip
 
                 if let stats = todayStats {
@@ -416,7 +451,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             cancelRoll()
             displayedTotal = -1
             button.attributedTitle = NSAttributedString(
-                string: store.attachedAdapters.isEmpty ? "未启用" : "未找到",
+                string: store.attachedAdapters.isEmpty ? L("未启用") : L("未找到"),
                 attributes: [.font: titleFont])
             return
         }
@@ -549,8 +584,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
 
         let thresholdInTokens = Int64(settings.warningThreshold) * 10000
         if stats.total >= thresholdInTokens {
-            sendNotification(title: "用量预警",
-                             body: "今日 Token 用量已达 \(fmtK(stats.total))，超过预警阈值 \(settings.warningThreshold)万",
+            sendNotification(title: L("用量预警"),
+                             body: String(format: L("今日 Token 用量已达 %@，超过预警阈值 %d万"),
+                                          fmtK(stats.total), settings.warningThreshold),
                              identifier: "ccbar.warning")
             UserDefaults.standard.set(true, forKey: todayKey)
         }
@@ -577,8 +613,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         showBubble(delta: deltaTokens)
         flashTitle()
 
-        sendNotification(title: "🎉 用量里程碑",
-                         body: "今日 Token 已达 \(fmtK(total))（每\(intervalWan)万通知一次）",
+        sendNotification(title: L("🎉 用量里程碑"),
+                         body: String(format: L("今日 Token 已达 %@（每%d万通知一次）"),
+                                      fmtK(total), intervalWan),
                          identifier: "ccbar.milestone")
     }
 
@@ -660,15 +697,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     }
 
     func fmtK(_ n: Int64) -> String {
-        if n >= 100_000_000 {
-            let d = Double(n) / 100_000_000
-            return String(format: "%.2f亿", d)
-        } else if n >= 10_000 {
-            let w = n / 10_000
-            return "\(w)万"
-        } else {
-            return "\(n)"
-        }
+        L10n.formatTokens(n)
     }
 
     func fmtTitle(_ n: Int64) -> String {
@@ -676,26 +705,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     }
 
     @objc func copyStats() {
-        var text = "ccBar 今日用量统计\n"
+        var text = L("ccBar 今日用量统计\n")
         text += "==================\n"
 
         if let stats = DataCache.shared.getCachedToday() {
-            text += "Token 总量: \(fmtK(stats.total))\n"
-            text += "请求数量: \(stats.reqs)\n"
-            text += "输入 Token: \(fmtK(stats.input))\n"
-            text += "输出 Token: \(fmtK(stats.output))\n"
+            text += String(format: L("Token 总量: %@\n"), fmtK(stats.total))
+            text += String(format: L("请求数量: %d\n"), stats.reqs)
+            text += String(format: L("输入 Token: %@\n"), fmtK(stats.input))
+            text += String(format: L("输出 Token: %@\n"), fmtK(stats.output))
         }
 
         let sources = store.querySourceBreakdown()
         if sources.count > 1 {
-            text += "\n数据源分布:\n"
+            text += L("\n数据源分布:\n")
             for s in sources {
                 text += "  \(sourceDisplayName(s.source)): \(fmtK(s.total))\n"
             }
         }
 
         if let models = DataCache.shared.getCachedModelBreakdown() {
-            text += "\n模型分布:\n"
+            text += L("\n模型分布:\n")
             for model in models {
                 text += "  \(model.model): \(fmtK(model.total))\n"
             }
@@ -708,8 +737,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         closePopover()
 
         let alert = NSAlert()
-        alert.messageText = "已复制到剪贴板"
-        alert.informativeText = "统计数据已复制，可直接粘贴使用"
+        alert.messageText = L("已复制到剪贴板")
+        alert.informativeText = L("统计数据已复制，可直接粘贴使用")
         alert.runModal()
     }
 

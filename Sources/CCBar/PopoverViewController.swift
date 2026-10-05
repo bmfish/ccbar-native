@@ -63,7 +63,7 @@ final class PopoverViewModel: ObservableObject {
     var predictionText: String? {
         guard let t = today, let h = workHours, h > 0.2 else { return nil }
         let predicted = Double(t.total) / (h * 3600) * 86_400
-        return "按当前速率到 24:00 约 \(Design.formatTokens(Int64(predicted)))"
+        return String(format: L("按当前速率到 24:00 约 %@"), Design.formatTokens(Int64(predicted)))
     }
 }
 
@@ -103,7 +103,7 @@ struct PopoverRootView: View {
                 }
                 bottomBar
             }
-            if vm.theme == .crt {
+            if vm.theme.scanlines {
                 ScanlineShape().allowsHitTesting(false)
             }
         }
@@ -128,7 +128,7 @@ struct PopoverRootView: View {
                 .padding(.bottom, 10)
         } else {
             popoverCard {
-                Text("暂无数据\n请检查设置里的数据源连接")
+                Text(L("暂无数据\n请检查设置里的数据源连接"))
                     .font(.system(size: 12))
                     .foregroundColor(Color(nsColor: Design.textMuted))
                     .multilineTextAlignment(.center)
@@ -165,7 +165,7 @@ struct PopoverRootView: View {
                         Image(systemName: "chart.line.uptrend.xyaxis")
                             .font(.system(size: 12))
                             .foregroundColor(Color(nsColor: Design.textSecondary))
-                        Text("今日用量")
+                        Text(L("今日用量"))
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundColor(Color(nsColor: Design.textPrimary))
                         Spacer()
@@ -186,10 +186,10 @@ struct PopoverRootView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     HStack(alignment: .center, spacing: 0) {
-                        statColumn("请求数", "\(today.reqs)", Design.textPrimary)
-                        statColumn("缓存命中", cacheRateText, cacheRateColor)
+                        statColumn(L("请求数"), "\(today.reqs)", Design.textPrimary)
+                        statColumn(L("缓存命中"), cacheRateText, cacheRateColor)
                         if let h = vm.workHours {
-                            statColumn("工时", String(format: "%.1fh", h), Design.textPrimary)
+                            statColumn(L("工时"), String(format: "%.1fh", h), Design.textPrimary)
                         }
                     }
 
@@ -230,7 +230,7 @@ struct PopoverRootView: View {
                         Image(systemName: "cpu")
                             .font(.system(size: 12))
                             .foregroundColor(Color(nsColor: Design.textSecondary))
-                        Text("模型分布")
+                        Text(L("模型分布"))
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundColor(Color(nsColor: Design.textPrimary))
                         Spacer()
@@ -291,25 +291,25 @@ struct PopoverRootView: View {
     private var trendSection: some View {
         let tc = vm.theme.trendIconColors
         return VStack(alignment: .leading, spacing: 0) {
-            Text("趋势")
+            Text(L("趋势"))
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(Color(nsColor: Design.textMuted))
                 .padding(.top, 6)
                 .padding(.bottom, 4)
             if let y = vm.yesterday {
-                trendRow(icon: "calendar", color: tc.yesterday, title: "昨日",
+                trendRow(icon: "calendar", color: tc.yesterday, title: L("昨日"),
                          value: Design.formatTokens(y.total), action: PopoverActions.shared.openHourlyYesterday)
             }
             if let w = vm.week {
-                trendRow(icon: "chart.bar", color: tc.week, title: "近7天",
+                trendRow(icon: "chart.bar", color: tc.week, title: L("近7天"),
                          value: Design.formatTokens(w.total), action: PopoverActions.shared.openWeek)
             }
             if let m = vm.month {
-                trendRow(icon: "calendar.badge.clock", color: tc.month, title: "近30天",
+                trendRow(icon: "calendar.badge.clock", color: tc.month, title: L("近30天"),
                          value: Design.formatTokens(m.total), action: PopoverActions.shared.openMonth)
             }
             if let t = vm.total {
-                trendRow(icon: "sum", color: tc.total, title: "历史总量",
+                trendRow(icon: "sum", color: tc.total, title: L("历史总量"),
                          value: Design.formatTokens(t.total), action: PopoverActions.shared.openMonth)
             }
         }
@@ -339,10 +339,10 @@ struct PopoverRootView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 6) {
-            BarActionButton(icon: "doc.on.doc", label: "复制", action: PopoverActions.shared.copy)
-            BarActionButton(icon: "arrow.clockwise", label: "刷新", action: PopoverActions.shared.refresh)
-            BarActionButton(icon: "gearshape", label: "设置", action: PopoverActions.shared.settings)
-            BarActionButton(icon: "xmark", label: "退出", action: PopoverActions.shared.quit)
+            BarActionButton(icon: "doc.on.doc", label: L("复制"), action: PopoverActions.shared.copy)
+            BarActionButton(icon: "arrow.clockwise", label: L("刷新"), action: PopoverActions.shared.refresh)
+            BarActionButton(icon: "gearshape", label: L("设置"), action: PopoverActions.shared.settings)
+            BarActionButton(icon: "xmark", label: L("退出"), action: PopoverActions.shared.quit)
         }
         .padding(.horizontal, 14)
         .padding(.top, 8)

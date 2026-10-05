@@ -9,7 +9,8 @@ enum UpdateChecker {
     private static let releasesPageURL = URL(string: "https://github.com/bmfish/ccbar-native/releases/latest")!
     private static let apiURL = URL(string: "https://api.github.com/repos/bmfish/ccbar-native/releases/latest")!
 
-    static func check() {
+    /// silent = 静默模式（启动时的定期检查）：有新版才弹，无新版/网络失败不吭声
+    static func check(silent: Bool = false) {
         var req = URLRequest(url: apiURL, timeoutInterval: 10)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         URLSession.shared.dataTask(with: req) { data, _, _ in
@@ -23,22 +24,23 @@ enum UpdateChecker {
             DispatchQueue.main.async {
                 let alert = NSAlert()
                 if let latest = latest, isNewer(latest, than: current) {
-                    alert.messageText = "发现新版本 v\(latest)"
-                    alert.informativeText = "当前版本 v\(current)。前往 GitHub Releases 下载最新 DMG。"
+                    alert.messageText = String(format: L("发现新版本 v%@"), latest)
+                    alert.informativeText = String(format: L("当前版本 v%@。前往 GitHub Releases 下载最新 DMG。"), current)
                     alert.alertStyle = .informational
-                    alert.addButton(withTitle: "前往下载")
-                    alert.addButton(withTitle: "以后再说")
+                    alert.addButton(withTitle: L("前往下载"))
+                    alert.addButton(withTitle: L("以后再说"))
                     if alert.runModal() == .alertFirstButtonReturn {
                         NSWorkspace.shared.open(releasesPageURL)
                     }
                     return
                 }
+                guard !silent else { return }
                 alert.messageText = "检查更新"
                 alert.informativeText = latest != nil
-                    ? "已经是最新版本（v\(current)）"
-                    : "检查失败，稍后再试，或直接到 GitHub Releases 页面查看"
+                    ? String(format: L("已经是最新版本（v%@）"), current)
+                    : L("检查失败，稍后再试，或直接到 GitHub Releases 页面查看")
                 alert.alertStyle = .informational
-                alert.addButton(withTitle: "好的")
+                alert.addButton(withTitle: L("好的"))
                 alert.runModal()
             }
         }.resume()

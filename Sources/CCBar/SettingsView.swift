@@ -24,7 +24,7 @@ struct SourceRowDraft: Identifiable {
 /// 设置草稿模型：窗口内编辑，点“保存”统一校验后写入并生效
 @MainActor
 final class SettingsViewModel: ObservableObject {
-    @Published var theme: Theme = .default
+    @Published var theme: Theme = .classic
     @Published var refreshIntervalText = ""
     @Published var warningThresholdText = ""
     @Published var notifyIntervalText = ""
@@ -35,6 +35,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var menuEmojiEnabled = true
     @Published var popoverWide = false
     @Published var sources: [SourceRowDraft] = []
+    @Published var language: AppLanguage = .system
 
     let settings: Settings
     let onSaved: () -> Void
@@ -71,6 +72,7 @@ final class SettingsViewModel: ObservableObject {
         menuPetEnabled = settings.menuPetEnabled
         menuEmojiEnabled = settings.menuEmojiEnabled
         popoverWide = settings.popoverWide
+        language = AppLanguage(rawValue: UserDefaults.standard.string(forKey: "appLanguage") ?? "") ?? .system
 
         let configs = settings.sourceConfigs
         sources = SourceRegistry.adapters.map { adapter in
@@ -93,7 +95,7 @@ final class SettingsViewModel: ObservableObject {
         let statuses = AppDelegate.shared?.store.sourceStatus ?? [:]
         for i in sources.indices {
             let s = statuses[sources[i].id] ?? ""
-            sources[i].statusText = s
+            sources[i].statusText = L(s)
             if s.contains("已连接") {
                 sources[i].statusKind = .ok
             } else if s == "未启用" {
@@ -111,13 +113,13 @@ final class SettingsViewModel: ObservableObject {
         guard !path.isEmpty, let adapter = SourceRegistry.adapter(for: id) else { return }
 
         if !FileManager.default.fileExists(atPath: path) {
-            sources[i].statusText = "文件不存在"
+            sources[i].statusText = L("文件不存在")
             sources[i].statusKind = .warn
         } else if let error = Self.validateDB(path: path, requiredTables: adapter.requiredTables) {
             sources[i].statusText = error
             sources[i].statusKind = .warn
         } else {
-            sources[i].statusText = "表结构正确（保存后生效）"
+            sources[i].statusText = L("表结构正确（保存后生效）")
             sources[i].statusKind = .ok
         }
     }
@@ -126,18 +128,18 @@ final class SettingsViewModel: ObservableObject {
         var db: OpaquePointer?
         let escaped = path.replacingOccurrences(of: "'", with: "%27")
         guard sqlite3_open_v2("file:\(escaped)?mode=ro", &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK else {
-            return "打不开（被占用或损坏）"
+            return L("打不开（被占用或损坏）")
         }
         defer { sqlite3_close_v2(db) }
         let list = requiredTables.joined(separator: "','")
         var stmt: OpaquePointer?
         let sql = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('\(list)')"
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return "校验失败" }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return L("校验失败") }
         defer { sqlite3_finalize(stmt) }
         if sqlite3_step(stmt) == SQLITE_ROW, sqlite3_column_int64(stmt, 0) >= Int64(requiredTables.count) {
             return nil
         }
-        return "缺少必需表"
+        return L("缺少必需表")
     }
 
     /// 选择数据源库文件
@@ -145,7 +147,7 @@ final class SettingsViewModel: ObservableObject {
         guard let i = sources.firstIndex(where: { $0.id == id }),
               let adapter = SourceRegistry.adapter(for: id) else { return }
         let panel = NSOpenPanel()
-        panel.title = "选择 \(adapter.name) 数据库文件"
+        panel.title = String(format: L("选择 %@ 数据库文件"), adapter.name)
         panel.allowedContentTypes = [UTType(filenameExtension: "db") ?? .data,
                                      UTType(filenameExtension: "sqlite") ?? .data]
         panel.allowsMultipleSelection = false
@@ -165,15 +167,15 @@ final class SettingsViewModel: ObservableObject {
         // 数字字段整体校验，任一无效就阻止保存并指出（原来非法值会被静默忽略）
         var invalid: [String] = []
         let interval = Int(refreshIntervalText)
-        if interval == nil || !(5...3000).contains(interval!) { invalid.append("刷新间隔（5 ~ 3000 秒）") }
+        if interval == nil || !(5...3000).contains(interval!) { invalid.append(L("刷新间隔（5 ~ 3000 秒）")) }
         let threshold = Int(warningThresholdText)
-        if threshold == nil || threshold! <= 0 { invalid.append("预警阈值（正整数，万）") }
+        if threshold == nil || threshold! <= 0 { invalid.append(L("预警阈值（正整数，万）")) }
         let notify = Int(notifyIntervalText)
-        if notify == nil || notify! < 0 { invalid.append("通知间隔（≥ 0 的整数，万，0=关闭）") }
+        if notify == nil || notify! < 0 { invalid.append(L("通知间隔（≥ 0 的整数，万，0=关闭）")) }
         let led = Int(ledThresholdText)
-        if led == nil || led! < 0 { invalid.append("红色门槛（≥ 0 的整数，万，0=不变红）") }
+        if led == nil || led! < 0 { invalid.append(L("红色门槛（≥ 0 的整数，万，0=不变红）")) }
         if !invalid.isEmpty {
-            showAlert("无法保存", "以下字段无效：\n" + invalid.joined(separator: "\n"))
+            showAlert(L("无法保存"), L("以下字段无效：") + "\n" + invalid.joined(separator: "\n"))
             return
         }
 
@@ -193,8 +195,9 @@ final class SettingsViewModel: ObservableObject {
         settings.notifyInterval = notify!
         settings.ledRedThreshold = led!
         applyTheme(theme)
+        UserDefaults.standard.set(language.rawValue, forKey: "appLanguage")
 
-        showAlert("设置已保存", "新的设置将在下次刷新时生效")
+        showAlert(L("设置已保存"), L("新的设置将在下次刷新时生效"))
         onSaved()
     }
 
@@ -228,11 +231,43 @@ final class SettingsViewModel: ObservableObject {
 
         let ok = AppDelegate.shared?.store.backup(to: url.path) ?? false
         if ok {
-            showAlert("备份完成",
-                      "统计库已备份到：\n\(url.path)\n\n恢复方式：退出 ccBar 后用备份文件替换\n~/Library/Application Support/ccbar/ccbar.db")
+            showAlert(L("备份完成"),
+                      L("统计库已备份到：") + "\n\(url.path)" + L("\n恢复方式：退出 ccBar 后用备份文件替换\n~/Library/Application Support/ccbar/ccbar.db"))
         } else {
-            showAlert("备份失败", "统计库未打开或目标位置不可写")
+            showAlert(L("备份失败"), L("统计库未打开或目标位置不可写"))
         }
+    }
+
+    // MARK: 主题包导入/导出
+
+    /// 导出当前选中的主题为 JSON 主题包（可直接分享给其他用户导入）
+    func exportTheme() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "ccbar-theme-\(theme.name).json"
+        panel.allowedContentTypes = [.json]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try JSONEncoder().encode(theme).write(to: url)
+            showAlert(L("导出完成"), L("主题包已保存到：") + "\n\(url.path)")
+        } catch {
+            showAlert(L("导出失败"), error.localizedDescription)
+        }
+    }
+
+    /// 导入 JSON 主题包：加入可选列表并选中（点保存后生效）
+    func importTheme() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url,
+              let data = try? Data(contentsOf: url) else { return }
+        guard let imported = Theme.fromJSON(data) else {
+            showAlert(L("导入失败"), L("不是有效的 ccBar 主题包"))
+            return
+        }
+        Theme.addCustom(imported)
+        theme = imported
+        showAlert(L("导入成功"), String(format: L("主题「%@」已加入可选列表"), imported.name))
     }
 }
 
@@ -255,7 +290,7 @@ struct SettingsRootView: View {
                 Rectangle().fill(Color(nsColor: Design.separatorColor)).frame(height: 1)
                 buttonBar
             }
-            if vm.theme == .crt {
+            if vm.theme.scanlines {
                 ScanlineShape().allowsHitTesting(false)
             }
         }
@@ -269,7 +304,7 @@ struct SettingsRootView: View {
             Image(systemName: "gearshape.fill")
                 .foregroundColor(Color(nsColor: Design.brandColor))
                 .frame(width: 20, height: 20)
-            Text("设置")
+            Text(L("设置"))
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundColor(Color(nsColor: Design.textPrimary))
         }
@@ -277,51 +312,75 @@ struct SettingsRootView: View {
 
         sep
 
-        // 主题选择
+        // 主题选择（+ JSON 主题包导入/导出，方便分享）
         HStack(spacing: 6) {
             Image(systemName: "paintpalette")
                 .foregroundColor(Color(nsColor: Design.brandColor))
                 .frame(width: 16, height: 16)
-            labelText("主题风格")
+            labelText(L("主题风格"))
             Circle()
                 .fill(Color(nsColor: vm.theme.accent))
                 .frame(width: 8, height: 8)
             Picker("", selection: $vm.theme) {
-                ForEach(Theme.allCases, id: \.self) { theme in
+                ForEach(Theme.allThemes) { theme in
                     Text(theme.displayName).tag(theme)
                 }
             }
             .labelsHidden()
             .frame(width: 140)
+            Button(L("导入")) { vm.importTheme() }
+                .font(.system(size: 11))
+            Button(L("导出")) { vm.exportTheme() }
+                .font(.system(size: 11))
             Spacer()
         }
         .frame(height: 24)
 
-        settingRow(icon: "arrow.clockwise", label: "刷新间隔",
-                   text: $vm.refreshIntervalText, unit: "秒", hint: "5 ~ 3000")
+        settingRow(icon: "arrow.clockwise", label: L("刷新间隔"),
+                   text: $vm.refreshIntervalText, unit: L("秒"), hint: "5 ~ 3000")
 
         // 数据源（每源一行：启用勾选 + 路径 + 浏览）
-        Text("数据源")
+        Text(L("数据源"))
             .font(.system(size: 12, weight: .semibold))
             .foregroundColor(Color(nsColor: Design.textMuted))
         ForEach($vm.sources) { $row in
             sourceRow($row)
         }
 
-        settingRow(icon: "exclamationmark.triangle", label: "预警阈值",
-                   text: $vm.warningThresholdText, unit: "万", hint: "超出时通知")
-        settingRow(icon: "bell.badge", label: "通知间隔",
-                   text: $vm.notifyIntervalText, unit: "万", hint: "每累计N万通知，0=关闭")
-        settingRow(icon: "bolt.badge.automatic", label: "红色门槛",
-                   text: $vm.ledThresholdText, unit: "万", hint: "单次刷新增量达到变红，0=不变红")
+        settingRow(icon: "exclamationmark.triangle", label: L("预警阈值"),
+                   text: $vm.warningThresholdText, unit: L("万"), hint: L("超出时通知"))
+        settingRow(icon: "bell.badge", label: L("通知间隔"),
+                   text: $vm.notifyIntervalText, unit: L("万"), hint: L("每累计N万通知，0=关闭"))
+
+        // 界面语言（重启后生效）
+        HStack(spacing: 6) {
+            Image(systemName: "globe")
+                .foregroundColor(Color(nsColor: Design.textSecondary))
+                .frame(width: 16, height: 16)
+            labelText(L("界面语言"))
+            Picker("", selection: $vm.language) {
+                ForEach(AppLanguage.allCases, id: \.self) { lang in
+                    Text(lang.displayName).tag(lang)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 120)
+            Text(L("重启后生效"))
+                .font(.system(size: 11))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+            Spacer()
+        }
+        .frame(height: 24)
+        settingRow(icon: "bolt.badge.automatic", label: L("红色门槛"),
+                   text: $vm.ledThresholdText, unit: L("万"), hint: L("单次刷新增量达到变红，0=不变红"))
 
         sep
 
-        Toggle(" 启用用量预警", isOn: $vm.warningEnabled)
-        Toggle(" 开机自动启动", isOn: $vm.launchAtLogin)
-        Toggle(" 菜单栏动画伴侣（小猫随用量跑动）", isOn: $vm.menuPetEnabled)
-        Toggle(" 菜单栏表情分级（🙂→🥵）", isOn: $vm.menuEmojiEnabled)
-        Toggle(" 宽版弹窗（380pt）", isOn: $vm.popoverWide)
+        Toggle(L("启用用量预警"), isOn: $vm.warningEnabled)
+        Toggle(L("开机自动启动"), isOn: $vm.launchAtLogin)
+        Toggle(L("菜单栏动画伴侣（小猫随用量跑动）"), isOn: $vm.menuPetEnabled)
+        Toggle(L("菜单栏表情分级（🙂→🥵）"), isOn: $vm.menuEmojiEnabled)
+        Toggle(L("宽版弹窗（380pt）"), isOn: $vm.popoverWide)
 
         sep
     }
@@ -412,7 +471,7 @@ struct SettingsRootView: View {
                 .overlay(RoundedRectangle(cornerRadius: 4)
                     .stroke(Color(nsColor: Design.separatorColor).opacity(0.6)))
                 .help(row.wrappedValue.path)
-                Button("浏览") {
+                Button(L("浏览")) {
                     vm.browseSource(id: row.wrappedValue.id)
                 }
                 .font(.system(size: 12))
@@ -435,10 +494,10 @@ struct SettingsRootView: View {
 
     private var buttonBar: some View {
         HStack(spacing: 10) {
-            Button("重置") { vm.reset() }
-            Button("检查更新") { vm.checkForUpdates() }
-            Button("备份数据") { vm.backupData() }
-            Button("保存") { vm.save() }
+            Button(L("重置")) { vm.reset() }
+            Button(L("检查更新")) { vm.checkForUpdates() }
+            Button(L("备份数据")) { vm.backupData() }
+            Button(L("保存")) { vm.save() }
                 .font(.system(size: 13, weight: .semibold))
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
@@ -466,7 +525,7 @@ class SettingsWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "ccBar 设置"
+        window.title = L("ccBar 设置")
         window.minSize = NSSize(width: 440, height: 420)
         window.center()
         window.setFrameAutosaveName("CCBarSettings")

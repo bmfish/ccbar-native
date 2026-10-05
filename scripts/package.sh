@@ -97,8 +97,12 @@ echo "==> codesign (ad-hoc)"
 codesign --force --deep -s - "$APP"
 
 DMG="CCBar-$VERSION-$ARCH.dmg"
-echo "==> hdiutil 打包 $DMG"
+echo "==> hdiutil 打包 $DMG (含 Applications 快捷方式，拖拽即装)"
 rm -f "$DMG"
-hdiutil create -volname CCBar -srcfolder "$APP" -ov -format UDZO -quiet "$DMG"
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+cp -R "$APP" "$STAGE/"
+ln -s /Applications "$STAGE/Applications"
+hdiutil create -volname CCBar -srcfolder "$STAGE" -ov -format UDZO -quiet "$DMG"
 
 echo "✅ 完成: $DMG"
