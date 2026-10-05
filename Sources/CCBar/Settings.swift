@@ -20,7 +20,11 @@ struct SourceConfig: Codable {
 }
 
 class Settings {
-    let defaults = UserDefaults.standard
+    let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     var refreshInterval: Int {
         get { defaults.integer(forKey: "refreshInterval") == 0 ? 30 : defaults.integer(forKey: "refreshInterval") }
@@ -114,12 +118,10 @@ class Settings {
         }
     }
 
-    /// 通知间隔（万），每累计到这个倍数弹一次通知，0=关闭
+    /// 通知间隔（万），每累计到这个倍数弹一次通知，0=关闭。
+    /// 用 object 判“未设置”：integer 无法区分 0 与缺省，否则 0=关闭永远不生效
     var notifyInterval: Int {
-        get {
-            let v = defaults.integer(forKey: "notifyInterval")
-            return v == 0 ? 1000 : v  // 默认1000万
-        }
+        get { defaults.object(forKey: "notifyInterval") as? Int ?? 1000 }
         set { defaults.set(newValue, forKey: "notifyInterval") }
     }
 }
