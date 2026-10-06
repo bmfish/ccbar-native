@@ -266,6 +266,11 @@ let L10nEN: [String: String] = [
     "次": "reqs",
     "今日暂无请求": "No requests today",
     "去干活吧，流水会记住每一笔 💪": "Go build something — the ledger remembers 💪",
+    "模型编年史": "Model Chronicle",
+    "AI 用量周报": "AI Usage Weekly",
+    "周消耗": "Week Burn",
+    "日均": "Daily Avg",
+    "峰值": "Peak",
 
     // ---- 小猫文案（彩蛋） ----
     "Git commit -m '又一个 Bug' 🔧": "git commit -m 'yet another bug' 🔧",

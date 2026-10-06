@@ -116,6 +116,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             }
         }
 
+        // 每周一生成上周用量周报（幂等键 = 周一日期，静默）；卡片渲染需回主线程
+        Task { @MainActor in WeeklyReport.generateIfNeeded(store: store) }
+
         if let last = defaults.object(forKey: "lastUpdateCheckDate") as? Date,
            Date().timeIntervalSince(last) < 3 * 24 * 3600 {
             return
@@ -347,6 +350,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                     workHours: workHours
                 )
                 self.applyTitle(todayStats)
+
+                // 每日家务顺带跑一遍（内部全部幂等早退，保证长开不重启也能赶上周一出周报）
+                self.runDailyHousekeeping()
 
                 // 菜单栏悬停摘要
                 var tip = String(format: L("今日：%@"), todayStats.map { Design.formatTokens($0.total) } ?? "-")

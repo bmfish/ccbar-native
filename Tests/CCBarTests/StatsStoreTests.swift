@@ -52,7 +52,8 @@ final class StatsStoreTests: XCTestCase {
     @discardableResult
     private func insertFixtureRow(id: String, createdAt: Int64,
                                   input: Int64, output: Int64,
-                                  cacheRead: Int64 = 0, cacheCreate: Int64 = 0) -> Bool {
+                                  cacheRead: Int64 = 0, cacheCreate: Int64 = 0,
+                                  model: String = "test-model") -> Bool {
         var db: OpaquePointer?
         guard sqlite3_open_v2(sourcePath, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else { return false }
         defer { sqlite3_close_v2(db) }
@@ -61,15 +62,16 @@ final class StatsStoreTests: XCTestCase {
         INSERT INTO proxy_request_logs
             (request_id, app_type, model, input_tokens, output_tokens,
              cache_read_tokens, cache_creation_tokens, total_cost_usd, created_at)
-        VALUES (?, 'claude', 'test-model', ?, ?, ?, ?, 0.5, ?)
+        VALUES (?, 'claude', ?, ?, ?, ?, ?, 0.5, ?)
         """, -1, &stmt, nil) == SQLITE_OK else { return false }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_text(stmt, 1, id, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-        sqlite3_bind_int64(stmt, 2, input)
-        sqlite3_bind_int64(stmt, 3, output)
-        sqlite3_bind_int64(stmt, 4, cacheRead)
-        sqlite3_bind_int64(stmt, 5, cacheCreate)
-        sqlite3_bind_int64(stmt, 6, createdAt)
+        sqlite3_bind_text(stmt, 2, model, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        sqlite3_bind_int64(stmt, 3, input)
+        sqlite3_bind_int64(stmt, 4, output)
+        sqlite3_bind_int64(stmt, 5, cacheRead)
+        sqlite3_bind_int64(stmt, 6, cacheCreate)
+        sqlite3_bind_int64(stmt, 7, createdAt)
         return sqlite3_step(stmt) == SQLITE_DONE
     }
 
@@ -263,6 +265,44 @@ final class StatsStoreTests: XCTestCase {
         let top = store.queryTopModel(days: 30)
         XCTAssertEqual(top?.model, "test-model")
         XCTAssertEqual(top?.token, 33960)
+    }
+
+    func testModelHistoryAndWindowStats() throws {
+        // 5 天前 model-B 首用、3 天前 model-A 加入、昨天 model-A 再用
+        makeFixtureSource()
+        XCTAssertTrue(insertFixtureRow(id: "req-old", createdAt: StatsStore.localMidnight(5) + 3600,
+                                       input: 1000, output: 1000, model: "model-B"))
+        XCTAssertTrue(insertFixtureRow(id: "req-mid", createdAt: StatsStore.localMidnight(3) + 3600,
+                                       input: 100, output: 200, model: "model-A"))
+        XCTAssertTrue(insertFixtureRow(id: "req-new", createdAt: StatsStore.localMidnight(1) + 3600,
+                                       input: 10000, output: 20000, model: "model-A"))
+        rebuildWithFixture()
+        store.syncIfNeeded()
+
+        // 编年史按首用时间升序：model-B（5 天前）→ model-A（3 天前）
+        let history = store.queryModelHistory()
+        XCTAssertEqual(history.map(\.model), ["model-B", "model-A"])
+        XCTAssertEqual(history[0].firstEpoch, StatsStore.localMidnight(5) + 3600)
+        XCTAssertEqual(history[0].lastEpoch, StatsStore.localMidnight(5) + 3600)
+        XCTAssertEqual(history[0].token, 2000)
+        XCTAssertEqual(history[1].firstEpoch, StatsStore.localMidnight(3) + 3600)
+        XCTAssertEqual(history[1].lastEpoch, StatsStore.localMidnight(1) + 3600)
+        XCTAssertEqual(history[1].token, 30300)
+
+        // 任意窗口统计：近 3 天（含昨天）= model-A 两行 30300
+        XCTAssertEqual(store.queryWindowStats(daysAgoFrom: 3, daysAgoTo: 1)?.total, 30300)
+        XCTAssertEqual(store.queryWindowStats(daysAgoFrom: 3, daysAgoTo: 1)?.reqs, 2)
+        // 窗口外（5 天前）不计入
+        XCTAssertEqual(store.queryWindowStats(daysAgoFrom: 6, daysAgoTo: 4)?.total, 2000)
+
+        // 窗口日序列：日期升序、只含窗口内有数据的日期
+        let daily = store.queryDailyTokensBetween(daysAgoFrom: 5, daysAgoTo: 1)
+        XCTAssertEqual(daily.map(\.date), [
+            StatsStore.dayString(fromEpoch: StatsStore.localMidnight(5)),
+            StatsStore.dayString(fromEpoch: StatsStore.localMidnight(3)),
+            StatsStore.dayString(fromEpoch: StatsStore.localMidnight(1)),
+        ])
+        XCTAssertEqual(daily.map(\.token), [2000, 300, 30000])
     }
 
     func testSyncIdempotentAcrossRepeats() throws {

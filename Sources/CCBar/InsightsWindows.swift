@@ -1,6 +1,7 @@
 import Cocoa
 import SwiftUI
 import Charts
+import CoreImage
 
 // MARK: - 洞察中心（费用 / 洞察 / 分享 / 渠道 / 流水）
 //
@@ -82,6 +83,15 @@ struct HeatCell: Identifiable {
     let token: Int64
 }
 
+/// 模型编年史条目：首用/末用时间与累计 token
+struct ModelMilestone: Identifiable {
+    let id = UUID()
+    let model: String
+    let firstEpoch: Int64
+    let lastEpoch: Int64
+    let token: Int64
+}
+
 /// app_type 原始值 → 展示名
 func appDisplayName(_ raw: String) -> String {
     switch raw {
@@ -111,6 +121,7 @@ final class InsightsViewModel: ObservableObject {
     @Published var peak: (date: String, token: Int64)?
     @Published var peakHour: Int?
     @Published var topModel: (model: String, token: Int64)?
+    @Published var modelHistory: [ModelMilestone] = []
     @Published var appPoints: [AppPoint] = []
     @Published var compDaily: [CompPoint] = []
     @Published var weekdayTotals: [Int64] = Array(repeating: 0, count: 7)   // 周一..周日
@@ -156,6 +167,7 @@ final class InsightsViewModel: ObservableObject {
         var peak: (date: String, token: Int64)?
         var peakHour: Int?
         var topModel: (model: String, token: Int64)?
+        var modelHistory: [ModelMilestone] = []
         var appPoints: [AppPoint] = []
         var compDaily: [CompPoint] = []
         var weekdayTotals: [Int64] = Array(repeating: 0, count: 7)
@@ -203,6 +215,10 @@ final class InsightsViewModel: ObservableObject {
         let hist = store.queryHourHistogram(days: 30)
         s.peakHour = hist.max { $0.value < $1.value }?.key
         s.topModel = store.queryTopModel(days: 30)
+        s.modelHistory = store.queryModelHistory().map {
+            ModelMilestone(model: $0.model, firstEpoch: $0.firstEpoch,
+                           lastEpoch: $0.lastEpoch, token: $0.token)
+        }
         s.totalAll = store.queryTotalStats()?.total ?? 0
         // 构成/应用/星期/热力/月度预测
         s.appPoints = store.queryAppDaily(days: 30).map {
@@ -271,6 +287,7 @@ final class InsightsViewModel: ObservableObject {
         peak = s.peak
         peakHour = s.peakHour
         topModel = s.topModel
+        modelHistory = s.modelHistory
         appPoints = s.appPoints
         compDaily = s.compDaily
         weekdayTotals = s.weekdayTotals
@@ -503,7 +520,46 @@ struct InsightsPageView: View {
             pageCard(L("近 90 天用量热力图")) {
                 heatmapGrid
             }
+
+            pageCard(L("模型编年史")) {
+                modelChronicle
+            }
         }
+    }
+
+    @ViewBuilder
+    private var modelChronicle: some View {
+        if vm.modelHistory.isEmpty {
+            mutedHint(L("暂无数据"))
+        } else {
+            VStack(spacing: 8) {
+                ForEach(vm.modelHistory) { m in
+                    HStack(spacing: 8) {
+                        Text(m.model)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(Color(nsColor: Design.textPrimary))
+                            .lineLimit(1)
+                        Text("\(shortDate(m.firstEpoch)) → \(shortDate(m.lastEpoch))")
+                            .font(.system(size: 10).monospacedDigit())
+                            .foregroundColor(Color(nsColor: Design.textMuted))
+                        Spacer()
+                        Text(Design.formatTokens(m.token))
+                            .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                            .foregroundColor(Color(nsColor: Design.dataHighlightColor))
+                            .frame(width: 84, alignment: .trailing)
+                    }
+                }
+            }
+        }
+    }
+
+    /// 短日期：同年 MM-dd，跨年 yy-MM-dd
+    private func shortDate(_ epoch: Int64) -> String {
+        let d = Date(timeIntervalSince1970: TimeInterval(epoch))
+        let fmt = DateFormatter()
+        fmt.dateFormat = Calendar.current.component(.year, from: d) == Calendar.current.component(.year, from: Date())
+            ? "MM-dd" : "yy-MM-dd"
+        return fmt.string(from: d)
     }
 
     private var weekdayChart: some View {
@@ -612,12 +668,13 @@ struct InsightsPageView: View {
 // MARK: - 分享卡片
 
 struct UsageShareCard: View {
-    let today: Int64
-    let week: Int64
-    let month: Int64
-    let total: Int64
+    let title: String               // 右上角标题（战报 / 周报）
+    let dateText: String            // 标题下的日期或日期区间
+    let bigLabel: String            // 大数字标签
+    let bigValue: String            // 大数字（已格式化）
     let trend: [ChartEntry]
-    let dateText: String
+    let stats: [(String, String)]   // 底部三格（标题, 值）
+    let qrURL = "https://github.com/bmfish/ccbar-native"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -631,15 +688,15 @@ struct UsageShareCard: View {
                         .foregroundColor(Color.white.opacity(0.55))
                 }
                 Spacer()
-                Text(L("AI 用量战报"))
+                Text(title)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(Color.white.opacity(0.65))
             }
 
-            Text(L("今日消耗"))
+            Text(bigLabel)
                 .font(.system(size: 13))
                 .foregroundColor(Color.white.opacity(0.75))
-            Text(Design.formatTokens(today))
+            Text(bigValue)
                 .font(.system(size: 44, weight: .heavy).monospacedDigit())
                 .foregroundColor(Color(nsColor: Theme.current.bigNumberColor))
 
@@ -670,16 +727,20 @@ struct UsageShareCard: View {
             }
 
             HStack(spacing: 0) {
-                shareStat(L("近 7 天"), Design.formatTokens(week))
-                shareStat(L("近 30 天"), Design.formatTokens(month))
-                shareStat(L("累计"), Design.formatTokens(total))
+                ForEach(Array(stats.enumerated()), id: \.offset) { _, s in
+                    shareStat(s.0, s.1)
+                }
             }
 
             Divider().overlay(Color.white.opacity(0.12))
 
-            Text("CCBar · github.com/bmfish/ccbar-native")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(Color.white.opacity(0.4))
+            HStack(alignment: .bottom) {
+                Text("CCBar · github.com/bmfish/ccbar-native")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(Color.white.opacity(0.4))
+                Spacer()
+                qrCode
+            }
         }
         .padding(22)
         .frame(width: 460)
@@ -687,6 +748,19 @@ struct UsageShareCard: View {
             .fill(Color(nsColor: NSColor(red: 0.07, green: 0.07, blue: 0.09, alpha: 1.0))))
         .overlay(RoundedRectangle(cornerRadius: 16)
             .stroke(Color.white.opacity(0.10)))
+    }
+
+    /// 页脚二维码（指向 GitHub 仓库），白底圆角保证深浅背景都可扫
+    @ViewBuilder
+    private var qrCode: some View {
+        if let qr = QRCodeMaker.image(for: qrURL, pointSize: 46) {
+            Image(nsImage: qr)
+                .interpolation(.none)
+                .resizable()
+                .frame(width: 46, height: 46)
+                .padding(4)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white))
+        }
     }
 
     private func shareStat(_ title: String, _ value: String) -> some View {
@@ -710,12 +784,16 @@ struct SharePage: View {
         let fmt = DateFormatter()
         fmt.dateStyle = .medium
         return UsageShareCard(
-            today: vm.shareToday,
-            week: vm.shareWeek,
-            month: vm.shareMonth,
-            total: vm.shareTotal,
+            title: L("AI 用量战报"),
+            dateText: fmt.string(from: Date()),
+            bigLabel: L("今日消耗"),
+            bigValue: Design.formatTokens(vm.shareToday),
             trend: vm.weekTrend,
-            dateText: fmt.string(from: Date()))
+            stats: [
+                (L("近 7 天"), Design.formatTokens(vm.shareWeek)),
+                (L("近 30 天"), Design.formatTokens(vm.shareMonth)),
+                (L("累计"), Design.formatTokens(vm.shareTotal)),
+            ])
     }
 
     var body: some View {
@@ -737,9 +815,7 @@ struct SharePage: View {
     }
 
     private func renderPNG() -> NSImage? {
-        let renderer = ImageRenderer(content: card)
-        renderer.scale = 2
-        return renderer.nsImage
+        ShareCardRenderer.image(card, width: 460)
     }
 
     private func savePNG() {
@@ -764,6 +840,112 @@ struct SharePage: View {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             copied = false
+        }
+    }
+}
+
+// MARK: - 二维码（CoreImage CIQRCodeGenerator，无第三方依赖）
+
+enum QRCodeMaker {
+    /// 生成二维码图片；pointSize 为最终输出边长（pt）
+    static func image(for string: String, pointSize: CGFloat) -> NSImage? {
+        guard let data = string.data(using: .utf8),
+              let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+        filter.setValue(data, forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let output = filter.outputImage else { return nil }
+        let scale = pointSize / output.extent.width
+        let rep = NSCIImageRep(ciImage: output.transformed(by: CGAffineTransform(scaleX: scale, y: scale)))
+        let img = NSImage(size: NSSize(width: pointSize, height: pointSize))
+        img.addRepresentation(rep)
+        return img
+    }
+}
+
+// MARK: - 卡片离屏渲染
+
+enum ShareCardRenderer {
+    /// 用 NSHostingView 位图缓存渲染卡片（ImageRenderer 在无窗口环境出黑图，位图缓存两条路都稳）
+    static func image<V: View>(_ card: V, width: CGFloat) -> NSImage? {
+        let hosting = NSHostingView(rootView: card.frame(width: width))
+        hosting.frame = NSRect(x: 0, y: 0, width: width, height: 10)
+        hosting.layoutSubtreeIfNeeded()
+        let size = hosting.fittingSize
+        hosting.frame = NSRect(x: 0, y: 0, width: width, height: size.height)
+        hosting.layoutSubtreeIfNeeded()
+        guard let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { return nil }
+        hosting.cacheDisplay(in: hosting.bounds, to: rep)
+        let img = NSImage(size: hosting.bounds.size)
+        img.addRepresentation(rep)
+        return img
+    }
+
+    static func pngData<V: View>(_ card: V, width: CGFloat) -> Data? {
+        guard let img = image(card, width: width), let tiff = img.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        return rep.representation(using: .png, properties: [:])
+    }
+}
+
+// MARK: - 周报自动生成
+
+/// 每周一自动生成上周（周一 ~ 周日）用量周报 PNG，存到 ~/Documents/CCBar 周报/。
+/// 幂等键 = 报告周的周一日期（lastWeeklyReportWeek），同周重复触发不重复生成。
+enum WeeklyReport {
+    /// 上周窗口（daysAgo 均含，7 = 上周一 … 1 = 上周日，不含今日实时）
+    static let windowFrom = 7, windowTo = 1
+
+    @MainActor
+    @discardableResult
+    static func generateIfNeeded(store: StatsStore, now: Date = Date()) -> String? {
+        let cal = Calendar.current
+        guard cal.component(.weekday, from: now) == 2 else { return nil }   // 只在周一生成
+        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        let weekKey = fmt.string(from: now)
+        let defaults = UserDefaults.standard
+        guard defaults.string(forKey: "lastWeeklyReportWeek") != weekKey else { return nil }
+
+        guard let stats = store.queryWindowStats(daysAgoFrom: windowFrom, daysAgoTo: windowTo),
+              stats.total > 0 else {
+            defaults.set(weekKey, forKey: "lastWeeklyReportWeek")   // 没数据也记账，避免反复查
+            return nil
+        }
+        let daily = store.queryDailyTokensBetween(daysAgoFrom: windowFrom, daysAgoTo: windowTo)
+        let peakToken = daily.map(\.token).max() ?? 0
+
+        let dateFmt = DateFormatter(); dateFmt.dateStyle = .medium; dateFmt.timeStyle = .none
+        let from = cal.date(byAdding: .day, value: -windowFrom, to: cal.startOfDay(for: now))!
+        let to = cal.date(byAdding: .day, value: -windowTo, to: cal.startOfDay(for: now))!
+
+        let card = UsageShareCard(
+            title: L("AI 用量周报"),
+            dateText: "\(dateFmt.string(from: from)) ~ \(dateFmt.string(from: to))",
+            bigLabel: L("周消耗"),
+            bigValue: Design.formatTokens(stats.total),
+            trend: daily.map { ChartEntry(label: String($0.date.suffix(5)), value: $0.token) },
+            stats: [
+                (L("日均"), Design.formatTokens(stats.total / 7)),
+                (L("峰值"), Design.formatTokens(peakToken)),
+                (L("累计"), Design.formatTokens(stats.total)),
+            ])
+
+        guard let png = ShareCardRenderer.pngData(card, width: 460) else {
+            NSLog("[weekly] 周报渲染失败")
+            return nil
+        }
+
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("CCBar 周报", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("ccbar-weekly-\(weekKey).png")
+        do {
+            try png.write(to: url)
+            defaults.set(weekKey, forKey: "lastWeeklyReportWeek")
+            NSLog("[weekly] 周报已生成 \(url.path)")
+            return url.path
+        } catch {
+            NSLog("[weekly] 周报写入失败 \(error)")
+            return nil
         }
     }
 }

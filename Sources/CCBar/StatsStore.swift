@@ -1070,6 +1070,50 @@ final class StatsStore {
         return (monthStats.total + today.total, daysElapsed, daysInMonth)
     }
 
+    /// 模型编年史：每个模型的首用/末用 epoch 与总 token，按首用时间升序
+    func queryModelHistory(limit: Int = 12) -> [(model: String, firstEpoch: Int64, lastEpoch: Int64, token: Int64)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var result: [(model: String, firstEpoch: Int64, lastEpoch: Int64, token: Int64)] = []
+        forEachRow("""
+        SELECT model, MIN(created_at), MAX(created_at),
+               COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0) AS t
+        FROM usage_log
+        GROUP BY model ORDER BY MIN(created_at) LIMIT \(max(1, limit))
+        """) { stmt in
+            result.append((String(cString: sqlite3_column_text(stmt, 0)),
+                           sqlite3_column_int64(stmt, 1), sqlite3_column_int64(stmt, 2),
+                           sqlite3_column_int64(stmt, 3)))
+        }
+        return result
+    }
+
+    /// 任意历史窗口（daysAgoFrom ~ daysAgoTo，均含）的日 token 序列，日期升序（不含今日实时）
+    func queryDailyTokensBetween(daysAgoFrom: Int, daysAgoTo: Int) -> [(date: String, token: Int64)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var result: [(date: String, token: Int64)] = []
+        let from = Self.dayString(fromEpoch: Self.localMidnight(daysAgoFrom))
+        let to = Self.dayString(fromEpoch: Self.localMidnight(daysAgoTo))
+        forEachRowText("""
+        SELECT date, COALESCE(SUM(input + output + cache_create + cache_read), 0)
+        FROM daily_agg WHERE date >= '\(from)' AND date <= '\(to)' GROUP BY date ORDER BY date
+        """) { stmt in
+            result.append((String(cString: sqlite3_column_text(stmt, 0)), sqlite3_column_int64(stmt, 1)))
+        }
+        return result
+    }
+
+    /// 任意历史窗口（daysAgoFrom ~ daysAgoTo，均含）的完整统计，不含今日实时
+    func queryWindowStats(daysAgoFrom: Int, daysAgoTo: Int) -> DayStats? {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return nil }
+        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        let from = fmt.string(from: Date(timeIntervalSince1970: TimeInterval(Self.localMidnight(daysAgoFrom))))
+        let to = fmt.string(from: Date(timeIntervalSince1970: TimeInterval(Self.localMidnight(daysAgoTo))))
+        return dailyAggSum(fromDay: from, toDay: to)
+    }
+
     /// 近 N 天（含今天）使用量最大的模型
     func queryTopModel(days: Int) -> (model: String, token: Int64)? {
         lock.lock(); defer { lock.unlock() }

@@ -7,6 +7,35 @@ import SwiftUI
 @MainActor
 final class InsightsRenderTests: XCTestCase {
 
+    func testWeeklyReportGuard() throws {
+        // 二维码必须能出图（分享卡页脚用）
+        let qr = QRCodeMaker.image(for: "https://github.com/bmfish/ccbar-native", pointSize: 46)
+        XCTAssertNotNil(qr)
+        XCTAssertEqual(qr?.size.width, 46)
+
+        // 分享卡整卡离屏渲染必须出真实内容（防 ImageRenderer 式黑图）
+        let card = UsageShareCard(
+            title: L("AI 用量周报"), dateText: "9月28日 ~ 10月4日",
+            bigLabel: L("周消耗"), bigValue: "1.23亿",
+            trend: (0..<7).map { ChartEntry(label: "09-\($0)", value: Int64($0 + 1) * 100) },
+            stats: [(L("日均"), "0.2亿"), (L("峰值"), "0.5亿"), (L("累计"), "1.23亿")])
+        let png = ShareCardRenderer.pngData(card, width: 460)
+        XCTAssertNotNil(png)
+        XCTAssertGreaterThan(png?.count ?? 0, 5000, "渲染出的 PNG 太小，疑似黑图/空白")
+        try png?.write(to: URL(fileURLWithPath: "/tmp/insights-page-weekly.png"))   // 本地目检用
+
+        // 非周一直接跳过
+        let store = StatsStore(storePath: NSTemporaryDirectory() + "ccbar-weekly-\(UUID().uuidString).db")
+        defer { store.close() }
+        let wednesday = Date(timeIntervalSince1970: 1_791_360_000)   // 2026-10-07（周三）
+        XCTAssertNil(WeeklyReport.generateIfNeeded(store: store, now: wednesday))
+
+        // 周一 + 空库：无数据不产图，但记账幂等（第二次直接跳过）
+        let monday = Date(timeIntervalSince1970: 1_791_187_200)      // 2026-10-05（周一）
+        XCTAssertNil(WeeklyReport.generateIfNeeded(store: store, now: monday))
+        XCTAssertNil(WeeklyReport.generateIfNeeded(store: store, now: monday))
+    }
+
     func testTimelineGrouping() throws {
         // 复刻线上串组场景：20/19/12/11 点的行混杂的 DESC 序列
         let cal = Calendar.current
@@ -68,7 +97,7 @@ final class InsightsRenderTests: XCTestCase {
 
         let pages: [(String, AnyView, CGFloat)] = [
             ("cost", AnyView(CostPage(vm: vm)), 500),
-            ("insights", AnyView(InsightsPageView(vm: vm)), 1150),
+            ("insights", AnyView(InsightsPageView(vm: vm)), 1350),
             ("share", AnyView(SharePage(vm: vm)), 500),
             ("channels", AnyView(ChannelsPage(vm: vm)), 1250),
             ("timeline", AnyView(TimelinePage(vm: vm)), 500),
