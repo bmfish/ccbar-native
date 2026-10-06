@@ -30,6 +30,29 @@ final class ThemeTests: XCTestCase {
         XCTAssertEqual(bad?.greenComponent, 1.0)
     }
 
+    func testUpsertDedupeAndRename() {
+        // 清掉此前失败运行可能留下的脏数据
+        Theme.customThemes = Theme.customThemes.filter { $0.name != "去重测试" && $0.name != "改名主题" }
+        let a = Theme.fromJSON(Data("{\"format\":\"ccbar-theme\",\"name\":\"去重测试\",\"accent\":\"#123456\"}".utf8))!
+        let kept = Theme.upsertCustom(a)
+        XCTAssertEqual(Theme.customThemes.filter { $0.name == "去重测试" }.count, 1)
+
+        // 同名再导入 → 覆盖更新而非新增（去重）
+        var again = a
+        again.accentHex = "#ABCDEF"
+        let updated = Theme.upsertCustom(again)
+        XCTAssertEqual(updated.id, kept.id, "同名覆盖保留原 id")
+        XCTAssertEqual(Theme.customThemes.filter { $0.name == "去重测试" }.count, 1)
+        XCTAssertEqual(Theme.customThemes.first { $0.id == kept.id }?.accentHex, "#ABCDEF")
+
+        // 重命名
+        Theme.renameCustom(id: kept.id, to: "改名主题")
+        XCTAssertEqual(Theme.customThemes.first { $0.id == kept.id }?.name, "改名主题")
+
+        // 清理，不污染真实偏好
+        Theme.customThemes = Theme.customThemes.filter { $0.id != kept.id }
+    }
+
     func testJSONPackRoundTrip() throws {
         let original = Theme.crt
         let data = try JSONEncoder().encode(original)

@@ -314,13 +314,34 @@ final class SettingsViewModel: ObservableObject {
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url,
               let data = try? Data(contentsOf: url) else { return }
-        guard let imported = Theme.fromJSON(data) else {
+        guard var imported = Theme.fromJSON(data) else {
             showAlert(L("导入失败"), L("不是有效的 ccBar 主题包"))
             return
         }
-        Theme.addCustom(imported)
+        let existed = Theme.customThemes.contains { $0.name == imported.name }
+        imported = Theme.upsertCustom(imported)
         theme = imported
-        showAlert(L("导入成功"), String(format: L("主题「%@」已加入可选列表"), imported.name))
+        showAlert(L("导入成功"),
+                  String(format: L(existed ? "主题「%@」已覆盖更新" : "主题「%@」已加入可选列表"),
+                         imported.name))
+    }
+
+    /// 重命名当前选中的自定义主题（弹窗带输入框）
+    func renameTheme() {
+        guard themeIsCustom else { return }
+        let alert = NSAlert()
+        alert.messageText = L("重命名主题")
+        alert.informativeText = theme.name
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = theme.name
+        alert.accessoryView = field
+        alert.addButton(withTitle: L("确定"))
+        alert.addButton(withTitle: L("取消"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let newName = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !newName.isEmpty else { return }
+        Theme.renameCustom(id: theme.id, to: newName)
+        theme = Theme.find(id: theme.id) ?? theme
     }
 }
 
@@ -386,6 +407,8 @@ struct SettingsRootView: View {
             Button(L("导出")) { vm.exportTheme() }
                 .font(.system(size: 11))
             if vm.themeIsCustom {
+                Button(L("重命名")) { vm.renameTheme() }
+                    .font(.system(size: 11))
                 Button(L("删除")) { vm.deleteTheme() }
                     .font(.system(size: 11))
             }

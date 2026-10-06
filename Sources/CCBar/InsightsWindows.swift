@@ -34,6 +34,7 @@ enum InsightsPage: String, CaseIterable, Identifiable {
 struct ChannelPoint: Identifiable {
     let id = UUID()
     let date: String
+    let day: Date
     let source: String
     let name: String
     let token: Int64
@@ -42,6 +43,7 @@ struct ChannelPoint: Identifiable {
 struct AppPoint: Identifiable {
     let id = UUID()
     let date: String
+    let day: Date
     let app: String
     let name: String
     let token: Int64
@@ -50,6 +52,7 @@ struct AppPoint: Identifiable {
 struct CompPoint: Identifiable {
     let id = UUID()
     let date: String
+    let day: Date
     let input: Int64
     let output: Int64
     let cacheRead: Int64
@@ -57,11 +60,18 @@ struct CompPoint: Identifiable {
     var total: Int64 { input + output + cacheRead + cacheCreate }
 }
 
+/// 费用走势点（X 用时间标度）
+struct CostPoint: Identifiable {
+    let id = UUID()
+    let day: Date
+    let cents: Int64
+}
+
 /// 构成堆叠图的展开切片（预先拍平，图表表达式保持轻量）
 struct CompSlice: Identifiable {
     let id = UUID()
     let name: String
-    let date: String
+    let day: Date
     let token: Int64
 }
 
@@ -91,7 +101,7 @@ final class InsightsViewModel: ObservableObject {
     @Published var costToday = 0.0
     @Published var cost7 = 0.0
     @Published var cost30 = 0.0
-    @Published var costDaily: [ChartEntry] = []       // 近 30 天，value = 美分（避免动 ChartEntry 的 Int64）
+    @Published var costDaily: [CostPoint] = []        // 近 30 天，cents = 美分
     @Published var costModels: [(model: String, cost: Double, token: Int64)] = []
     // 洞察
     @Published var streak = 0
@@ -138,7 +148,7 @@ final class InsightsViewModel: ObservableObject {
 
     private struct Snapshot {
         var costToday = 0.0, cost7 = 0.0, cost30 = 0.0
-        var costDaily: [ChartEntry] = []
+        var costDaily: [CostPoint] = []
         var costModels: [(model: String, cost: Double, token: Int64)] = []
         var streak = 0
         var thisWeek: Int64 = 0, lastWeek: Int64 = 0
@@ -170,19 +180,18 @@ final class InsightsViewModel: ObservableObject {
         s.cost7 = store.queryCost(days: 7)
         s.cost30 = store.queryCost(days: 30)
         let raw = store.queryCostDaily(days: 30)
-        // 补齐日期空洞，图表时间轴连续
+        // 补齐日期空洞，图表时间轴连续（X 轴用时间标度，轴刻度按需稀疏）
         let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
         let cal = Calendar.current
         var byDate: [String: Double] = [:]
         for r in raw { byDate[r.date] = r.cost }
-        var entries: [ChartEntry] = []
+        var points: [CostPoint] = []
         for d in 0..<30 {
-            guard let date = cal.date(byAdding: .day, value: -29 + d, to: cal.startOfDay(for: Date())) else { continue }
-            let key = fmt.string(from: date)
-            entries.append(ChartEntry(label: String(key.suffix(5)),
-                                      value: Int64((byDate[key] ?? 0) * 100)))
+            guard let day = cal.date(byAdding: .day, value: -29 + d, to: cal.startOfDay(for: Date())) else { continue }
+            let key = fmt.string(from: day)
+            points.append(CostPoint(day: day, cents: Int64((byDate[key] ?? 0) * 100)))
         }
-        s.costDaily = entries
+        s.costDaily = points
         s.costModels = store.queryCostByModel(days: 30)
         // 洞察页
         s.streak = store.queryStreak()
@@ -197,10 +206,12 @@ final class InsightsViewModel: ObservableObject {
         s.totalAll = store.queryTotalStats()?.total ?? 0
         // 构成/应用/星期/热力/月度预测
         s.appPoints = store.queryAppDaily(days: 30).map {
-            AppPoint(date: $0.date, app: $0.app, name: appDisplayName($0.app), token: $0.token)
+            AppPoint(date: $0.date, day: fmt.date(from: $0.date) ?? Date(),
+                     app: $0.app, name: appDisplayName($0.app), token: $0.token)
         }
         s.compDaily = store.queryCompositionDaily(days: 30).map {
-            CompPoint(date: $0.date, input: $0.input, output: $0.output,
+            CompPoint(date: $0.date, day: fmt.date(from: $0.date) ?? Date(),
+                      input: $0.input, output: $0.output,
                       cacheRead: $0.cacheRead, cacheCreate: $0.cacheCreate)
         }
         let tokens91 = store.queryDailyTokens(days: 91)
@@ -236,7 +247,8 @@ final class InsightsViewModel: ObservableObject {
         s.shareTotal = store.queryTotalStats()?.total ?? 0
         // 渠道页
         s.channelPoints = store.queryChannelDaily(days: 30).map {
-            ChannelPoint(date: $0.date, source: $0.source,
+            ChannelPoint(date: $0.date, day: fmt.date(from: $0.date) ?? Date(),
+                         source: $0.source,
                          name: AppDelegate.shared?.sourceDisplayName($0.source) ?? $0.source,
                          token: $0.token)
         }
@@ -352,10 +364,10 @@ struct CostPage: View {
 
                 pageCard(L("近 30 天费用走势")) {
                     Chart {
-                        ForEach(vm.costDaily, id: \.label) { e in
+                        ForEach(vm.costDaily) { p in
                             BarMark(
-                                x: .value(L("日期"), e.label),
-                                y: .value(L("费用"), Double(e.value) / 100)
+                                x: .value(L("日期"), p.day, unit: .day),
+                                y: .value(L("费用"), Double(p.cents) / 100)
                             )
                             .foregroundStyle(Color(nsColor: Design.brandColor).opacity(0.85))
                             .cornerRadius(2)
@@ -371,7 +383,7 @@ struct CostPage: View {
                             }
                         }
                     }
-                    .chartXAxis { sparseXAxis() }
+                    .chartXAxis { dateXAxis() }
                     .frame(height: 140)
                 }
 
@@ -538,13 +550,9 @@ struct InsightsPageView: View {
     private func heatColor(_ token: Int64, maxToken: Int64) -> Color {
         guard token >= 0 else { return Color.white.opacity(0.04) }   // 占位
         guard token > 0 else { return Color.white.opacity(0.08) }    // 无用量
-        let base = Color(nsColor: Theme.current.accent)
-        switch Double(token) / Double(maxToken) {
-        case ..<0.25: return base.opacity(0.30)
-        case ..<0.5: return base.opacity(0.50)
-        case ..<0.75: return base.opacity(0.72)
-        default: return base.opacity(0.95)
-        }
+        // 用量色阶（绿→黄→橙→红），与菜单栏阈值变色同一套视觉语言
+        let progress = min(Double(token) / Double(maxToken), 1.0)
+        return Color(nsColor: Design.usageColor(progress: progress))
     }
 
     private var weekDeltaBadge: String? {
@@ -782,7 +790,7 @@ struct ChannelsPage: View {
             Chart {
                 ForEach(vm.channelPoints) { p in
                     AreaMark(
-                        x: .value(L("日期"), p.date),
+                        x: .value(L("日期"), p.day, unit: .day),
                         y: .value(L("Token"), p.token),
                         series: .value(L("渠道"), p.name)
                     )
@@ -792,7 +800,7 @@ struct ChannelsPage: View {
             }
             .chartLegend(position: .top, alignment: .leading)
             .chartYAxis { tokenYAxis() }
-            .chartXAxis { sparseXAxis() }
+            .chartXAxis { dateXAxis() }
             .frame(height: 200)
         }
     }
@@ -828,7 +836,7 @@ struct ChannelsPage: View {
             Chart {
                 ForEach(vm.appPoints) { p in
                     AreaMark(
-                        x: .value(L("日期"), p.date),
+                        x: .value(L("日期"), p.day, unit: .day),
                         y: .value(L("Token"), p.token),
                         series: .value(L("应用"), p.name)
                     )
@@ -838,7 +846,7 @@ struct ChannelsPage: View {
             }
             .chartLegend(position: .top, alignment: .leading)
             .chartYAxis { tokenYAxis() }
-            .chartXAxis { sparseXAxis() }
+            .chartXAxis { dateXAxis() }
             .frame(height: 160)
         }
     }
@@ -848,7 +856,7 @@ struct ChannelsPage: View {
             Chart {
                 ForEach(compSlices) { slice in
                     AreaMark(
-                        x: .value(L("日期"), slice.date),
+                        x: .value(L("日期"), slice.day, unit: .day),
                         y: .value(L("Token"), slice.token),
                         series: .value(L("构成"), slice.name)
                     )
@@ -858,7 +866,7 @@ struct ChannelsPage: View {
             }
             .chartLegend(position: .top, alignment: .leading)
             .chartYAxis { tokenYAxis() }
-            .chartXAxis { sparseXAxis() }
+            .chartXAxis { dateXAxis() }
             .frame(height: 160)
         }
     }
@@ -869,7 +877,7 @@ struct ChannelsPage: View {
         var out: [CompSlice] = []
         for (i, name) in names.enumerated() {
             for p in vm.compDaily {
-                out.append(CompSlice(name: name, date: p.date, token: p[keyPath: keys[i]]))
+                out.append(CompSlice(name: name, day: p.day, token: p[keyPath: keys[i]]))
             }
         }
         return out
@@ -880,7 +888,7 @@ struct ChannelsPage: View {
             Chart {
                 ForEach(vm.compDaily) { p in
                     LineMark(
-                        x: .value(L("日期"), p.date),
+                        x: .value(L("日期"), p.day, unit: .day),
                         y: .value(L("命中率"), hitRate(p))
                     )
                     .interpolationMethod(.catmullRom)
@@ -888,6 +896,7 @@ struct ChannelsPage: View {
                 }
             }
             .chartYScale(domain: 0...100)
+            .chartXAxis { dateXAxis() }
             .chartYAxis {
                 AxisMarks(position: .trailing) { value in
                     AxisGridLine()
@@ -911,12 +920,30 @@ struct ChannelsPage: View {
 
 struct TimelinePage: View {
     @ObservedObject var vm: InsightsViewModel
+    @State private var sourceFilter = "all"
+    @State private var modelFilter = "all"
+
+    /// 过滤后的流水（渠道/模型）
+    private var filtered: [(time: Int, model: String, source: String, token: Int64, cost: Double)] {
+        vm.timeline.filter { row in
+            (sourceFilter == "all" || row.source == sourceFilter) &&
+            (modelFilter == "all" || row.model == modelFilter)
+        }
+    }
+
+    private var sourceOptions: [String] {
+        ["all"] + Set(vm.timeline.map(\.source)).sorted()
+    }
+
+    private var modelOptions: [String] {
+        ["all"] + Set(vm.timeline.map(\.model)).sorted()
+    }
 
     /// 按小时分组（数据已是最新在前）
     private var grouped: [(hour: Int, rows: [(time: Int, model: String, source: String, token: Int64, cost: Double)])] {
         var out: [(hour: Int, rows: [(time: Int, model: String, source: String, token: Int64, cost: Double)])] = []
         var buckets: [Int: (Int, [(time: Int, model: String, source: String, token: Int64, cost: Double)])] = [:]
-        for row in vm.timeline {
+        for row in filtered {
             let h = Calendar.current.component(.hour, from: Date(timeIntervalSince1970: TimeInterval(row.time)))
             if buckets[h] == nil {
                 buckets[h] = (out.count, [])
@@ -928,8 +955,38 @@ struct TimelinePage: View {
     }
 
     var body: some View {
+        VStack(spacing: 8) {
+            filtersBar
+            detailList
+        }
+    }
+
+    private var filtersBar: some View {
+        HStack(spacing: 10) {
+            Text(L("筛选"))
+                .font(.system(size: 11))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+            Picker("", selection: $sourceFilter) {
+                ForEach(sourceOptions, id: \.self) { option in
+                    Text(option == "all" ? L("全部渠道") : (AppDelegate.shared?.sourceDisplayName(option) ?? option)).tag(option)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 130)
+            Picker("", selection: $modelFilter) {
+                ForEach(modelOptions, id: \.self) { option in
+                    Text(option == "all" ? L("全部模型") : option).tag(option)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 170)
+            Spacer()
+        }
+    }
+
+    private var detailList: some View {
         Group {
-            if vm.timeline.isEmpty {
+            if filtered.isEmpty {
                 VStack(spacing: 8) {
                     mutedHint(L("今日暂无请求"))
                     Text(L("去干活吧，流水会记住每一笔 💪"))
@@ -939,27 +996,27 @@ struct TimelinePage: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(grouped, id: \.hour) { group in
-                            HStack {
-                                Text(String(format: "%02d:00 – %02d:00", group.hour, (group.hour + 1) % 24))
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundColor(Color(nsColor: Design.textMuted))
-                                Spacer()
-                                Text("\(group.rows.count) " + L("次"))
-                                    .font(.system(size: 10).monospacedDigit())
-                                    .foregroundColor(Color(nsColor: Design.textMuted))
-                            }
-                            .padding(.vertical, 8)
-                            .background(Color.white.opacity(0.001))   // 让整行可点区域稳定
-                            ForEach(Array(group.rows.enumerated()), id: \.offset) { _, row in
-                                timelineRow(row)
-                            }
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(grouped, id: \.hour) { group in
+                        HStack {
+                            Text(String(format: "%02d:00 – %02d:00", group.hour, (group.hour + 1) % 24))
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(Color(nsColor: Design.textMuted))
+                            Spacer()
+                            Text("\(group.rows.count) " + L("次"))
+                                .font(.system(size: 10).monospacedDigit())
+                                .foregroundColor(Color(nsColor: Design.textMuted))
+                        }
+                        .padding(.vertical, 8)
+                        .background(Color.white.opacity(0.001))   // 让整行可点区域稳定
+                        ForEach(Array(group.rows.enumerated()), id: \.offset) { _, row in
+                            timelineRow(row)
                         }
                     }
-                    .padding(.bottom, 12)
                 }
+                .padding(.bottom, 12)
             }
+        }
         }
     }
 
@@ -1015,15 +1072,12 @@ private func tokenYAxis() -> some AxisContent {
     }
 }
 
-/// 分类轴只留 5 个刻度，避免日期标签挤成省略号
-private func sparseXAxis() -> some AxisContent {
-    AxisMarks(values: .automatic(desiredCount: 5)) { value in
-        AxisValueLabel {
-            if let s = value.as(String.self) {
-                Text(s).font(.system(size: 9).monospacedDigit())
-                    .foregroundColor(Color(nsColor: Design.textMuted))
-            }
-        }
+/// 时间轴刻度：自动稀疏（分类轴不理会 desiredCount，时间轴真支持），格式跟随系统语言
+private func dateXAxis(count: Int = 5) -> some AxisContent {
+    AxisMarks(values: .automatic(desiredCount: count)) { value in
+        AxisGridLine()
+        AxisValueLabel(format: .dateTime.month().day(), centered: true)
+            .font(.system(size: 9).monospacedDigit())
     }
 }
 

@@ -36,7 +36,7 @@ struct Theme: Equatable, Hashable, Identifiable, Codable {
     // ---- JSON 主题包 ----
 
     private enum Keys: String, CodingKey {
-        case format, version, name
+        case format, version, id, name
         case accent, data, bigNumber, trend, models
         case glowRadius, glowAlpha, cardFillAlpha, cardBorderAlpha, separatorAlpha
         case bigNumberWeight, scanlines
@@ -82,13 +82,15 @@ struct Theme: Equatable, Hashable, Identifiable, Codable {
         separatorAlpha = try c.decodeIfPresent(CGFloat.self, forKey: .separatorAlpha) ?? d.separatorAlpha
         bigNumberWeightName = try c.decodeIfPresent(String.self, forKey: .bigNumberWeight) ?? d.bigNumberWeightName
         scanlines = try c.decodeIfPresent(Bool.self, forKey: .scanlines) ?? d.scanlines
-        id = ""
+        // 自定义主题持久化带 id（主题包则由 fromJSON 重发）
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: Keys.self)
         try c.encode("ccbar-theme", forKey: .format)
         try c.encode(1, forKey: .version)
+        try c.encode(id, forKey: .id)
         try c.encode(name, forKey: .name)
         try c.encode(accentHex, forKey: .accent)
         try c.encode(dataHex, forKey: .data)
@@ -183,6 +185,33 @@ struct Theme: Equatable, Hashable, Identifiable, Codable {
         var list = customThemes
         list.removeAll { $0.id == theme.id }
         list.append(theme)
+        customThemes = list
+    }
+
+    /// 导入去重：同名自定义主题直接覆盖（保留原 id），否则新增。返回实际生效的主题。
+    @discardableResult
+    static func upsertCustom(_ theme: Theme) -> Theme {
+        var t = theme
+        if let existing = customThemes.first(where: { $0.name == t.name }) {
+            t.id = existing.id
+            var list = customThemes
+            list.removeAll { $0.id == existing.id }
+            list.append(t)
+            customThemes = list
+        } else {
+            addCustom(t)
+        }
+        return t
+    }
+
+    /// 重命名自定义主题
+    static func renameCustom(id: String, to newName: String) {
+        var list = customThemes
+        guard let idx = list.firstIndex(where: { $0.id == id }) else { return }
+        list[idx].name = newName
+        if list[idx].id == current.id {
+            current = list[idx]   // 保持选中项同步（id 未变，仅刷 UserDefaults 里的名字无副作用）
+        }
         customThemes = list
     }
 

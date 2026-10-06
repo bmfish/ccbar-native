@@ -24,13 +24,14 @@ final class InsightsRenderTests: XCTestCase {
         vm.load(store: store, force: true)
         XCTAssertGreaterThan(vm.totalAll, 0, "VM 应有数据")
 
-        let pages: [(String, AnyView)] = [
-            ("cost", AnyView(CostPage(vm: vm))),
-            ("insights", AnyView(InsightsPageView(vm: vm))),
-            ("share", AnyView(SharePage(vm: vm))),
-            ("channels", AnyView(ChannelsPage(vm: vm))),
-            ("timeline", AnyView(TimelinePage(vm: vm))),
+        let pages: [(String, AnyView, CGFloat)] = [
+            ("cost", AnyView(CostPage(vm: vm)), 500),
+            ("insights", AnyView(InsightsPageView(vm: vm)), 1150),
+            ("share", AnyView(SharePage(vm: vm)), 500),
+            ("channels", AnyView(ChannelsPage(vm: vm)), 1250),
+            ("timeline", AnyView(TimelinePage(vm: vm)), 500),
         ]
+        _ = pages.count
         // 整个根视图（含深色底）包一起渲染
         let root = InsightsRootView(vm: vm).frame(width: 720, height: 500)
         let hosting = NSHostingView(rootView: root)
@@ -48,10 +49,10 @@ final class InsightsRenderTests: XCTestCase {
 
         // 逐页：强制布局后位图缓存
         var rendered = 0
-        for (name, view) in pages {
-            let v = NSHostingView(rootView: view.frame(width: 720, height: 500)
+        for (name, view, height) in pages {
+            let v = NSHostingView(rootView: view.frame(width: 720, height: height)
                 .background(Color(nsColor: Design.backgroundDark)))
-            v.frame = NSRect(x: 0, y: 0, width: 720, height: 500)
+            v.frame = NSRect(x: 0, y: 0, width: 720, height: height)
             v.layoutSubtreeIfNeeded()
             guard let r = v.bitmapImageRepForCachingDisplay(in: v.bounds),
                   let data = {
