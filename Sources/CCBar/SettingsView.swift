@@ -36,6 +36,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var popoverWide = false
     @Published var sources: [SourceRowDraft] = []
     @Published var language: AppLanguage = .system
+    @Published var lastBackupDate = ""
 
     let settings: Settings
     let onSaved: () -> Void
@@ -73,6 +74,7 @@ final class SettingsViewModel: ObservableObject {
         menuEmojiEnabled = settings.menuEmojiEnabled
         popoverWide = settings.popoverWide
         language = AppLanguage(rawValue: UserDefaults.standard.string(forKey: "appLanguage") ?? "") ?? .system
+        lastBackupDate = UserDefaults.standard.string(forKey: "lastAutoBackupDate") ?? ""
 
         let configs = settings.sourceConfigs
         sources = SourceRegistry.adapters.map { adapter in
@@ -254,6 +256,26 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// 当前草稿主题是否为自定义（可删除）
+    var themeIsCustom: Bool { theme.id.hasPrefix("custom-") }
+
+    /// 删除选中的自定义主题（内置主题不可删）
+    func deleteTheme() {
+        guard themeIsCustom else { return }
+        let name = theme.name
+        Theme.customThemes.removeAll { $0.id == theme.id }
+        theme = .classic
+        showAlert(L("删除成功"), String(format: L("主题「%@」已删除"), name))
+    }
+
+    /// 打开自动备份目录（不存在则先建）
+    func openBackupFolder() {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ccbar/backups", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(dir)
+    }
+
     /// 导入 JSON 主题包：加入可选列表并选中（点保存后生效）
     func importTheme() {
         let panel = NSOpenPanel()
@@ -332,6 +354,10 @@ struct SettingsRootView: View {
                 .font(.system(size: 11))
             Button(L("导出")) { vm.exportTheme() }
                 .font(.system(size: 11))
+            if vm.themeIsCustom {
+                Button(L("删除")) { vm.deleteTheme() }
+                    .font(.system(size: 11))
+            }
             Spacer()
         }
         .frame(height: 24)
@@ -381,6 +407,16 @@ struct SettingsRootView: View {
         Toggle(L("菜单栏动画伴侣（小猫随用量跑动）"), isOn: $vm.menuPetEnabled)
         Toggle(L("菜单栏表情分级（🙂→🥵）"), isOn: $vm.menuEmojiEnabled)
         Toggle(L("宽版弹窗（380pt）"), isOn: $vm.popoverWide)
+
+        // 自动备份状态（每天首次启动静默备份，滚动保留 7 份）
+        HStack(spacing: 6) {
+            Text(String(format: L("上次自动备份：%@"), vm.lastBackupDate))
+                .font(.system(size: 11))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+            Spacer()
+            Button(L("打开备份目录")) { vm.openBackupFolder() }
+                .font(.system(size: 11))
+        }
 
         sep
     }

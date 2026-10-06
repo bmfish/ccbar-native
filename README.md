@@ -16,16 +16,20 @@ macOS 菜单栏 AI CLI 用量统计工具。实时显示今日 token 消耗，�
 
 ## English
 
-CCBar is a native macOS menu bar app that tracks your AI CLI token usage in real time — today, this week, and all-time — with **pluggable data sources**: [cc-switch](https://github.com/farion1231/cc-switch) (Claude Code / Codex / OpenCode via proxy) and ZCode (GLM). History is synced daily into a local SQLite store (source databases are opened read-only and never modified), while today's numbers are queried live. Milestone notifications, quota warnings, per-channel breakdowns, and a Windows system tray version are included.
+CCBar is a native macOS menu bar app that tracks your AI CLI token usage in real time — today, this week, and all-time — with **pluggable data sources**: [cc-switch](https://github.com/farion1231/cc-switch) (Claude Code / Codex / OpenCode via proxy) and ZCode (GLM). History is synced daily into a local SQLite store (source databases are opened read-only and never modified), while today's numbers are queried live. Milestone notifications, quota warnings, per-channel breakdowns, CSV export, a running pixel cat in the menu bar, six built-in themes plus importable JSON theme packs, bilingual UI (中文 / English), daily auto-backups with 7-copy rotation, and a drag-to-install DMG are included. A Windows system tray version lives in [ccbar-win](https://github.com/bmfish/ccbar-win).
 
 ## 功能
 
 - **菜单栏实时用量**：标题栏直接显示今日 token 总量，按用量阈值变色，每 30 秒（可调）刷新
+- **动画伴侣**：像素小猫住在菜单栏，没用量睡觉、用量越大跑得越快（可关，换回闪电 LED 图标）
 - **用量预警 / 里程碑**：超过阈值或每累计 N 万 token 弹出系统通知，陪你刷量 🫧
-- **弹窗面板**：今日卡片（请求数 / 缓存命中率 / 工时）、模型分布、趋势（昨日 / 近7天 / 近30天 / 历史总量）
-- **详情窗口**：近 7 天、近 30 天（柱状图）、模型分布（环形图 + 按渠道分组明细）、每小时分布
-- **多数据源**：每个源可独立启用 / 停用、自定义数据库路径
-- **多主题**：五套配色主题，菜单栏与弹窗跟随切换
+- **弹窗面板**：今日卡片（请求数 / 缓存命中率 / 工时）、模型分布、趋势（昨日 / 近7天 / 近30天 / 历史总量）、速率预测
+- **详情窗口**：近 7 天、近 30 天（柱状图拖选读数）、模型分布（环形图 + 按渠道分组明细）、每小时分布，全部支持 CSV 导出
+- **多数据源**：每个源可独立启用 / 停用、自定义数据库路径、保存前即时校验
+- **主题 + 主题包**：6 套内置配色（含 CRT 终端），JSON 主题包一键导入 / 导出，方便社区分享
+- **双语界面**：中文 / English / 跟随系统
+- **数据安全**：每天自动备份统计库（滚动保留 7 份），也可一键手动备份；手动 + 静默检查更新
+- **拖拽即装**：DMG 自带 Applications 快捷方式
 
 ## 数据架构
 
