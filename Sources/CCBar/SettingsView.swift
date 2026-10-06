@@ -268,6 +268,37 @@ final class SettingsViewModel: ObservableObject {
         showAlert(L("删除成功"), String(format: L("主题「%@」已删除"), name))
     }
 
+    /// 导出明细 CSV（换机迁移 / Excel 查看）
+    func exportData() {
+        let panel = NSSavePanel()
+        let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none)
+            .replacingOccurrences(of: "/", with: "")
+        panel.nameFieldStringValue = "ccbar-export-\(stamp).csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if AppDelegate.shared?.store.exportCSV(to: url.path) == true {
+            showAlert(L("导出完成"), L("明细已导出到：") + "\n\(url.path)")
+        } else {
+            showAlert(L("导出失败"), L("统计库未打开或目标位置不可写"))
+        }
+    }
+
+    /// 导入明细 CSV（幂等：主键去重，同一文件重复导零新增）
+    func importData() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let r = AppDelegate.shared?.store.importCSV(from: url.path) ?? (read: 0, inserted: 0, skipped: 0)
+        if r.skipped == -1 {
+            showAlert(L("导入失败"), L("不是 ccBar 导出的明细 CSV（表头不符）"))
+            return
+        }
+        showAlert(L("导入完成"),
+                  String(format: L("共读取 %d 行 · 新增 %d 行 · 跳过 %d 行（重复或非法）"),
+                         r.read, r.inserted, r.skipped))
+    }
+
     /// 打开自动备份目录（不存在则先建）
     func openBackupFolder() {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -415,6 +446,18 @@ struct SettingsRootView: View {
                 .foregroundColor(Color(nsColor: Design.textMuted))
             Spacer()
             Button(L("打开备份目录")) { vm.openBackupFolder() }
+                .font(.system(size: 11))
+        }
+
+        // 数据迁移（明细 CSV，导入幂等：主键去重，重复导零新增）
+        HStack(spacing: 6) {
+            Text(L("数据迁移（明细 CSV）"))
+                .font(.system(size: 11))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+            Spacer()
+            Button(L("导入 CSV")) { vm.importData() }
+                .font(.system(size: 11))
+            Button(L("导出 CSV")) { vm.exportData() }
                 .font(.system(size: 11))
         }
 

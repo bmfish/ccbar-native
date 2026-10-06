@@ -561,6 +561,179 @@ final class StatsStore {
 
     // MARK: 备份
 
+    // MARK: 导出 / 导入（幂等）
+
+    /// 明细表列头（导出 CSV 用，导入按此顺序解析）
+    private static let exportColumns = ["source", "request_id", "app_type", "model",
+                                        "input_tokens", "output_tokens", "cache_read_tokens",
+                                        "cache_creation_tokens", "reasoning_tokens",
+                                        "total_cost_usd", "created_at", "request_count"]
+
+    /// 导出 usage_log 全量明细为 CSV（Excel 可开；字段含逗号/引号时按 RFC4180 转义）
+    func exportCSV(to path: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let db = handle else { return false }
+
+        var stmt: OpaquePointer?
+        let sql = """
+        SELECT source, request_id, app_type, model, input_tokens, output_tokens,
+               cache_read_tokens, cache_creation_tokens, reasoning_tokens,
+               total_cost_usd, created_at, request_count
+        FROM usage_log ORDER BY created_at
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
+        defer { sqlite3_finalize(stmt) }
+
+        var out = Self.exportColumns.joined(separator: ",") + "\n"
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            var fields: [String] = []
+            for i in 0..<12 {
+                switch i {
+                case 4...8, 10, 11:
+                    fields.append(String(sqlite3_column_int64(stmt, Int32(i))))
+                case 9:
+                    fields.append(String(format: "%.6f", sqlite3_column_double(stmt, Int32(i))))
+                default:
+                    let text = sqlite3_column_text(stmt, Int32(i)).map {
+                        String(cString: $0)
+                    } ?? ""
+                    fields.append(Self.csvEscape(text))
+                }
+            }
+            out += fields.joined(separator: ",") + "\n"
+        }
+        do {
+            try out.write(toFile: path, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            print("[ccBar] 导出失败: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private static func csvEscape(_ field: String) -> String {
+        if field.contains(",") || field.contains("\"") || field.contains("\n") {
+            return "\"" + field.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        }
+        return field
+    }
+
+    /// 从 CSV 导入明细（幂等）：主键 (source, request_id) 去重，重复/非法行跳过；
+    /// 导入后按受影响窗口重建 daily_agg。
+    /// - Returns: (读取行数, 新增行数, 跳过行数)
+    func importCSV(from path: String) -> (read: Int, inserted: Int, skipped: Int) {
+        lock.lock(); defer { lock.unlock() }
+        guard let db = handle else { return (0, 0, 0) }
+        guard let raw = FileManager.default.contents(atPath: path),
+              let text = String(data: raw, encoding: .utf8) else { return (0, 0, 0) }
+
+        let records = Self.parseCSV(text)
+        guard records.count > 1 else { return (0, 0, 0) }
+
+        var stmt: OpaquePointer?
+        let sql = """
+        INSERT OR IGNORE INTO usage_log
+            (source, request_id, app_type, model, input_tokens, output_tokens,
+             cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_cost_usd,
+             created_at, request_count)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return (0, 0, 0) }
+        defer { sqlite3_finalize(stmt) }
+
+        var read = 0, inserted = 0, skipped = 0
+        var minEpoch: Int64?
+        var maxEpoch: Int64?
+
+        for record in records.dropFirst() {
+            guard record.count == 12,
+                  let input = Int64(record[4]), let output = Int64(record[5]),
+                  let cacheRead = Int64(record[6]), let cacheCreate = Int64(record[7]),
+                  let reasoning = Int64(record[8]), let cost = Double(record[9]),
+                  let epoch = Int64(record[10]), let reqCount = Int64(record[11]),
+                  !record[0].isEmpty, !record[1].isEmpty else {
+                skipped += 1
+                continue
+            }
+            read += 1
+            sqlite3_reset(stmt)
+            sqlite3_bind_text(stmt, 1, record[0], -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(stmt, 2, record[1], -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(stmt, 3, record[2], -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(stmt, 4, record[3], -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_int64(stmt, 5, input)
+            sqlite3_bind_int64(stmt, 6, output)
+            sqlite3_bind_int64(stmt, 7, cacheRead)
+            sqlite3_bind_int64(stmt, 8, cacheCreate)
+            sqlite3_bind_int64(stmt, 9, reasoning)
+            sqlite3_bind_double(stmt, 10, cost)
+            sqlite3_bind_int64(stmt, 11, epoch)
+            sqlite3_bind_int64(stmt, 12, reqCount)
+            if sqlite3_step(stmt) == SQLITE_DONE {
+                if sqlite3_changes(db) > 0 { inserted += 1 } else { skipped += 1 }
+            } else {
+                skipped += 1
+            }
+            minEpoch = min(minEpoch ?? epoch, epoch)
+            maxEpoch = max(maxEpoch ?? epoch, epoch)
+        }
+
+        // 导入行并入聚合缓存（含跨天余量），幂等重算
+        if let mn = minEpoch, let mx = maxEpoch {
+            refreshDailyAgg(fromEpoch: mn, toEpoch: mx + 86400)
+        }
+        return (read, inserted, skipped)
+    }
+
+    /// 轻量 CSV 解析（RFC4180：双引号转义、字段内逗号/换行）
+    static func parseCSV(_ text: String) -> [[String]] {
+        var records: [[String]] = []
+        var record: [String] = []
+        var field = ""
+        var inQuotes = false
+        var iterator = text.makeIterator()
+        var pending: Character?
+
+        func nextChar() -> Character? {
+            if let p = pending { pending = nil; return p }
+            return iterator.next()
+        }
+
+        while let ch = nextChar() {
+            if inQuotes {
+                if ch == "\"" {
+                    if let peek = nextChar() {
+                        if peek == "\"" { field.append("\"") }   // 转义引号
+                        else { inQuotes = false; pending = peek }
+                    } else {
+                        inQuotes = false
+                    }
+                } else {
+                    field.append(ch)
+                }
+            } else if ch == "\"" {
+                inQuotes = true
+            } else if ch == "," {
+                record.append(field)
+                field = ""
+            } else if ch == "\n" {
+                record.append(field)
+                field = ""
+                if !(record.count == 1 && record[0].isEmpty) { records.append(record) }
+                record = []
+            } else if ch == "\r" {
+                continue   // \r\n 当 \n 处理
+            } else {
+                field.append(ch)
+            }
+        }
+        if !field.isEmpty || !record.isEmpty {
+            record.append(field)
+            if !(record.count == 1 && record[0].isEmpty) { records.append(record) }
+        }
+        return records
+    }
+
     /// 备份统计库到目标路径（VACUUM INTO 生成紧凑的独立副本，连接打开中也可安全执行）
     func backup(to path: String) -> Bool {
         lock.lock(); defer { lock.unlock() }

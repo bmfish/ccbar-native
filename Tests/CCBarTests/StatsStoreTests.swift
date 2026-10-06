@@ -137,6 +137,48 @@ final class StatsStoreTests: XCTestCase {
         XCTAssertEqual(monthlyReqs, 2)
     }
 
+    func testExportImportIdempotent() throws {
+        // 夹具：昨天 3600 + 3 天前 30000
+        makeFixtureSource()
+        XCTAssertTrue(insertFixtureRow(id: "req-B", createdAt: StatsStore.localMidnight(1) + 3600,
+                                       input: 1000, output: 2000, cacheRead: 500, cacheCreate: 100))
+        XCTAssertTrue(insertFixtureRow(id: "req-C", createdAt: StatsStore.localMidnight(3) + 3600,
+                                       input: 10000, output: 20000))
+        rebuildWithFixture()
+        store.syncIfNeeded()
+
+        let path = tmpDir + "/export.csv"
+        XCTAssertTrue(store.exportCSV(to: path))
+
+        // 导入到新库（挂同一源但不重新同步，隔离出纯导入路径）
+        let imported = StatsStore(storePath: tmpDir + "/imported.db")
+        defer { imported.close() }
+        imported.rebuild(configs: [SourceConfig(id: "ccswitch", enabled: true, dbPath: sourcePath)])
+        let r1 = imported.importCSV(from: path)
+        XCTAssertEqual(r1.read, 2)
+        XCTAssertEqual(r1.inserted, 2)
+        XCTAssertEqual(r1.skipped, 0)
+        XCTAssertEqual(imported.queryTotalStats()?.total, 33600)
+        XCTAssertEqual(imported.queryDayStats(days: 7)?.total, 33600, "导入后 daily_agg 已按窗口重建")
+
+        // 再导一遍：幂等——零新增，全部按主键跳过
+        let r2 = imported.importCSV(from: path)
+        XCTAssertEqual(r2.read, 2)
+        XCTAssertEqual(r2.inserted, 0, "重复导入不得新增（幂等）")
+        XCTAssertEqual(r2.skipped, 2)
+        XCTAssertEqual(imported.queryTotalStats()?.total, 33600, "幂等导入后总量不变")
+
+        // 非法行跳过：追加一条残缺记录
+        let handle = FileHandle(forUpdatingAtPath: path)!
+        _ = try handle.seekToEnd()
+        try handle.write(contentsOf: Data("bad-source,broken-id,,model,x,y,z\n".utf8))
+        try handle.close()
+        let r3 = imported.importCSV(from: path)
+        XCTAssertEqual(r3.read, 2, "两条合法行仍计入读取")
+        XCTAssertEqual(r3.inserted, 0)
+        XCTAssertEqual(r3.skipped, 3, "1 条非法 + 2 条重复")
+    }
+
     func testInsightQueries() throws {
         // 夹具：昨天 3600（$0.5）+ 3 天前 30000（$0.5）+ 今日实时 360（$0.5）
         let midnight = StatsStore.localMidnight(0)
