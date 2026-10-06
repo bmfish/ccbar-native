@@ -923,7 +923,42 @@ struct TimelinePage: View {
     @State private var sourceFilter = "all"
     @State private var modelFilter = "all"
 
-    /// 过滤后的流水（渠道/模型）
+    /// 流水页行模型：组头与数据行拍平成单一序列。
+    /// 曾用嵌套 ForEach（外层 id=hour、内层 id=offset），30 秒刷新时行视图按位置复用，
+    /// 内容会串组错位（20:26 出现在 12:00 组里）——改单层扁平结构后不可能再错。
+    enum TimelineLine: Identifiable {
+        case header(hour: Int, count: Int)
+        case row(time: Int, model: String, source: String, token: Int64, cost: Double)
+
+        var id: String {
+            switch self {
+            case .header(let hour, _): return "h-\(hour)"
+            case .row(let time, _, _, _, _): return "t-\(time)"
+            }
+        }
+    }
+
+    /// 纯函数：DESC 行序列 → 组头+数据行扁平序列（组头出现在每组最新一行前）
+    static func buildLines(_ rows: [(time: Int, model: String, source: String, token: Int64, cost: Double)]) -> [TimelineLine] {
+        let cal = Calendar.current
+        let hours = rows.map { cal.component(.hour, from: Date(timeIntervalSince1970: TimeInterval($0.time))) }
+        var counts: [Int: Int] = [:]
+        for h in hours { counts[h, default: 0] += 1 }
+        var out: [TimelineLine] = []
+        var last = -1
+        for (i, row) in rows.enumerated() {
+            let h = hours[i]
+            if h != last {
+                out.append(.header(hour: h, count: counts[h] ?? 0))
+                last = h
+            }
+            out.append(.row(time: row.time, model: row.model, source: row.source,
+                            token: row.token, cost: row.cost))
+        }
+        return out
+    }
+
+    /// 过滤后的流水（渠道/模型），顺序保持 DESC
     private var filtered: [(time: Int, model: String, source: String, token: Int64, cost: Double)] {
         vm.timeline.filter { row in
             (sourceFilter == "all" || row.source == sourceFilter) &&
@@ -939,19 +974,8 @@ struct TimelinePage: View {
         ["all"] + Set(vm.timeline.map(\.model)).sorted()
     }
 
-    /// 按小时分组（数据已是最新在前）
-    private var grouped: [(hour: Int, rows: [(time: Int, model: String, source: String, token: Int64, cost: Double)])] {
-        var out: [(hour: Int, rows: [(time: Int, model: String, source: String, token: Int64, cost: Double)])] = []
-        var buckets: [Int: (Int, [(time: Int, model: String, source: String, token: Int64, cost: Double)])] = [:]
-        for row in filtered {
-            let h = Calendar.current.component(.hour, from: Date(timeIntervalSince1970: TimeInterval(row.time)))
-            if buckets[h] == nil {
-                buckets[h] = (out.count, [])
-                out.append((h, []))
-            }
-            out[buckets[h]!.0].rows.append(row)
-        }
-        return out
+    private var lines: [TimelineLine] {
+        Self.buildLines(filtered)
     }
 
     var body: some View {
@@ -996,27 +1020,28 @@ struct TimelinePage: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(grouped, id: \.hour) { group in
-                        HStack {
-                            Text(String(format: "%02d:00 – %02d:00", group.hour, (group.hour + 1) % 24))
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundColor(Color(nsColor: Design.textMuted))
-                            Spacer()
-                            Text("\(group.rows.count) " + L("次"))
-                                .font(.system(size: 10).monospacedDigit())
-                                .foregroundColor(Color(nsColor: Design.textMuted))
-                        }
-                        .padding(.vertical, 8)
-                        .background(Color.white.opacity(0.001))   // 让整行可点区域稳定
-                        ForEach(Array(group.rows.enumerated()), id: \.offset) { _, row in
-                            timelineRow(row)
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(lines) { line in
+                            switch line {
+                            case .header(let hour, let count):
+                                HStack {
+                                    Text(String(format: "%02d:00 – %02d:00", hour, (hour + 1) % 24))
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(Color(nsColor: Design.textMuted))
+                                    Spacer()
+                                    Text("\(count) " + L("次"))
+                                        .font(.system(size: 10).monospacedDigit())
+                                        .foregroundColor(Color(nsColor: Design.textMuted))
+                                }
+                                .padding(.vertical, 8)
+                            case .row(let time, let model, let source, let token, let cost):
+                                timelineRow((time, model, source, token, cost))
+                            }
                         }
                     }
+                    .padding(.bottom, 12)
                 }
-                .padding(.bottom, 12)
             }
-        }
         }
     }
 

@@ -7,6 +7,48 @@ import SwiftUI
 @MainActor
 final class InsightsRenderTests: XCTestCase {
 
+    func testTimelineGrouping() throws {
+        // 复刻线上串组场景：20/19/12/11 点的行混杂的 DESC 序列
+        let cal = Calendar.current
+        let base = Int(cal.startOfDay(for: Date()).timeIntervalSince1970)
+        func at(_ h: Int, _ m: Int, _ s: Int) -> Int { base + h * 3600 + m * 60 + s }
+        let rows: [(time: Int, model: String, source: String, token: Int64, cost: Double)] = [
+            (at(20, 26, 50), "GLM", "zcode", 0, 0),
+            (at(19, 42, 10), "GLM", "zcode", 520_000, 0),
+            (at(19, 41, 23), "GLM", "zcode", 520_000, 0),
+            (at(12, 57, 54), "GLM", "zcode", 460_000, 0),
+            (at(12, 39, 26), "GLM", "zcode", 450_000, 0),
+            (at(11, 42, 38), "GLM", "zcode", 420_000, 0),
+            (at(11, 40, 0), "GLM", "zcode", 420_000, 0),
+        ]
+        let lines = TimelinePage.buildLines(rows)
+
+        // 组头恰好 4 个：20/19/12/11，各在组首行前，计数正确
+        let headers = lines.compactMap { line -> (Int, Int)? in
+            if case .header(let h, let c) = line { return (h, c) }
+            return nil
+        }
+        XCTAssertEqual(headers.map(\.0), [20, 19, 12, 11])
+        XCTAssertEqual(headers.map(\.1), [1, 2, 2, 2])
+
+        // 数据行顺序保持 DESC、总数一致
+        let dataRows = lines.compactMap { line -> Int? in
+            if case .row(let time, _, _, _, _) = line { return time }
+            return nil
+        }
+        XCTAssertEqual(dataRows, rows.map(\.time), "顺序必须保持 DESC 且不串行")
+
+        // 每行紧随其组头之后
+        for (i, line) in lines.enumerated() {
+            if case .row(let time, _, _, _, _) = line {
+                let h = cal.component(.hour, from: Date(timeIntervalSince1970: TimeInterval(time)))
+                if case .header(let hh, _)? = i > 0 ? lines[i - 1] : nil {
+                    XCTAssertEqual(hh, h, "行必须紧跟自己的组头")
+                }
+            }
+        }
+    }
+
     func testRenderAllPages() throws {
         let dbPath = "/tmp/ccbar-recheck/ccbar.db"
         guard FileManager.default.fileExists(atPath: dbPath) else {
