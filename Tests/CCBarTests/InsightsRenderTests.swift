@@ -14,11 +14,10 @@ final class InsightsRenderTests: XCTestCase {
         XCTAssertEqual(qr?.size.width, 46)
 
         // 分享卡整卡离屏渲染必须出真实内容（防 ImageRenderer 式黑图）
-        let card = UsageShareCard(
-            title: L("AI 用量周报"), dateText: "9月28日 ~ 10月4日",
-            bigLabel: L("周消耗"), bigValue: "1.23亿",
-            trend: (0..<7).map { ChartEntry(label: "09-\($0)", value: Int64($0 + 1) * 100) },
-            stats: [(L("日均"), "0.2亿"), (L("峰值"), "0.5亿"), (L("累计"), "1.23亿")])
+        let card = weeklyShareCard(
+            dateRange: "9月28日 ~ 10月4日", total: 123_000_000, reqs: 2345,
+            peak: 50_000_000,
+            trend: (0..<7).map { ChartEntry(label: "09-\($0)", value: Int64($0 + 1) * 100) })
         let png = ShareCardRenderer.pngData(card, width: 460)
         XCTAssertNotNil(png)
         XCTAssertGreaterThan(png?.count ?? 0, 5000, "渲染出的 PNG 太小，疑似黑图/空白")
@@ -28,6 +27,14 @@ final class InsightsRenderTests: XCTestCase {
         let store = StatsStore(storePath: NSTemporaryDirectory() + "ccbar-weekly-\(UUID().uuidString).db")
         defer { store.close() }
         store.rebuild(configs: [])   // init 只记路径，rebuild 才开库
+
+        // 窗口口径：周一生成上周一~周日（7..1），周二预览上一个完整周（8..2）
+        let monWindow = WeeklyReport.lastWeekWindow(now: Date(timeIntervalSince1970: 1_791_187_200))
+        XCTAssertEqual(monWindow.from, 7)
+        XCTAssertEqual(monWindow.to, 1)
+        let tueWindow = WeeklyReport.lastWeekWindow(now: Date(timeIntervalSince1970: 1_791_273_600))   // 2026-10-06（周二）
+        XCTAssertEqual(tueWindow.from, 8)
+        XCTAssertEqual(tueWindow.to, 2)
         let wednesday = Date(timeIntervalSince1970: 1_791_360_000)   // 2026-10-07（周三）
         XCTAssertNil(WeeklyReport.generateIfNeeded(store: store, now: wednesday))
 
@@ -99,7 +106,7 @@ final class InsightsRenderTests: XCTestCase {
         let pages: [(String, AnyView, CGFloat)] = [
             ("cost", AnyView(CostPage(vm: vm)), 500),
             ("insights", AnyView(InsightsPageView(vm: vm)), 1350),
-            ("share", AnyView(SharePage(vm: vm)), 500),
+            ("share", AnyView(SharePage(vm: vm)), 1050),
             ("channels", AnyView(ChannelsPage(vm: vm)), 1250),
             ("timeline", AnyView(TimelinePage(vm: vm)), 500),
         ]

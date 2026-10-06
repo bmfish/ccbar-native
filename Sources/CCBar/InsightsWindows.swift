@@ -140,6 +140,12 @@ final class InsightsViewModel: ObservableObject {
     @Published var shareWeek: Int64 = 0
     @Published var shareMonth: Int64 = 0
     @Published var shareTotal: Int64 = 0
+    // 周报（最近一个完整周：上周一 ~ 上周日）
+    @Published var weeklyRange: String = ""
+    @Published var weeklyTotal: Int64 = 0
+    @Published var weeklyReqs: Int = 0
+    @Published var weeklyPeak: Int64 = 0
+    @Published var weeklyTrend: [ChartEntry] = []
 
     private var loaded = false
 
@@ -183,6 +189,11 @@ final class InsightsViewModel: ObservableObject {
         var shareWeek: Int64 = 0
         var shareMonth: Int64 = 0
         var shareTotal: Int64 = 0
+        var weeklyRange: String = ""
+        var weeklyTotal: Int64 = 0
+        var weeklyReqs: Int = 0
+        var weeklyPeak: Int64 = 0
+        var weeklyTrend: [ChartEntry] = []
     }
 
     private func compute(store: StatsStore) -> Snapshot {
@@ -261,6 +272,18 @@ final class InsightsViewModel: ObservableObject {
         s.shareWeek = store.queryDayStats(days: 7)?.total ?? 0
         s.shareMonth = store.queryDayStats(days: 30)?.total ?? 0
         s.shareTotal = store.queryTotalStats()?.total ?? 0
+        // 周报（最近一个完整周：上周一 ~ 上周日）
+        let w = WeeklyReport.lastWeekWindow()
+        if let ws = store.queryWindowStats(daysAgoFrom: w.from, daysAgoTo: w.to) {
+            s.weeklyTotal = ws.total
+            s.weeklyReqs = ws.reqs
+        }
+        let dailyW = store.queryDailyTokensBetween(daysAgoFrom: w.from, daysAgoTo: w.to)
+        s.weeklyPeak = dailyW.map(\.token).max() ?? 0
+        s.weeklyTrend = dailyW.map { ChartEntry(label: String($0.date.suffix(5)), value: $0.token) }
+        let dFmt = DateFormatter(); dFmt.dateStyle = .medium; dFmt.timeStyle = .none
+        s.weeklyRange = "\(dFmt.string(from: Date(timeIntervalSince1970: TimeInterval(StatsStore.localMidnight(w.from)))))"
+            + " ~ \(dFmt.string(from: Date(timeIntervalSince1970: TimeInterval(StatsStore.localMidnight(w.to)))))"
         // 渠道页
         s.channelPoints = store.queryChannelDaily(days: 30).map {
             ChannelPoint(date: $0.date, day: fmt.date(from: $0.date) ?? Date(),
@@ -303,6 +326,11 @@ final class InsightsViewModel: ObservableObject {
         shareWeek = s.shareWeek
         shareMonth = s.shareMonth
         shareTotal = s.shareTotal
+        weeklyRange = s.weeklyRange
+        weeklyTotal = s.weeklyTotal
+        weeklyReqs = s.weeklyReqs
+        weeklyPeak = s.weeklyPeak
+        weeklyTrend = s.weeklyTrend
     }
 }
 
@@ -779,6 +807,7 @@ struct UsageShareCard: View {
 struct SharePage: View {
     @ObservedObject var vm: InsightsViewModel
     @State private var copied = false
+    @State private var weeklyCopied = false
 
     private var card: some View {
         let fmt = DateFormatter()
@@ -796,16 +825,45 @@ struct SharePage: View {
             ])
     }
 
+    private var weekly: some View {
+        weeklyShareCard(dateRange: vm.weeklyRange, total: vm.weeklyTotal,
+                        reqs: vm.weeklyReqs, peak: vm.weeklyPeak, trend: vm.weeklyTrend)
+    }
+
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 14) {
                 card
                     .frame(maxWidth: .infinity)
                 HStack(spacing: 12) {
-                    Button(L("保存为图片")) { savePNG() }
+                    Button(L("保存为图片")) { savePNG(ShareCardRenderer.image(card, width: 460), "ccbar-share") }
                         .buttonStyle(.borderedProminent)
-                    Button(copied ? L("已复制到剪贴板") : L("复制到剪贴板")) { copyPNG() }
+                    Button(copied ? L("已复制到剪贴板") : L("复制到剪贴板")) {
+                        copyPNG(ShareCardRenderer.image(card, width: 460)) { copied = $0 }
+                    }
                     Text(L("晒用量就是最好的宣传 ✨"))
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                }
+
+                Divider().overlay(Color.white.opacity(0.12))
+
+                HStack {
+                    Text(L("AI 用量周报（上周）"))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Color(nsColor: Design.textPrimary))
+                    Spacer()
+                    Button(L("打开周报目录")) { openWeeklyFolder() }
+                }
+                weekly
+                    .frame(maxWidth: .infinity)
+                HStack(spacing: 12) {
+                    Button(L("保存为图片")) { savePNG(ShareCardRenderer.image(weekly, width: 460), "ccbar-weekly") }
+                        .buttonStyle(.borderedProminent)
+                    Button(weeklyCopied ? L("已复制到剪贴板") : L("复制到剪贴板")) {
+                        copyPNG(ShareCardRenderer.image(weekly, width: 460)) { weeklyCopied = $0 }
+                    }
+                    Text(L("每周一自动生成到周报目录 🗓"))
                         .font(.system(size: 11))
                         .foregroundColor(Color(nsColor: Design.textMuted))
                 }
@@ -814,16 +872,12 @@ struct SharePage: View {
         }
     }
 
-    private func renderPNG() -> NSImage? {
-        ShareCardRenderer.image(card, width: 460)
-    }
-
-    private func savePNG() {
-        guard let img = renderPNG() else { return }
+    private func savePNG(_ img: NSImage?, _ namePrefix: String) {
+        guard let img else { return }
         let panel = NSSavePanel()
         let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none)
             .replacingOccurrences(of: "/", with: "")
-        panel.nameFieldStringValue = "ccbar-share-\(stamp).png"
+        panel.nameFieldStringValue = "\(namePrefix)-\(stamp).png"
         panel.allowedContentTypes = [.png]
         guard panel.runModal() == .OK, let url = panel.url,
               let tiff = img.tiffRepresentation,
@@ -832,15 +886,22 @@ struct SharePage: View {
         try? png.write(to: url)
     }
 
-    private func copyPNG() {
-        guard let img = renderPNG() else { return }
+    private func copyPNG(_ img: NSImage?, set flag: @escaping (Bool) -> Void) {
+        guard let img else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.writeObjects([img])
-        copied = true
+        flag(true)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_500_000_000)
-            copied = false
+            flag(false)
         }
+    }
+
+    /// 打开周报目录（不存在则建），历史周报 PNG 都在这里
+    private func openWeeklyFolder() {
+        let dir = WeeklyReport.directoryURL()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(dir)
     }
 }
 
@@ -887,13 +948,39 @@ enum ShareCardRenderer {
     }
 }
 
-// MARK: - 周报自动生成
+// MARK: - 周报
+
+/// 周报卡工厂：分享页预览与周一自动落盘共用
+func weeklyShareCard(dateRange: String, total: Int64, reqs: Int, peak: Int64, trend: [ChartEntry]) -> UsageShareCard {
+    UsageShareCard(
+        title: L("AI 用量周报"),
+        dateText: dateRange,
+        bigLabel: L("周消耗"),
+        bigValue: Design.formatTokens(total),
+        trend: trend,
+        stats: [
+            (L("日均"), Design.formatTokens(total / 7)),
+            (L("峰值"), Design.formatTokens(peak)),
+            (L("请求数"), "\(reqs)"),
+        ])
+}
+
+/// 周报自动生成
 
 /// 每周一自动生成上周（周一 ~ 周日）用量周报 PNG，存到 ~/Documents/CCBar 周报/。
 /// 幂等键 = 报告周的周一日期（lastWeeklyReportWeek），同周重复触发不重复生成。
 enum WeeklyReport {
-    /// 上周窗口（daysAgo 均含，7 = 上周一 … 1 = 上周日，不含今日实时）
-    static let windowFrom = 7, windowTo = 1
+    /// 最近一个完整周（上周一 ~ 上周日）的 daysAgo 窗口（均含，不含今日实时）
+    static func lastWeekWindow(now: Date = Date()) -> (from: Int, to: Int) {
+        let daysSinceMonday = (Calendar.current.component(.weekday, from: now) + 5) % 7
+        return (from: daysSinceMonday + 7, to: daysSinceMonday + 1)
+    }
+
+    /// 周报输出目录 ~/Documents/CCBar 周报/
+    static func directoryURL() -> URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("CCBar 周报", isDirectory: true)
+    }
 
     @MainActor
     @discardableResult
@@ -905,37 +992,30 @@ enum WeeklyReport {
         let defaults = UserDefaults.standard
         guard defaults.string(forKey: "lastWeeklyReportWeek") != weekKey else { return nil }
 
-        guard let stats = store.queryWindowStats(daysAgoFrom: windowFrom, daysAgoTo: windowTo),
+        let w = lastWeekWindow(now: now)
+        guard let stats = store.queryWindowStats(daysAgoFrom: w.from, daysAgoTo: w.to),
               stats.total > 0 else {
             defaults.set(weekKey, forKey: "lastWeeklyReportWeek")   // 没数据也记账，避免反复查
             return nil
         }
-        let daily = store.queryDailyTokensBetween(daysAgoFrom: windowFrom, daysAgoTo: windowTo)
+        let daily = store.queryDailyTokensBetween(daysAgoFrom: w.from, daysAgoTo: w.to)
         let peakToken = daily.map(\.token).max() ?? 0
 
         let dateFmt = DateFormatter(); dateFmt.dateStyle = .medium; dateFmt.timeStyle = .none
-        let from = cal.date(byAdding: .day, value: -windowFrom, to: cal.startOfDay(for: now))!
-        let to = cal.date(byAdding: .day, value: -windowTo, to: cal.startOfDay(for: now))!
+        let from = cal.date(byAdding: .day, value: -w.from, to: cal.startOfDay(for: now))!
+        let to = cal.date(byAdding: .day, value: -w.to, to: cal.startOfDay(for: now))!
 
-        let card = UsageShareCard(
-            title: L("AI 用量周报"),
-            dateText: "\(dateFmt.string(from: from)) ~ \(dateFmt.string(from: to))",
-            bigLabel: L("周消耗"),
-            bigValue: Design.formatTokens(stats.total),
-            trend: daily.map { ChartEntry(label: String($0.date.suffix(5)), value: $0.token) },
-            stats: [
-                (L("日均"), Design.formatTokens(stats.total / 7)),
-                (L("峰值"), Design.formatTokens(peakToken)),
-                (L("累计"), Design.formatTokens(stats.total)),
-            ])
+        let card = weeklyShareCard(
+            dateRange: "\(dateFmt.string(from: from)) ~ \(dateFmt.string(from: to))",
+            total: stats.total, reqs: stats.reqs, peak: peakToken,
+            trend: daily.map { ChartEntry(label: String($0.date.suffix(5)), value: $0.token) })
 
         guard let png = ShareCardRenderer.pngData(card, width: 460) else {
             NSLog("[weekly] 周报渲染失败")
             return nil
         }
 
-        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("CCBar 周报", isDirectory: true)
+        let dir = directoryURL()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("ccbar-weekly-\(weekKey).png")
         do {
