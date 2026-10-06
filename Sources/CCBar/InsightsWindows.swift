@@ -62,24 +62,14 @@ final class InsightsViewModel: ObservableObject {
     // 分享卡近 7 天趋势
     @Published var weekTrend: [ChartEntry] = []
 
-    private var loadedPages: Set<InsightsPage> = []
+    private var loaded = false
 
-    /// 切页时加载对应数据（每个页面只查一次；重开窗口时全量刷新）
-    func load(_ page: InsightsPage, force: Bool = false) {
-        guard force || !loadedPages.contains(page) else { return }
-        loadedPages.insert(page)
-        guard let store = AppDelegate.shared?.store else { return }
-
-        Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
-            let snapshot = await self.compute(page: page, store: store)
-            await MainActor.run { self.apply(snapshot) }
-        }
-    }
-
-    func reloadAll() {
-        loadedPages.removeAll()
-        for page in InsightsPage.allCases { load(page) }
+    /// 全量加载（查询都是索引区间扫描，实测 < 20ms，一次全查省得各页互相清数据）。
+    /// 曾按页懒加载 + apply 全量覆盖，后加载的页面会把先加载的清零——勿改回。
+    func load(force: Bool = false) {
+        guard let store = AppDelegate.shared?.store, force || !loaded else { return }
+        loaded = true
+        apply(compute(store: store))
     }
 
     private struct Snapshot {
@@ -98,54 +88,48 @@ final class InsightsViewModel: ObservableObject {
         var weekTrend: [ChartEntry] = []
     }
 
-    /// 全部查询在后台队列跑（StatsStore 自带锁，线程安全）
-    private nonisolated func compute(page: InsightsPage, store: StatsStore) async -> Snapshot {
+    private func compute(store: StatsStore) -> Snapshot {
         var s = Snapshot()
-        switch page {
-        case .cost:
-            s.costToday = store.queryCost(days: 0)
-            s.cost7 = store.queryCost(days: 7)
-            s.cost30 = store.queryCost(days: 30)
-            let raw = store.queryCostDaily(days: 30)
-            // 补齐日期空洞，图表时间轴连续
-            let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
-            let cal = Calendar.current
-            var byDate: [String: Double] = [:]
-            for r in raw { byDate[r.date] = r.cost }
-            var entries: [ChartEntry] = []
-            for d in 0..<30 {
-                guard let date = cal.date(byAdding: .day, value: -29 + d, to: cal.startOfDay(for: Date())) else { continue }
-                let key = fmt.string(from: date)
-                entries.append(ChartEntry(label: String(key.suffix(5)),
-                                          value: Int64((byDate[key] ?? 0) * 100)))
-            }
-            s.costDaily = entries
-            s.costModels = store.queryCostByModel(days: 30)
-        case .insights:
-            s.streak = store.queryStreak()
-            let delta = store.queryWeeklyDelta()
-            s.thisWeek = delta.thisWeek
-            s.lastWeek = delta.lastWeek
-            s.dailyAvg = (store.queryDayStats(days: 30)?.total ?? 0) / 30
-            s.peak = store.queryPeakDay(days: 30)
-            let hist = store.queryHourHistogram(days: 30)
-            s.peakHour = hist.max { $0.value < $1.value }?.key
-            s.totalAll = store.queryTotalStats()?.total ?? 0
-            s.weekTrend = store.queryDailyTokens(days: 7).map {
-                ChartEntry(label: String($0.date.suffix(5)), value: $0.token)
-            }
-        case .share:
-            s.weekTrend = store.queryDailyTokens(days: 7).map {
-                ChartEntry(label: String($0.date.suffix(5)), value: $0.token)
-            }
-        case .channels:
-            s.channelPoints = store.queryChannelDaily(days: 30).map {
-                ChannelPoint(date: $0.date, source: $0.source, token: $0.token)
-            }
-            s.todaySources = store.querySourceBreakdown()
-        case .timeline:
-            s.timeline = store.queryTodayTimeline()
+        // 费用页
+        s.costToday = store.queryCost(days: 0)
+        s.cost7 = store.queryCost(days: 7)
+        s.cost30 = store.queryCost(days: 30)
+        let raw = store.queryCostDaily(days: 30)
+        // 补齐日期空洞，图表时间轴连续
+        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        let cal = Calendar.current
+        var byDate: [String: Double] = [:]
+        for r in raw { byDate[r.date] = r.cost }
+        var entries: [ChartEntry] = []
+        for d in 0..<30 {
+            guard let date = cal.date(byAdding: .day, value: -29 + d, to: cal.startOfDay(for: Date())) else { continue }
+            let key = fmt.string(from: date)
+            entries.append(ChartEntry(label: String(key.suffix(5)),
+                                      value: Int64((byDate[key] ?? 0) * 100)))
         }
+        s.costDaily = entries
+        s.costModels = store.queryCostByModel(days: 30)
+        // 洞察页
+        s.streak = store.queryStreak()
+        let delta = store.queryWeeklyDelta()
+        s.thisWeek = delta.thisWeek
+        s.lastWeek = delta.lastWeek
+        s.dailyAvg = (store.queryDayStats(days: 30)?.total ?? 0) / 30
+        s.peak = store.queryPeakDay(days: 30)
+        let hist = store.queryHourHistogram(days: 30)
+        s.peakHour = hist.max { $0.value < $1.value }?.key
+        s.totalAll = store.queryTotalStats()?.total ?? 0
+        // 分享卡近 7 天趋势（daily_agg + 今日）
+        s.weekTrend = store.queryDailyTokens(days: 7).map {
+            ChartEntry(label: String($0.date.suffix(5)), value: $0.token)
+        }
+        // 渠道页
+        s.channelPoints = store.queryChannelDaily(days: 30).map {
+            ChannelPoint(date: $0.date, source: $0.source, token: $0.token)
+        }
+        s.todaySources = store.querySourceBreakdown()
+        // 流水页
+        s.timeline = store.queryTodayTimeline()
         return s
     }
 
@@ -192,8 +176,7 @@ struct InsightsRootView: View {
             }
         }
         .frame(minWidth: 720, minHeight: 480)
-        .onChange(of: page) { vm.load($0) }
-        .onAppear { vm.load(page) }
+        .onAppear { vm.load() }
     }
 
     @ViewBuilder
@@ -738,6 +721,6 @@ class InsightsWindowController: NSWindowController {
 
     /// 每次打开全量刷新
     func reload() {
-        vm.reloadAll()
+        vm.load(force: true)
     }
 }
