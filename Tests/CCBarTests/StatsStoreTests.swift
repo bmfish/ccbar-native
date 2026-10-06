@@ -137,6 +137,67 @@ final class StatsStoreTests: XCTestCase {
         XCTAssertEqual(monthlyReqs, 2)
     }
 
+    func testInsightQueries() throws {
+        // 夹具：昨天 3600（$0.5）+ 3 天前 30000（$0.5）+ 今日实时 360（$0.5）
+        let midnight = StatsStore.localMidnight(0)
+        makeFixtureSource()
+        XCTAssertTrue(insertFixtureRow(id: "req-B", createdAt: StatsStore.localMidnight(1) + 3600,
+                                       input: 1000, output: 2000, cacheRead: 500, cacheCreate: 100))
+        XCTAssertTrue(insertFixtureRow(id: "req-C", createdAt: StatsStore.localMidnight(3) + 3600,
+                                       input: 10000, output: 20000))
+        rebuildWithFixture()
+        store.syncIfNeeded()
+        let aEpoch = max(midnight + 60, Int64(Date().timeIntervalSince1970) - 1800)
+        XCTAssertTrue(insertFixtureRow(id: "req-A", createdAt: aEpoch,
+                                       input: 100, output: 200, cacheRead: 50, cacheCreate: 10))
+        store.syncIfNeeded()
+
+        // 费用（每行 0.5，共 3 行）
+        XCTAssertEqual(store.queryCost(days: 30), 1.5, accuracy: 0.0001)
+        XCTAssertEqual(store.queryCost(days: 0), 0.5, accuracy: 0.0001)
+        let byModel = store.queryCostByModel(days: 30)
+        XCTAssertEqual(byModel.count, 1)
+        XCTAssertEqual(byModel.first?.cost ?? 0, 1.5, accuracy: 0.0001)
+        XCTAssertEqual(byModel.first?.token, 33960)
+
+        // 费用曲线：三个有数据的日期
+        let daily = store.queryCostDaily(days: 30)
+        XCTAssertEqual(daily.count, 3)
+        XCTAssertEqual(daily.reduce(0.0) { $0 + $1.cost }, 1.5, accuracy: 0.0001)
+
+        // 连续天数：daily_agg 只有昨天与 3 天前（中间断档）→ 从昨天数 1 天
+        XCTAssertEqual(store.queryStreak(), 1)
+
+        // 周环比：本周（含今天）= 昨天 + 3天前 + 今日；上周为 0
+        let delta = store.queryWeeklyDelta()
+        XCTAssertEqual(delta.thisWeek, 33960)
+        XCTAssertEqual(delta.lastWeek, 0)
+
+        // 峰值日 = 3 天前 30000
+        let peak = store.queryPeakDay(days: 30)
+        XCTAssertEqual(peak?.token, 30000)
+        XCTAssertEqual(peak?.date, StatsStore.dayString(fromEpoch: StatsStore.localMidnight(3)))
+
+        // 时段分布总量守恒
+        let hist = store.queryHourHistogram(days: 30)
+        XCTAssertEqual(hist.values.reduce(0, +), 33960)
+
+        // 渠道每日：2 个历史日 + 今日实时 1 行
+        let channels = store.queryChannelDaily(days: 30)
+        XCTAssertEqual(channels.count, 3)
+        XCTAssertTrue(channels.allSatisfy { $0.source == "cc-switch" })
+
+        // 今日流水：1 条
+        let timeline = store.queryTodayTimeline()
+        XCTAssertEqual(timeline.count, 1)
+        XCTAssertEqual(timeline.first?.token, 360)
+        XCTAssertEqual(timeline.first?.cost ?? 0, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(timeline.first?.model, "test-model")
+
+        // 每日 token：2 个历史日 + 今日
+        XCTAssertEqual(store.queryDailyTokens(days: 30).count, 3)
+    }
+
     func testSyncIdempotentAcrossRepeats() throws {
         makeFixtureSource()
         XCTAssertTrue(insertFixtureRow(id: "req-B", createdAt: StatsStore.localMidnight(1) + 3600,

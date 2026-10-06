@@ -203,6 +203,38 @@ let L10nEN: [String: String] = [
     // ---- 托盘菜单 ----
     "打开面板": "Open Panel",
 
+    // ---- 洞察中心 ----
+    "洞察中心": "Insights",
+    "洞察": "Insights",
+    "费用": "Cost",
+    "分享": "Share",
+    "渠道": "Channels",
+    "流水": "Timeline",
+    "今日费用": "Today",
+    "近 7 天": "7 Days",
+    "近 30 天": "30 Days",
+    "近 30 天费用走势": "Cost — last 30 days",
+    "模型费用排行（近 30 天）": "Cost by model (30 days)",
+    "费用按 cc-switch 记录的单价折算；ZCode 渠道官方未计费，不计入":
+        "Cost uses cc-switch pricing; ZCode is unmetered and not included",
+    "连续使用": "Streak",
+    "天": "days",
+    "本周用量": "This Week",
+    "日均用量（近 30 天）": "Daily Avg (30d)",
+    "单日峰值（近 30 天）": "Peak Day (30d)",
+    "最活跃时段（近 30 天）": "Peak Hours (30d)",
+    "AI 用量战报": "AI Usage Report",
+    "今日消耗": "Today's burn",
+    "累计": "Total",
+    "保存为图片": "Save PNG",
+    "复制到剪贴板": "Copy Image",
+    "晒用量就是最好的宣传 ✨": "Flexing your usage is the best ad ✨",
+    "近 30 天渠道用量（堆叠）": "By channel — last 30 days (stacked)",
+    "今日各渠道": "Today by channel",
+    "次": "reqs",
+    "今日暂无请求": "No requests today",
+    "去干活吧，流水会记住每一笔 💪": "Go build something — the ledger remembers 💪",
+
     // ---- 小猫文案（彩蛋） ----
     "Git commit -m '又一个 Bug' 🔧": "git commit -m 'yet another bug' 🔧",
     "产品经理说很简单 🤡": "\"It's simple,\" said the PM 🤡",

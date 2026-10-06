@@ -26,6 +26,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
 
     var settingsWindow: SettingsWindowController?
     var detailWindow: DetailWindowController?
+    var insightsWindow: InsightsWindowController?
     var monthWindow: MonthDetailWindowController?
     var hourlyWindow: HourlyDetailWindowController?
     var modelWindow: ModelDetailWindowController?
@@ -180,6 +181,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     private func showContextMenu() {
         let menu = NSMenu()
         let items: [(String, Selector)] = [
+            (L("洞察中心"), #selector(openInsights)),
             (L("今日详情"), #selector(openHourlyDetailToday)),
             (L("近7天用量"), #selector(openDetail)),
             (L("历史总量"), #selector(openAllTimeDetail)),
@@ -770,6 +772,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     @objc func openSettingsAndClose() {
         closePopover()
         openSettings()
+    }
+
+    /// 洞察中心（费用 / 洞察 / 分享 / 渠道 / 流水）
+    @objc func openInsights() {
+        closePopover()
+        if insightsWindow == nil {
+            insightsWindow = InsightsWindowController()
+        }
+        insightsWindow?.reload()
+        insightsWindow?.showWindow(nil)
+        insightsWindow?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc func openDetail() {

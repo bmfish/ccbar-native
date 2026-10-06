@@ -680,6 +680,11 @@ final class StatsStore {
     /// 今日各数据源分账
     func querySourceBreakdown() -> [SourceStat] {
         lock.lock(); defer { lock.unlock() }
+        return sourceBreakdownUnlocked()
+    }
+
+    /// 无锁版（调用方必须已持锁；NSLock 不可重入，别在持锁方法里调公开查询）
+    private func sourceBreakdownUnlocked() -> [SourceStat] {
         guard handle != nil, !attachedAdapters.isEmpty else { return [] }
 
         var result: [SourceStat] = []
@@ -693,6 +698,211 @@ final class StatsStore {
             result.append(SourceStat(source: String(cString: sqlite3_column_text(stmt, 0)),
                                      reqs: Int(sqlite3_column_int64(stmt, 1)),
                                      total: sqlite3_column_int64(stmt, 2)))
+        }
+        return result
+    }
+
+    // MARK: 洞察中心查询
+    //
+    // 费用类走 usage_log/usage_all（daily_agg 没有费用列）：
+    // epoch 区间条件走 created_at 索引，洞察窗口偶发查询，量级无压力。
+    // 历史 token 类优先 daily_agg，今日实时统一补查。
+
+    /// 近 N 天（含今天）总费用（USD）
+    func queryCost(days: Int) -> Double {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return 0 }
+        var total = 0.0
+        forEachRow("""
+        SELECT COALESCE(SUM(total_cost_usd), 0) FROM usage_all
+        WHERE created_at >= ? AND created_at < ?
+        """, binds: [Self.localMidnight(days), Self.localMidnight(-1)]) { stmt in
+            total = sqlite3_column_double(stmt, 0)
+        }
+        return total
+    }
+
+    /// 近 N 天（含今天）每日费用曲线，日期升序（可能有空洞，调用方补零）
+    func queryCostDaily(days: Int) -> [(date: String, cost: Double)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var result: [(date: String, cost: Double)] = []
+        forEachRow("""
+        SELECT date(created_at, 'unixepoch', 'localtime'), COALESCE(SUM(total_cost_usd), 0)
+        FROM usage_all
+        WHERE created_at >= ? AND created_at < ?
+        GROUP BY 1 ORDER BY 1
+        """, binds: [Self.localMidnight(days), Self.localMidnight(-1)]) { stmt in
+            result.append((String(cString: sqlite3_column_text(stmt, 0)), sqlite3_column_double(stmt, 1)))
+        }
+        return result
+    }
+
+    /// 近 N 天（含今天）按模型费用排行
+    func queryCostByModel(days: Int, limit: Int = 8) -> [(model: String, cost: Double, token: Int64)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var result: [(model: String, cost: Double, token: Int64)] = []
+        forEachRow("""
+        SELECT model, COALESCE(SUM(total_cost_usd), 0),
+               COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
+        FROM usage_all
+        WHERE created_at >= ? AND created_at < ?
+        GROUP BY model ORDER BY 2 DESC LIMIT \(max(1, limit))
+        """, binds: [Self.localMidnight(days), Self.localMidnight(-1)]) { stmt in
+            result.append((model: String(cString: sqlite3_column_text(stmt, 0)),
+                           cost: sqlite3_column_double(stmt, 1),
+                           token: sqlite3_column_int64(stmt, 2)))
+        }
+        return result
+    }
+
+    /// 连续使用天数（今天没用就从昨天起算）
+    func queryStreak() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return 0 }
+        var dates: [String] = []
+        forEachRowText("""
+        SELECT DISTINCT date FROM daily_agg
+        WHERE input + output + cache_create + cache_read > 0 ORDER BY 1 DESC LIMIT 400
+        """) { stmt in
+            dates.append(String(cString: sqlite3_column_text(stmt, 0)))
+        }
+        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        var expected = Calendar.current.startOfDay(for: Date())
+        if dates.first != fmt.string(from: expected) {
+            expected = Calendar.current.date(byAdding: .day, value: -1, to: expected)!
+        }
+        var streak = 0
+        for d in dates {
+            if d == fmt.string(from: expected) {
+                streak += 1
+                expected = Calendar.current.date(byAdding: .day, value: -1, to: expected)!
+            } else if d > fmt.string(from: expected) {
+                continue   // 游离的未来日期，跳过不打断
+            } else {
+                break
+            }
+        }
+        return streak
+    }
+
+    /// 周环比：近 7 天（含今天） vs 之前 7 天
+    func queryWeeklyDelta() -> (thisWeek: Int64, lastWeek: Int64) {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return (0, 0) }
+        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        let this = dailyAggSum(fromDay: fmt.string(from: Date(timeIntervalSince1970: TimeInterval(Self.localMidnight(6)))),
+                               toDay: fmt.string(from: Date(timeIntervalSince1970: TimeInterval(Self.localMidnight(1))))) ?? Self.zeroStats
+        let last = dailyAggSum(fromDay: fmt.string(from: Date(timeIntervalSince1970: TimeInterval(Self.localMidnight(13)))),
+                               toDay: fmt.string(from: Date(timeIntervalSince1970: TimeInterval(Self.localMidnight(7))))) ?? Self.zeroStats
+        let today = todayLive(now: Date()) ?? Self.zeroStats
+        return (this.total + today.total, last.total)
+    }
+
+    /// 近 N 天单日峰值（今日实时也参与竞争），无数据返回 nil
+    func queryPeakDay(days: Int) -> (date: String, token: Int64)? {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return nil }
+        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        var peak: (date: String, token: Int64)?
+        var stmt: OpaquePointer?
+        let sql = """
+        SELECT date, COALESCE(SUM(input + output + cache_create + cache_read), 0) AS t
+        FROM daily_agg WHERE date >= ? GROUP BY date ORDER BY t DESC LIMIT 1
+        """
+        guard sqlite3_prepare_v2(handle, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, fmt.string(from: Date(timeIntervalSince1970: TimeInterval(Self.localMidnight(days)))), -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            peak = (String(cString: sqlite3_column_text(stmt, 0)), sqlite3_column_int64(stmt, 1))
+        }
+        if let today = todayLive(now: Date()), today.total > (peak?.token ?? 0) {
+            peak = (fmt.string(from: Date()), today.total)
+        }
+        return peak
+    }
+
+    /// 近 N 天时段分布（小时 → token）。本地时区偏移烘进参数，避免逐行 localtime
+    func queryHourHistogram(days: Int) -> [Int: Int64] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [:] }
+        let offset = Int64(TimeZone.current.secondsFromGMT())
+        var out: [Int: Int64] = [:]
+        forEachRow("""
+        SELECT ((created_at + ?) % 86400) / 3600,
+               COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
+        FROM usage_all
+        WHERE created_at >= ? AND created_at < ?
+        GROUP BY 1
+        """, binds: [offset, Self.localMidnight(days), Self.localMidnight(-1)]) { stmt in
+            out[Int(sqlite3_column_int64(stmt, 0))] = sqlite3_column_int64(stmt, 1)
+        }
+        return out
+    }
+
+    /// 近 N 天每日总 token（跨渠道，含今天实时），日期升序
+    func queryDailyTokens(days: Int) -> [(date: String, token: Int64)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var result: [(date: String, token: Int64)] = []
+        let from = Self.dayString(fromEpoch: Self.localMidnight(days))
+        forEachRowText("""
+        SELECT date, COALESCE(SUM(input + output + cache_create + cache_read), 0)
+        FROM daily_agg WHERE date >= '\(from)' GROUP BY date ORDER BY date
+        """) { stmt in
+            result.append((String(cString: sqlite3_column_text(stmt, 0)), sqlite3_column_int64(stmt, 1)))
+        }
+        if let today = todayLive(now: Date()), today.total > 0 {
+            let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+            result.append((fmt.string(from: Date()), today.total))
+        }
+        return result
+    }
+
+    /// 近 N 天渠道每日 token（daily_agg 自带 source 维度），今日实时按源补一行
+    func queryChannelDaily(days: Int) -> [(date: String, source: String, token: Int64)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var result: [(date: String, source: String, token: Int64)] = []
+        let from = Self.dayString(fromEpoch: Self.localMidnight(days))
+        forEachRowText("""
+        SELECT date, source, COALESCE(SUM(input + output + cache_create + cache_read), 0)
+        FROM daily_agg WHERE date >= '\(from)'
+        GROUP BY date, source ORDER BY date
+        """) { stmt in
+            result.append((String(cString: sqlite3_column_text(stmt, 0)),
+                           String(cString: sqlite3_column_text(stmt, 1)),
+                           sqlite3_column_int64(stmt, 2)))
+        }
+        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        let today = fmt.string(from: Date())
+        let todaySources = sourceBreakdownUnlocked()
+        for s in todaySources where s.total > 0 {
+            result.append((today, s.source, s.total))
+        }
+        return result
+    }
+
+    /// 今日请求流水（最新在前）：时间 / 模型 / 来源 / token / 费用
+    func queryTodayTimeline(limit: Int = 800) -> [(time: Int, model: String, source: String, token: Int64, cost: Double)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var result: [(time: Int, model: String, source: String, token: Int64, cost: Double)] = []
+        forEachRow("""
+        SELECT created_at, model, source,
+               COALESCE(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens, 0),
+               COALESCE(total_cost_usd, 0)
+        FROM usage_all
+        WHERE created_at >= ?
+        ORDER BY created_at DESC LIMIT \(max(1, limit))
+        """, binds: [Self.localMidnight(0)]) { stmt in
+            let model = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? "-" : String(cString: sqlite3_column_text(stmt, 1))
+            result.append((time: Int(sqlite3_column_int64(stmt, 0)),
+                           model: model,
+                           source: String(cString: sqlite3_column_text(stmt, 2)),
+                           token: sqlite3_column_int64(stmt, 3),
+                           cost: sqlite3_column_double(stmt, 4)))
         }
         return result
     }
