@@ -27,6 +27,7 @@ final class InsightsRenderTests: XCTestCase {
         // 非周一直接跳过
         let store = StatsStore(storePath: NSTemporaryDirectory() + "ccbar-weekly-\(UUID().uuidString).db")
         defer { store.close() }
+        store.rebuild(configs: [])   // init 只记路径，rebuild 才开库
         let wednesday = Date(timeIntervalSince1970: 1_791_360_000)   // 2026-10-07（周三）
         XCTAssertNil(WeeklyReport.generateIfNeeded(store: store, now: wednesday))
 
