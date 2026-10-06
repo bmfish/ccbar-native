@@ -341,7 +341,6 @@ struct PopoverRootView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 6) {
-            BarActionButton(icon: "doc.on.doc", label: L("复制"), action: PopoverActions.shared.copy)
             BarActionButton(icon: "arrow.clockwise", label: L("刷新"), action: PopoverActions.shared.refresh)
             BarActionButton(icon: "chart.xyaxis.line", label: L("洞察"), action: PopoverActions.shared.insights)
             BarActionButton(icon: "gearshape", label: L("设置"), action: PopoverActions.shared.settings)

@@ -371,6 +371,7 @@ struct CostPage: View {
                             }
                         }
                     }
+                    .chartXAxis { sparseXAxis() }
                     .frame(height: 140)
                 }
 
@@ -506,6 +507,7 @@ struct InsightsPageView: View {
                 .cornerRadius(2)
             }
         }
+        .chartYAxis { tokenYAxis() }
         .frame(height: 120)
     }
 
@@ -789,6 +791,8 @@ struct ChannelsPage: View {
                 }
             }
             .chartLegend(position: .top, alignment: .leading)
+            .chartYAxis { tokenYAxis() }
+            .chartXAxis { sparseXAxis() }
             .frame(height: 200)
         }
     }
@@ -833,6 +837,8 @@ struct ChannelsPage: View {
                 }
             }
             .chartLegend(position: .top, alignment: .leading)
+            .chartYAxis { tokenYAxis() }
+            .chartXAxis { sparseXAxis() }
             .frame(height: 160)
         }
     }
@@ -851,6 +857,8 @@ struct ChannelsPage: View {
                 }
             }
             .chartLegend(position: .top, alignment: .leading)
+            .chartYAxis { tokenYAxis() }
+            .chartXAxis { sparseXAxis() }
             .frame(height: 160)
         }
     }
@@ -992,6 +1000,32 @@ struct TimelinePage: View {
 }
 
 // MARK: - 小组件
+
+/// Token 数量轴刻度：按当前语言格式化（亿/万 ↔ K/M）
+private func tokenYAxis() -> some AxisContent {
+    AxisMarks { value in
+        AxisGridLine()
+        AxisValueLabel {
+            if let v = value.as(Int64.self) {
+                Text(L10n.formatTokens(v))
+                    .font(.system(size: 9).monospacedDigit())
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+            }
+        }
+    }
+}
+
+/// 分类轴只留 5 个刻度，避免日期标签挤成省略号
+private func sparseXAxis() -> some AxisContent {
+    AxisMarks(values: .automatic(desiredCount: 5)) { value in
+        AxisValueLabel {
+            if let s = value.as(String.self) {
+                Text(s).font(.system(size: 9).monospacedDigit())
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+            }
+        }
+    }
+}
 
 private func mutedHint(_ text: String) -> some View {
     Text(text)
