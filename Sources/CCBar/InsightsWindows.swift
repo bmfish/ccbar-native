@@ -53,6 +53,7 @@ final class InsightsViewModel: ObservableObject {
     @Published var dailyAvg: Int64 = 0
     @Published var peak: (date: String, token: Int64)?
     @Published var peakHour: Int?
+    @Published var topModel: (model: String, token: Int64)?
     @Published var totalAll: Int64 = 0
     // 渠道
     @Published var channelPoints: [ChannelPoint] = []
@@ -61,13 +62,23 @@ final class InsightsViewModel: ObservableObject {
     @Published var timeline: [(time: Int, model: String, source: String, token: Int64, cost: Double)] = []
     // 分享卡近 7 天趋势
     @Published var weekTrend: [ChartEntry] = []
+    @Published var shareToday: Int64 = 0
+    @Published var shareWeek: Int64 = 0
+    @Published var shareMonth: Int64 = 0
+    @Published var shareTotal: Int64 = 0
 
     private var loaded = false
 
     /// 全量加载（查询都是索引区间扫描，实测 < 20ms，一次全查省得各页互相清数据）。
     /// 曾按页懒加载 + apply 全量覆盖，后加载的页面会把先加载的清零——勿改回。
     func load(force: Bool = false) {
-        guard let store = AppDelegate.shared?.store, force || !loaded else { return }
+        guard let store = AppDelegate.shared?.store else { return }
+        load(store: store, force: force)
+    }
+
+    /// 测试/预览注入 store 的版本
+    func load(store: StatsStore, force: Bool = false) {
+        guard force || !loaded else { return }
         loaded = true
         apply(compute(store: store))
     }
@@ -81,11 +92,16 @@ final class InsightsViewModel: ObservableObject {
         var dailyAvg: Int64 = 0
         var peak: (date: String, token: Int64)?
         var peakHour: Int?
+        var topModel: (model: String, token: Int64)?
         var totalAll: Int64 = 0
         var channelPoints: [ChannelPoint] = []
         var todaySources: [SourceStat] = []
         var timeline: [(time: Int, model: String, source: String, token: Int64, cost: Double)] = []
         var weekTrend: [ChartEntry] = []
+        var shareToday: Int64 = 0
+        var shareWeek: Int64 = 0
+        var shareMonth: Int64 = 0
+        var shareTotal: Int64 = 0
     }
 
     private func compute(store: StatsStore) -> Snapshot {
@@ -118,11 +134,16 @@ final class InsightsViewModel: ObservableObject {
         s.peak = store.queryPeakDay(days: 30)
         let hist = store.queryHourHistogram(days: 30)
         s.peakHour = hist.max { $0.value < $1.value }?.key
+        s.topModel = store.queryTopModel(days: 30)
         s.totalAll = store.queryTotalStats()?.total ?? 0
-        // 分享卡近 7 天趋势（daily_agg + 今日）
+        // 分享卡（直接读 store，不依赖 DataCache 的刷新时机）
         s.weekTrend = store.queryDailyTokens(days: 7).map {
             ChartEntry(label: String($0.date.suffix(5)), value: $0.token)
         }
+        s.shareToday = store.queryDayStats(days: 0)?.total ?? 0
+        s.shareWeek = store.queryDayStats(days: 7)?.total ?? 0
+        s.shareMonth = store.queryDayStats(days: 30)?.total ?? 0
+        s.shareTotal = store.queryTotalStats()?.total ?? 0
         // 渠道页
         s.channelPoints = store.queryChannelDaily(days: 30).map {
             ChannelPoint(date: $0.date, source: $0.source, token: $0.token)
@@ -145,11 +166,16 @@ final class InsightsViewModel: ObservableObject {
         dailyAvg = s.dailyAvg
         peak = s.peak
         peakHour = s.peakHour
+        topModel = s.topModel
         totalAll = s.totalAll
         channelPoints = s.channelPoints
         todaySources = s.todaySources
         timeline = s.timeline
         weekTrend = s.weekTrend
+        shareToday = s.shareToday
+        shareWeek = s.shareWeek
+        shareMonth = s.shareMonth
+        shareTotal = s.shareTotal
     }
 }
 
@@ -326,6 +352,9 @@ struct InsightsPageView: View {
                             vm.peak.map { Design.formatTokens($0.token) } ?? "-",
                             sub: vm.peak?.date ?? "")
                 insightCard(L("最活跃时段（近 30 天）"), peakHourText)
+                insightCard(L("使用量最大的模型（近 30 天）"),
+                            vm.topModel.map { Design.formatTokens($0.token) } ?? "-",
+                            sub: vm.topModel?.model ?? "")
             }
             .frame(maxWidth: .infinity)
         }
@@ -486,10 +515,10 @@ struct SharePage: View {
         let fmt = DateFormatter()
         fmt.dateStyle = .medium
         return UsageShareCard(
-            today: DataCache.shared.getCachedToday()?.total ?? 0,
-            week: DataCache.shared.getCachedWeek()?.total ?? 0,
-            month: DataCache.shared.getCachedMonth()?.total ?? 0,
-            total: DataCache.shared.getCachedTotal()?.total ?? 0,
+            today: vm.shareToday,
+            week: vm.shareWeek,
+            month: vm.shareMonth,
+            total: vm.shareTotal,
             trend: vm.weekTrend,
             dateText: fmt.string(from: Date()))
     }

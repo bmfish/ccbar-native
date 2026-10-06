@@ -223,6 +223,7 @@ let L10nEN: [String: String] = [
     "日均用量（近 30 天）": "Daily Avg (30d)",
     "单日峰值（近 30 天）": "Peak Day (30d)",
     "最活跃时段（近 30 天）": "Peak Hours (30d)",
+    "使用量最大的模型（近 30 天）": "Top Model (30d)",
     "AI 用量战报": "AI Usage Report",
     "今日消耗": "Today's burn",
     "累计": "Total",

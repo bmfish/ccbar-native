@@ -823,6 +823,22 @@ final class StatsStore {
         return peak
     }
 
+    /// 近 N 天（含今天）使用量最大的模型
+    func queryTopModel(days: Int) -> (model: String, token: Int64)? {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return nil }
+        var top: (model: String, token: Int64)?
+        forEachRow("""
+        SELECT model, COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0) AS t
+        FROM usage_all
+        WHERE created_at >= ? AND created_at < ?
+        GROUP BY model ORDER BY t DESC LIMIT 1
+        """, binds: [Self.localMidnight(days), Self.localMidnight(-1)]) { stmt in
+            top = (String(cString: sqlite3_column_text(stmt, 0)), sqlite3_column_int64(stmt, 1))
+        }
+        return top
+    }
+
     /// 近 N 天时段分布（小时 → token）。本地时区偏移烘进参数，避免逐行 localtime
     func queryHourHistogram(days: Int) -> [Int: Int64] {
         lock.lock(); defer { lock.unlock() }

@@ -86,6 +86,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
 
         // 每日家务：自动备份 + 静默检查更新
         runDailyHousekeeping()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.openInsights()
+        }
     }
 
     /// 每日家务（全部静默，失败只打日志不打扰）：
