@@ -196,6 +196,31 @@ final class StatsStoreTests: XCTestCase {
 
         // 每日 token：2 个历史日 + 今日
         XCTAssertEqual(store.queryDailyTokens(days: 30).count, 3)
+
+        // 应用每日（app_type='claude'）：2 个历史日 + 今日
+        let apps = store.queryAppDaily(days: 30)
+        XCTAssertEqual(apps.count, 3)
+        XCTAssertTrue(apps.allSatisfy { $0.app == "claude" })
+
+        // 构成每日：昨天 input=1000 output=2000 缓存读=500 缓存创建=100
+        let comp = store.queryCompositionDaily(days: 30)
+        XCTAssertEqual(comp.count, 3)
+        let yst = comp.first { $0.date == StatsStore.dayString(fromEpoch: StatsStore.localMidnight(1)) }
+        XCTAssertEqual(yst?.input, 1000)
+        XCTAssertEqual(yst?.output, 2000)
+        XCTAssertEqual(yst?.cacheRead, 500)
+        XCTAssertEqual(yst?.cacheCreate, 100)
+
+        // 月度进度：mtd 至少含今日实时，天数口径合法
+        let mp = store.queryMonthProgress()
+        XCTAssertGreaterThanOrEqual(mp.mtd, 360)
+        XCTAssertGreaterThanOrEqual(mp.daysElapsed, 1)
+        XCTAssertTrue((28...31).contains(mp.daysInMonth))
+
+        // 近 30 天使用量最大的模型
+        let top = store.queryTopModel(days: 30)
+        XCTAssertEqual(top?.model, "test-model")
+        XCTAssertEqual(top?.token, 33960)
     }
 
     func testSyncIdempotentAcrossRepeats() throws {

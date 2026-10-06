@@ -823,6 +823,80 @@ final class StatsStore {
         return peak
     }
 
+    /// 近 N 天应用（app_type）每日 token，今日实时按 app_type 细分补一行
+    func queryAppDaily(days: Int) -> [(date: String, app: String, token: Int64)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var result: [(date: String, app: String, token: Int64)] = []
+        forEachRow("""
+        SELECT date(created_at, 'unixepoch', 'localtime'),
+               COALESCE(NULLIF(app_type, ''), 'unknown'),
+               COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
+        FROM usage_log
+        WHERE created_at >= ? AND created_at < ?
+        GROUP BY 1, 2
+        """, binds: [Self.localMidnight(days), Self.localMidnight(-1)]) { stmt in
+            result.append((String(cString: sqlite3_column_text(stmt, 0)),
+                           String(cString: sqlite3_column_text(stmt, 1)),
+                           sqlite3_column_int64(stmt, 2)))
+        }
+        // 今日实时按 app_type 细分
+        forEachRow("""
+        SELECT COALESCE(NULLIF(app_type, ''), 'unknown'),
+               COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
+        FROM usage_all WHERE created_at >= ? AND created_at < ?
+        GROUP BY 1
+        """, binds: [Self.localMidnight(0), Self.localMidnight(-1)]) { stmt in
+            let token = sqlite3_column_int64(stmt, 1)
+            guard token > 0 else { return }
+            let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+            result.append((fmt.string(from: Date()),
+                           String(cString: sqlite3_column_text(stmt, 0)), token))
+        }
+        return result
+    }
+
+    /// 近 N 天每日 token 构成（输入/输出/缓存读/缓存创建），含今日实时，日期升序
+    func queryCompositionDaily(days: Int) -> [(date: String, input: Int64, output: Int64, cacheRead: Int64, cacheCreate: Int64)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var result: [(date: String, input: Int64, output: Int64, cacheRead: Int64, cacheCreate: Int64)] = []
+        let from = Self.dayString(fromEpoch: Self.localMidnight(days))
+        forEachRowText("""
+        SELECT date, COALESCE(SUM(input),0), COALESCE(SUM(output),0),
+               COALESCE(SUM(cache_read),0), COALESCE(SUM(cache_create),0)
+        FROM daily_agg WHERE date >= '\(from)' GROUP BY date ORDER BY date
+        """) { stmt in
+            result.append((String(cString: sqlite3_column_text(stmt, 0)),
+                           sqlite3_column_int64(stmt, 1), sqlite3_column_int64(stmt, 2),
+                           sqlite3_column_int64(stmt, 3), sqlite3_column_int64(stmt, 4)))
+        }
+        if let t = todayLive(now: Date()), t.total > 0 {
+            let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+            result.append((fmt.string(from: Date()), t.input, t.output, t.cacheRead, t.cacheCreate))
+        }
+        return result
+    }
+
+    /// 本月进度：月初至昨日累计 + 今日实时、已过天数、当月总天数
+    func queryMonthProgress() -> (mtd: Int64, daysElapsed: Int, daysInMonth: Int) {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return (0, 0, 30) }
+        let cal = Calendar.current
+        let now = Date()
+        let comps = cal.dateComponents([.year, .month], from: now)
+        let first = cal.date(from: comps)!
+        guard let nextMonth = cal.date(byAdding: .month, value: 1, to: first),
+              let lastDay = cal.date(byAdding: .day, value: -1, to: nextMonth) else { return (0, 0, 30) }
+        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        let monthStats = dailyAggSum(fromDay: fmt.string(from: first),
+                                     toDay: fmt.string(from: lastDay)) ?? Self.zeroStats
+        let today = todayLive(now: now) ?? Self.zeroStats
+        let daysElapsed = max(cal.component(.day, from: now), 1)
+        let daysInMonth = cal.range(of: .day, in: .month, for: now)?.count ?? 30
+        return (monthStats.total + today.total, daysElapsed, daysInMonth)
+    }
+
     /// 近 N 天（含今天）使用量最大的模型
     func queryTopModel(days: Int) -> (model: String, token: Int64)? {
         lock.lock(); defer { lock.unlock() }

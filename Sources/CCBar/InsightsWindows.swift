@@ -35,7 +35,54 @@ struct ChannelPoint: Identifiable {
     let id = UUID()
     let date: String
     let source: String
+    let name: String
     let token: Int64
+}
+
+struct AppPoint: Identifiable {
+    let id = UUID()
+    let date: String
+    let app: String
+    let name: String
+    let token: Int64
+}
+
+struct CompPoint: Identifiable {
+    let id = UUID()
+    let date: String
+    let input: Int64
+    let output: Int64
+    let cacheRead: Int64
+    let cacheCreate: Int64
+    var total: Int64 { input + output + cacheRead + cacheCreate }
+}
+
+/// 构成堆叠图的展开切片（预先拍平，图表表达式保持轻量）
+struct CompSlice: Identifiable {
+    let id = UUID()
+    let name: String
+    let date: String
+    let token: Int64
+}
+
+/// 热力图单元格；date 为空 = 首周对齐占位，token = -1
+struct HeatCell: Identifiable {
+    let id = UUID()
+    let date: String
+    let token: Int64
+}
+
+/// app_type 原始值 → 展示名
+func appDisplayName(_ raw: String) -> String {
+    switch raw {
+    case "claude": return "Claude Code"
+    case "claude-desktop": return "Claude Desktop"
+    case "codex": return "Codex"
+    case "opencode": return "OpenCode"
+    case "zcode": return "ZCode"
+    case "unknown": return L("未知")
+    default: return raw
+    }
 }
 
 @MainActor
@@ -54,6 +101,12 @@ final class InsightsViewModel: ObservableObject {
     @Published var peak: (date: String, token: Int64)?
     @Published var peakHour: Int?
     @Published var topModel: (model: String, token: Int64)?
+    @Published var appPoints: [AppPoint] = []
+    @Published var compDaily: [CompPoint] = []
+    @Published var weekdayTotals: [Int64] = Array(repeating: 0, count: 7)   // 周一..周日
+    @Published var heatmap: [HeatCell] = []                                  // 91 天 + 首周占位
+    @Published var monthProjected: Int64 = 0
+    @Published var monthMtd: Int64 = 0
     @Published var totalAll: Int64 = 0
     // 渠道
     @Published var channelPoints: [ChannelPoint] = []
@@ -93,6 +146,12 @@ final class InsightsViewModel: ObservableObject {
         var peak: (date: String, token: Int64)?
         var peakHour: Int?
         var topModel: (model: String, token: Int64)?
+        var appPoints: [AppPoint] = []
+        var compDaily: [CompPoint] = []
+        var weekdayTotals: [Int64] = Array(repeating: 0, count: 7)
+        var heatmap: [HeatCell] = []
+        var monthProjected: Int64 = 0
+        var monthMtd: Int64 = 0
         var totalAll: Int64 = 0
         var channelPoints: [ChannelPoint] = []
         var todaySources: [SourceStat] = []
@@ -136,6 +195,37 @@ final class InsightsViewModel: ObservableObject {
         s.peakHour = hist.max { $0.value < $1.value }?.key
         s.topModel = store.queryTopModel(days: 30)
         s.totalAll = store.queryTotalStats()?.total ?? 0
+        // 构成/应用/星期/热力/月度预测
+        s.appPoints = store.queryAppDaily(days: 30).map {
+            AppPoint(date: $0.date, app: $0.app, name: appDisplayName($0.app), token: $0.token)
+        }
+        s.compDaily = store.queryCompositionDaily(days: 30).map {
+            CompPoint(date: $0.date, input: $0.input, output: $0.output,
+                      cacheRead: $0.cacheRead, cacheCreate: $0.cacheCreate)
+        }
+        let tokens91 = store.queryDailyTokens(days: 91)
+        var wd = [Int64](repeating: 0, count: 7)
+        for t in tokens91 {
+            if let d = fmt.date(from: t.date) {
+                wd[(Calendar.current.component(.weekday, from: d) + 5) % 7] += t.token
+            }
+        }
+        s.weekdayTotals = wd
+        let start90 = cal.date(byAdding: .day, value: -90, to: cal.startOfDay(for: Date()))!
+        let pad = (Calendar.current.component(.weekday, from: start90) + 5) % 7
+        var cells: [HeatCell] = []
+        for _ in 0..<pad { cells.append(HeatCell(date: "", token: -1)) }
+        let tokensByDate = Dictionary(uniqueKeysWithValues: tokens91.map { ($0.date, $0.token) })
+        for d in 0..<91 {
+            guard let date = cal.date(byAdding: .day, value: d - 90, to: cal.startOfDay(for: Date())) else { continue }
+            let key = fmt.string(from: date)
+            cells.append(HeatCell(date: key, token: tokensByDate[key] ?? 0))
+        }
+        s.heatmap = cells
+        let mp = store.queryMonthProgress()
+        s.monthMtd = mp.mtd
+        s.monthProjected = mp.daysElapsed > 0
+            ? mp.mtd / Int64(mp.daysElapsed) * Int64(mp.daysInMonth) : 0
         // 分享卡（直接读 store，不依赖 DataCache 的刷新时机）
         s.weekTrend = store.queryDailyTokens(days: 7).map {
             ChartEntry(label: String($0.date.suffix(5)), value: $0.token)
@@ -146,7 +236,9 @@ final class InsightsViewModel: ObservableObject {
         s.shareTotal = store.queryTotalStats()?.total ?? 0
         // 渠道页
         s.channelPoints = store.queryChannelDaily(days: 30).map {
-            ChannelPoint(date: $0.date, source: $0.source, token: $0.token)
+            ChannelPoint(date: $0.date, source: $0.source,
+                         name: AppDelegate.shared?.sourceDisplayName($0.source) ?? $0.source,
+                         token: $0.token)
         }
         s.todaySources = store.querySourceBreakdown()
         // 流水页
@@ -167,6 +259,12 @@ final class InsightsViewModel: ObservableObject {
         peak = s.peak
         peakHour = s.peakHour
         topModel = s.topModel
+        appPoints = s.appPoints
+        compDaily = s.compDaily
+        weekdayTotals = s.weekdayTotals
+        heatmap = s.heatmap
+        monthProjected = s.monthProjected
+        monthMtd = s.monthMtd
         totalAll = s.totalAll
         channelPoints = s.channelPoints
         todaySources = s.todaySources
@@ -310,6 +408,31 @@ struct CostPage: View {
                     }
                 }
 
+                pageCard(L("性价比榜（近 30 天）")) {
+                    let ranked = vm.costModels
+                        .filter { $0.cost > 0.005 }
+                        .map { (model: $0.model, perDollar: Double($0.token) / $0.cost) }
+                        .sorted { $0.perDollar > $1.perDollar }
+                    if ranked.isEmpty {
+                        mutedHint(L("暂无数据"))
+                    } else {
+                        VStack(spacing: 8) {
+                            ForEach(ranked.indices, id: \.self) { i in
+                                HStack(spacing: 8) {
+                                    Text("\(i + 1). \(ranked[i].model)")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(Color(nsColor: Design.textPrimary))
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text(Design.formatTokens(Int64(ranked[i].perDollar)) + " / $1")
+                                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                                        .foregroundColor(Color(nsColor: Design.dataHighlightColor))
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Text(L("费用按 cc-switch 记录的单价折算；ZCode 渠道官方未计费，不计入"))
                     .font(.system(size: 10))
                     .foregroundColor(Color(nsColor: Design.textMuted))
@@ -355,8 +478,70 @@ struct InsightsPageView: View {
                 insightCard(L("使用量最大的模型（近 30 天）"),
                             vm.topModel.map { Design.formatTokens($0.token) } ?? "-",
                             sub: vm.topModel?.model ?? "")
+                insightCard(L("预计本月消耗"), Design.formatTokens(vm.monthProjected),
+                            sub: String(format: L("按当前速率 · 本月已用 %@"), Design.formatTokens(vm.monthMtd)))
             }
             .frame(maxWidth: .infinity)
+
+            pageCard(L("星期分布（近 90 天）")) {
+                weekdayChart
+            }
+
+            pageCard(L("近 90 天用量热力图")) {
+                heatmapGrid
+            }
+        }
+    }
+
+    private var weekdayChart: some View {
+        let symbols = Calendar.current.veryShortWeekdaySymbols
+        let labels = (0..<7).map { symbols[($0 + 1) % 7] }
+        return Chart {
+            ForEach(0..<7, id: \.self) { i in
+                BarMark(
+                    x: .value(L("星期"), labels[i]),
+                    y: .value(L("Token"), vm.weekdayTotals[i])
+                )
+                .foregroundStyle(Color(nsColor: Design.brandColor).opacity(0.85))
+                .cornerRadius(2)
+            }
+        }
+        .frame(height: 120)
+    }
+
+    private var heatmapGrid: some View {
+        let weeks = (vm.heatmap.count + 6) / 7
+        let maxToken = max(vm.heatmap.map(\.token).max() ?? 1, 1)
+        return Grid(horizontalSpacing: 3, verticalSpacing: 3) {
+            ForEach(0..<7, id: \.self) { row in
+                GridRow {
+                    ForEach(0..<weeks, id: \.self) { col in
+                        let idx = col * 7 + row
+                        if idx < vm.heatmap.count {
+                            let cell = vm.heatmap[idx]
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(heatColor(cell.token, maxToken: maxToken))
+                                .frame(width: 14, height: 14)
+                                .help(cell.date.isEmpty ? "" : "\(cell.date) · \(Design.formatTokens(cell.token))")
+                        } else {
+                            Color.clear.frame(width: 14, height: 14)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func heatColor(_ token: Int64, maxToken: Int64) -> Color {
+        guard token >= 0 else { return Color.white.opacity(0.04) }   // 占位
+        guard token > 0 else { return Color.white.opacity(0.08) }    // 无用量
+        let base = Color(nsColor: Theme.current.accent)
+        switch Double(token) / Double(maxToken) {
+        case ..<0.25: return base.opacity(0.30)
+        case ..<0.5: return base.opacity(0.50)
+        case ..<0.75: return base.opacity(0.72)
+        default: return base.opacity(0.95)
         }
     }
 
@@ -581,47 +766,136 @@ struct ChannelsPage: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                pageCard(L("近 30 天渠道用量（堆叠）")) {
-                    Chart {
-                        ForEach(vm.channelPoints) { p in
-                            AreaMark(
-                                x: .value(L("日期"), p.date),
-                                y: .value(L("Token"), p.token),
-                                series: .value(L("渠道"), AppDelegate.shared?.sourceDisplayName(p.source) ?? p.source)
-                            )
-                            .interpolationMethod(.catmullRom)
-                            .foregroundStyle(by: .value(L("渠道"), AppDelegate.shared?.sourceDisplayName(p.source) ?? p.source))
-                        }
-                    }
-                    .chartLegend(position: .top, alignment: .leading)
-                    .frame(height: 200)
-                }
+                channelChartCard
+                todayChannelsCard
+                appDistCard
+                compCard
+                hitRateCard
+            }
+        }
+    }
 
-                pageCard(L("今日各渠道")) {
-                    if vm.todaySources.isEmpty {
-                        mutedHint(L("暂无数据"))
-                    } else {
-                        VStack(spacing: 8) {
-                            ForEach(vm.todaySources, id: \.source) { s in
-                                HStack {
-                                    Text("● \(AppDelegate.shared?.sourceDisplayName(s.source) ?? s.source)")
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundColor(Color(nsColor: Design.brandColor))
-                                    Spacer()
-                                    Text("\(s.reqs) " + L("次"))
-                                        .font(.system(size: 11).monospacedDigit())
-                                        .foregroundColor(Color(nsColor: Design.textSecondary))
-                                    Text(Design.formatTokens(s.total))
-                                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                                        .foregroundColor(Color(nsColor: Design.dataHighlightColor))
-                                        .frame(width: 90, alignment: .trailing)
-                                }
-                            }
+    private var channelChartCard: some View {
+        pageCard(L("近 30 天渠道用量（堆叠）")) {
+            Chart {
+                ForEach(vm.channelPoints) { p in
+                    AreaMark(
+                        x: .value(L("日期"), p.date),
+                        y: .value(L("Token"), p.token),
+                        series: .value(L("渠道"), p.name)
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(by: .value(L("渠道"), p.name))
+                }
+            }
+            .chartLegend(position: .top, alignment: .leading)
+            .frame(height: 200)
+        }
+    }
+
+    private var todayChannelsCard: some View {
+        pageCard(L("今日各渠道")) {
+            if vm.todaySources.isEmpty {
+                mutedHint(L("暂无数据"))
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(vm.todaySources, id: \.source) { s in
+                        HStack {
+                            Text("● \(AppDelegate.shared?.sourceDisplayName(s.source) ?? s.source)")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(Color(nsColor: Design.brandColor))
+                            Spacer()
+                            Text("\(s.reqs) " + L("次"))
+                                .font(.system(size: 11).monospacedDigit())
+                                .foregroundColor(Color(nsColor: Design.textSecondary))
+                            Text(Design.formatTokens(s.total))
+                                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                                .foregroundColor(Color(nsColor: Design.dataHighlightColor))
+                                .frame(width: 90, alignment: .trailing)
                         }
                     }
                 }
             }
         }
+    }
+
+    private var appDistCard: some View {
+        pageCard(L("近 30 天应用分布（堆叠）")) {
+            Chart {
+                ForEach(vm.appPoints) { p in
+                    AreaMark(
+                        x: .value(L("日期"), p.date),
+                        y: .value(L("Token"), p.token),
+                        series: .value(L("应用"), p.name)
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(by: .value(L("应用"), p.name))
+                }
+            }
+            .chartLegend(position: .top, alignment: .leading)
+            .frame(height: 160)
+        }
+    }
+
+    private var compCard: some View {
+        pageCard(L("近 30 天 Token 构成")) {
+            Chart {
+                ForEach(compSlices) { slice in
+                    AreaMark(
+                        x: .value(L("日期"), slice.date),
+                        y: .value(L("Token"), slice.token),
+                        series: .value(L("构成"), slice.name)
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(by: .value(L("构成"), slice.name))
+                }
+            }
+            .chartLegend(position: .top, alignment: .leading)
+            .frame(height: 160)
+        }
+    }
+
+    private var compSlices: [CompSlice] {
+        let names = [L("输入"), L("输出"), L("缓存读"), L("缓存创建")]
+        let keys: [KeyPath<CompPoint, Int64>] = [\.input, \.output, \.cacheRead, \.cacheCreate]
+        var out: [CompSlice] = []
+        for (i, name) in names.enumerated() {
+            for p in vm.compDaily {
+                out.append(CompSlice(name: name, date: p.date, token: p[keyPath: keys[i]]))
+            }
+        }
+        return out
+    }
+
+    private var hitRateCard: some View {
+        pageCard(L("缓存命中率（近 30 天）")) {
+            Chart {
+                ForEach(vm.compDaily) { p in
+                    LineMark(
+                        x: .value(L("日期"), p.date),
+                        y: .value(L("命中率"), hitRate(p))
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(Color(nsColor: Design.brandColor))
+                }
+            }
+            .chartYScale(domain: 0...100)
+            .chartYAxis {
+                AxisMarks(position: .trailing) { value in
+                    AxisGridLine()
+                    AxisValueLabel {
+                        if let v = value.as(Double.self) {
+                            Text(String(format: "%.0f%%", v)).font(.system(size: 9))
+                        }
+                    }
+                }
+            }
+            .frame(height: 120)
+        }
+    }
+
+    private func hitRate(_ p: CompPoint) -> Double {
+        Double(p.cacheRead) / Double(max(p.total, 1)) * 100
     }
 }
 
