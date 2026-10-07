@@ -1107,6 +1107,126 @@ final class StatsStore {
         return result
     }
 
+    // MARK: 模型归一化
+
+    /// 归一化 key：小写 + 去掉 "vendor/" 路径前缀 + 去掉 "global.anthropic." / "jp.openai." 类区域前缀。
+    /// 保守策略：只合这些明显同款；带后缀变体（-ps-gcp-dst、[1m]）视为不同模型不动。
+    static func modelNormKey(_ model: String) -> String {
+        var m = model.lowercased()
+        if let slash = m.lastIndex(of: "/") {
+            m = String(m[m.index(after: slash)...])
+        }
+        for vendor in ["anthropic.", "openai."] {
+            if let range = m.range(of: vendor) {
+                m = String(m[range.upperBound...])
+                break
+            }
+        }
+        return m
+    }
+
+    /// 手动合并：把 from 的所有明细行并入 to（usage_log 直接 UPDATE，不可撤销）
+    @discardableResult
+    func mergeModel(from: String, to: String) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil, from != to, !from.isEmpty, !to.isEmpty else { return 0 }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, "UPDATE usage_log SET model = ? WHERE model = ?", -1, &stmt, nil) == SQLITE_OK else { return 0 }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, to, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        sqlite3_bind_text(stmt, 2, from, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        guard sqlite3_step(stmt) == SQLITE_DONE else { return 0 }
+        return Int(sqlite3_changes(handle))
+    }
+
+    /// 自动合并同名模型：按归一化 key 分组，组内以用量最大者为标准名，其余行并入。
+    /// 返回（合并的组数, 改写的行数）
+    func autoMergeModels() -> (groups: Int, changed: Int) {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return (0, 0) }
+        var models: [(name: String, token: Int64)] = []
+        forEachRow("""
+        SELECT model, COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
+        FROM usage_log GROUP BY model
+        """) { stmt in
+            models.append((String(cString: sqlite3_column_text(stmt, 0)), sqlite3_column_int64(stmt, 1)))
+        }
+        // key → 组员
+        var groups: [String: [(name: String, token: Int64)]] = [:]
+        for m in models {
+            groups[Self.modelNormKey(m.name), default: []].append(m)
+        }
+        var mergedGroups = 0, changed = 0
+        for (_, members) in groups where members.count > 1 {
+            let canonical = members.max { $0.token < $1.token }!.name
+            for member in members where member.name != canonical {
+                changed += mergeModelUnlocked(from: member.name, to: canonical)
+            }
+            mergedGroups += 1
+        }
+        return (mergedGroups, changed)
+    }
+
+    /// 已持锁版本的行合并（autoMergeModels 内部用）
+    private func mergeModelUnlocked(from: String, to: String) -> Int {
+        var stmt: OpaquePointer?
+        guard let db = handle,
+              sqlite3_prepare_v2(db, "UPDATE usage_log SET model = ? WHERE model = ?", -1, &stmt, nil) == SQLITE_OK else { return 0 }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, to, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        sqlite3_bind_text(stmt, 2, from, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        guard sqlite3_step(stmt) == SQLITE_DONE else { return 0 }
+        return Int(sqlite3_changes(db))
+    }
+
+    /// 从另一台机器的 ccbar.db 合并明细（主键去重，重复行自动跳过）。
+    /// 返回（对方总行数, 实际新增行数）；对方缺 usage_log 表返回 (0, 0)
+    func mergeFromDB(path: String) -> (read: Int, inserted: Int) {
+        lock.lock(); defer { lock.unlock() }
+        guard let db = handle else { return (0, 0) }
+        // 先只读打开校验结构，避免 ATTACH 坏库
+        var probe: OpaquePointer?
+        guard sqlite3_open_v2(path, &probe, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { return (0, 0) }
+        var tableCount = 0
+        if let p = probe {
+            var st: OpaquePointer?
+            if sqlite3_prepare_v2(p, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'usage_log'", -1, &st, nil) == SQLITE_OK {
+                if sqlite3_step(st) == SQLITE_ROW { tableCount = Int(sqlite3_column_int(st, 0)) }
+            }
+            sqlite3_finalize(st)
+        }
+        sqlite3_close(probe)
+        guard tableCount > 0 else { return (0, 0) }
+
+        let esc = path.replacingOccurrences(of: "'", with: "''")
+        guard exec("ATTACH DATABASE '\(esc)' AS merge_src") else { return (0, 0) }
+        defer { exec("DETACH DATABASE merge_src") }
+
+        let read = Int(scalarInt("SELECT COUNT(*) FROM merge_src.usage_log"))
+        let before = sqlite3_total_changes(db)
+        let ok = exec("""
+        INSERT OR IGNORE INTO usage_log
+            (source, request_id, app_type, model, input_tokens, output_tokens,
+             cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_cost_usd,
+             created_at, request_count)
+        SELECT source, request_id, app_type, model, input_tokens, output_tokens,
+               cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_cost_usd,
+               created_at, request_count
+        FROM merge_src.usage_log
+        """)
+        guard ok else { return (read, 0) }
+        let inserted = Int(sqlite3_total_changes(db) - before)
+        // 重算受影响区间的聚合缓存
+        var mn: Int64 = 0, mx: Int64 = 0
+        forEachRow("SELECT MIN(created_at), MAX(created_at) FROM merge_src.usage_log") { stmt in
+            mn = sqlite3_column_int64(stmt, 0); mx = sqlite3_column_int64(stmt, 1)
+        }
+        if mn > 0 {
+            refreshDailyAgg(fromEpoch: mn, toEpoch: mx + 86_400)
+        }
+        return (read, inserted)
+    }
+
     /// 任意历史窗口（daysAgoFrom ~ daysAgoTo，均含）的日 token 序列，日期升序（不含今日实时）
     func queryDailyTokensBetween(daysAgoFrom: Int, daysAgoTo: Int) -> [(date: String, token: Int64)] {
         lock.lock(); defer { lock.unlock() }

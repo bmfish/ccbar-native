@@ -411,6 +411,30 @@ struct InsightsRootView: View {
 
 // MARK: - 通用组件
 
+/// NSSavePanel 存 PNG（分享卡 / 洞察长图共用）
+func saveImageAsPNG(_ img: NSImage?, _ namePrefix: String) {
+    guard let img else { return }
+    let panel = NSSavePanel()
+    let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none)
+        .replacingOccurrences(of: "/", with: "")
+    panel.nameFieldStringValue = "\(namePrefix)-\(stamp).png"
+    panel.allowedContentTypes = [.png]
+    guard panel.runModal() == .OK, let url = panel.url,
+          let tiff = img.tiffRepresentation,
+          let rep = NSBitmapImageRep(data: tiff),
+          let png = rep.representation(using: .png, properties: [:]) else { return }
+    try? png.write(to: url)
+}
+
+/// 弹个信息框（模型合并结果等一次性提示）
+func showInfoAlert(_ title: String, _ msg: String) {
+    let alert = NSAlert()
+    alert.messageText = title
+    alert.informativeText = msg
+    alert.addButton(withTitle: L("好的"))
+    alert.runModal()
+}
+
 private func pageCard<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
     VStack(alignment: .leading, spacing: 10) {
         Text(title)
@@ -614,9 +638,28 @@ struct CostPage: View {
 
 struct InsightsPageView: View {
     @ObservedObject var vm: InsightsViewModel
+    @State private var chronicleExpanded = false
+    @State private var showMergeSheet = false
+    @State private var mergeFrom = ""
+    @State private var mergeTo = ""
 
     var body: some View {
         ScrollView {
+            VStack(spacing: 14) {
+                HStack {
+                    Spacer()
+                    Button(L("导出长图")) { exportLongImage() }
+                        .font(.system(size: 11))
+                }
+                content
+            }
+        }
+        .sheet(isPresented: $showMergeSheet) { mergeSheet }
+    }
+
+    /// 页面内容（长图导出也渲染这份，不含工具行）
+    private var content: some View {
+        VStack(spacing: 14) {
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
                 insightCard("🔥 " + L("连续使用"), "\(vm.streak)", unit: L("天"))
                 insightCard(L("本周用量"), Design.formatTokens(vm.thisWeek),
@@ -649,13 +692,24 @@ struct InsightsPageView: View {
         }
     }
 
+    /// 整页长图（含深色底）存 PNG
+    private func exportLongImage() {
+        let img = ShareCardRenderer.image(
+            content.frame(width: 720)
+                .background(Color(nsColor: Design.backgroundDark)),
+            width: 720)
+        saveImageAsPNG(img, "ccbar-insights")
+    }
+
     @ViewBuilder
     private var modelChronicle: some View {
         if vm.modelHistory.isEmpty {
             mutedHint(L("暂无数据"))
         } else {
             VStack(spacing: 8) {
-                ForEach(vm.modelHistory) { m in
+                // 默认只列前 10 个（按首用时间），点了再展开全部
+                let shown = chronicleExpanded ? vm.modelHistory : Array(vm.modelHistory.prefix(10))
+                ForEach(shown) { m in
                     HStack(spacing: 8) {
                         Text(m.model)
                             .font(.system(size: 12, weight: .medium))
@@ -671,8 +725,78 @@ struct InsightsPageView: View {
                             .frame(width: 84, alignment: .trailing)
                     }
                 }
+                if vm.modelHistory.count > 10 {
+                    Button(chronicleExpanded ? L("收起") :
+                            String(format: L("展开全部 %d 个模型"), vm.modelHistory.count)) {
+                        chronicleExpanded.toggle()
+                    }
+                    .font(.system(size: 11))
+                    .buttonStyle(.plain)
+                    .foregroundColor(Color(nsColor: Design.brandColor))
+                }
+                HStack {
+                    Spacer()
+                    Menu {
+                        Button(L("自动合并同名模型")) { autoMerge() }
+                        Button(L("手动合并…")) {
+                            mergeFrom = vm.modelHistory.first?.model ?? ""
+                            mergeTo = mergeFrom
+                            showMergeSheet = true
+                        }
+                    } label: {
+                        Label(L("整理模型"), systemImage: "arrow.triangle.merge")
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(nsColor: Design.textSecondary))
+                    }
+                    .fixedSize()
+                }
             }
         }
+    }
+
+    private func autoMerge() {
+        guard let store = AppDelegate.shared?.store else { return }
+        let (groups, changed) = store.autoMergeModels()
+        vm.load(force: true)
+        if groups == 0 {
+            showInfoAlert(L("没有需要合并的模型"), L("大小写、厂商前缀不同的同名模型都已一致"))
+        } else {
+            showInfoAlert(L("合并完成"),
+                          String(format: L("已合并 %d 组 · 改写 %d 行明细"), groups, changed))
+        }
+    }
+
+    private func doMerge() {
+        guard let store = AppDelegate.shared?.store else { return }
+        let changed = store.mergeModel(from: mergeFrom, to: mergeTo)
+        showMergeSheet = false
+        vm.load(force: true)
+        showInfoAlert(L("合并完成"), String(format: L("已改写 %d 行明细"), changed))
+    }
+
+    private var mergeSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L("手动合并模型"))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(Color(nsColor: Design.textPrimary))
+            Picker(L("从"), selection: $mergeFrom) {
+                ForEach(vm.modelHistory) { m in Text(m.model).tag(m.model) }
+            }
+            Picker(L("合并到"), selection: $mergeTo) {
+                ForEach(vm.modelHistory) { m in Text(m.model).tag(m.model) }
+            }
+            Text(L("「从」模型的所有明细行会并入「到」模型，操作不可撤销"))
+                .font(.system(size: 10))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+            HStack {
+                Spacer()
+                Button(L("取消")) { showMergeSheet = false }
+                Button(L("合并")) { doMerge() }
+                    .disabled(mergeFrom == mergeTo || mergeFrom.isEmpty)
+            }
+        }
+        .padding(18)
+        .frame(width: 440)
     }
 
     /// 短日期：同年 MM-dd，跨年 yy-MM-dd
@@ -967,17 +1091,7 @@ struct SharePage: View {
     }
 
     private func savePNG(_ img: NSImage?, _ namePrefix: String) {
-        guard let img else { return }
-        let panel = NSSavePanel()
-        let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none)
-            .replacingOccurrences(of: "/", with: "")
-        panel.nameFieldStringValue = "\(namePrefix)-\(stamp).png"
-        panel.allowedContentTypes = [.png]
-        guard panel.runModal() == .OK, let url = panel.url,
-              let tiff = img.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let png = rep.representation(using: .png, properties: [:]) else { return }
-        try? png.write(to: url)
+        saveImageAsPNG(img, namePrefix)
     }
 
     private func copyPNG(_ img: NSImage?, set flag: @escaping (Bool) -> Void) {
@@ -1403,6 +1517,16 @@ struct TimelinePage: View {
             }
             .buttonStyle(.plain)
             .disabled(isToday)
+            if !isToday {
+                Button(L("今天")) { vm.loadTimeline(day: Date()) }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(Color(nsColor: Design.brandColor))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color(nsColor: Design.brandColor).opacity(0.14)))
+                    .padding(.leading, 4)
+            }
         }
     }
 

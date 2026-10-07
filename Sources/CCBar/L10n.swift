@@ -290,6 +290,30 @@ let L10nEN: [String: String] = [
     "该日暂无请求": "No requests on this day",
     "今天": "Today",
     "昨天": "Yesterday",
+    "导出长图": "Export Full Image",
+    "收起": "Collapse",
+    "展开全部 %d 个模型": "Show all %d models",
+    "整理模型": "Tidy Models",
+    "自动合并同名模型": "Auto-merge same-name models",
+    "手动合并…": "Merge manually…",
+    "手动合并模型": "Merge Models Manually",
+    "从": "From",
+    "合并到": "Merge Into",
+    "「从」模型的所有明细行会并入「到」模型，操作不可撤销":
+        "All rows of the source model will be merged into the target. This cannot be undone.",
+    "合并": "Merge",
+    "合并完成": "Merge Complete",
+    "已合并 %d 组 · 改写 %d 行明细": "Merged %d groups · rewrote %d rows",
+    "已改写 %d 行明细": "Rewrote %d rows",
+    "没有需要合并的模型": "Nothing to merge",
+    "大小写、厂商前缀不同的同名模型都已一致": "Same-name models differing by case or vendor prefix are already consistent",
+    "多机合并（导入另一台机器的统计库）": "Multi-machine Merge (import another Mac's stats DB)",
+    "合并数据库…": "Merge Database…",
+    "选择另一台机器的 ccbar.db（统计库），明细将按主键去重合并":
+        "Choose another Mac's ccbar.db; rows are deduplicated by primary key",
+    "不是有效的 ccBar 统计库（缺 usage_log 表或文件打不开）":
+        "Not a valid ccBar stats DB (usage_log missing or unreadable)",
+    "共读取 %d 行 · 新增 %d 行（重复自动跳过）": "Read %d rows · %d new (duplicates skipped)",
 
     // ---- 小猫文案（彩蛋） ----
     "Git commit -m '又一个 Bug' 🔧": "git commit -m 'yet another bug' 🔧",

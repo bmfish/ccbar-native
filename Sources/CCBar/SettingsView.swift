@@ -309,6 +309,24 @@ final class SettingsViewModel: ObservableObject {
                          r.read, r.inserted, r.skipped))
     }
 
+    /// 多机合并：导入另一台机器导出的 ccbar.db（主键去重，重复行跳过）
+    func mergeDatabase() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "db") ?? .data,
+                                     UTType(filenameExtension: "sqlite") ?? .data]
+        panel.canChooseDirectories = false
+        panel.message = L("选择另一台机器的 ccbar.db（统计库），明细将按主键去重合并")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let r = AppDelegate.shared?.store.mergeFromDB(path: url.path) ?? (read: 0, inserted: 0)
+        if r.read == 0 && r.inserted == 0 {
+            showAlert(L("合并失败"), L("不是有效的 ccBar 统计库（缺 usage_log 表或文件打不开）"))
+            return
+        }
+        showAlert(L("合并完成"),
+                  String(format: L("共读取 %d 行 · 新增 %d 行（重复自动跳过）"), r.read, r.inserted))
+        AppDelegate.shared?.refreshData()
+    }
+
     /// 打开自动备份目录（不存在则先建）
     func openBackupFolder() {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -495,6 +513,16 @@ struct SettingsRootView: View {
             Button(L("导入 CSV")) { vm.importData() }
                 .font(.system(size: 11))
             Button(L("导出 CSV")) { vm.exportData() }
+                .font(.system(size: 11))
+        }
+
+        // 多机合并（另一台机器的 ccbar.db 整库导入，主键去重）
+        HStack(spacing: 6) {
+            Text(L("多机合并（导入另一台机器的统计库）"))
+                .font(.system(size: 11))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+            Spacer()
+            Button(L("合并数据库…")) { vm.mergeDatabase() }
                 .font(.system(size: 11))
         }
 

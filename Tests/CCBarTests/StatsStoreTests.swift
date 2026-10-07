@@ -22,7 +22,7 @@ final class StatsStoreTests: XCTestCase {
     }
 
     /// 模拟 cc-switch 源库：明细表 + 聚合表（聚合留空，保证 rollups 同步语句可执行）
-    private func makeFixtureSource() {
+    private func makeFixtureSource(at path: String? = nil) {
         fixtureExec("""
         CREATE TABLE proxy_request_logs (
             request_id TEXT PRIMARY KEY, app_type TEXT, model TEXT,
@@ -36,12 +36,12 @@ final class StatsStoreTests: XCTestCase {
             output_tokens INTEGER, cache_read_tokens INTEGER,
             cache_creation_tokens INTEGER, total_cost_usd REAL, request_count INTEGER
         );
-        """)
+        """, at: path)
     }
 
-    private func fixtureExec(_ sql: String) {
+    private func fixtureExec(_ sql: String, at path: String? = nil) {
         var db: OpaquePointer?
-        guard sqlite3_open_v2(sourcePath, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK else {
+        guard sqlite3_open_v2(path ?? sourcePath, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK else {
             XCTFail("打不开 fixture 源库")
             return
         }
@@ -53,9 +53,10 @@ final class StatsStoreTests: XCTestCase {
     private func insertFixtureRow(id: String, createdAt: Int64,
                                   input: Int64, output: Int64,
                                   cacheRead: Int64 = 0, cacheCreate: Int64 = 0,
-                                  model: String = "test-model") -> Bool {
+                                  model: String = "test-model",
+                                  at path: String? = nil) -> Bool {
         var db: OpaquePointer?
-        guard sqlite3_open_v2(sourcePath, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else { return false }
+        guard sqlite3_open_v2(path ?? sourcePath, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else { return false }
         defer { sqlite3_close_v2(db) }
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, """
@@ -319,6 +320,78 @@ final class StatsStoreTests: XCTestCase {
             StatsStore.dayString(fromEpoch: StatsStore.localMidnight(1)),
         ])
         XCTAssertEqual(daily.map(\.token), [2000, 300, 30000])
+    }
+
+    func testModelMergeAndDBMerge() throws {
+        // 归一化 key：大小写/厂商前缀合并，变体后缀保持独立
+        XCTAssertEqual(StatsStore.modelNormKey("GLM-5.3-Flash"), "glm-5.3-flash")
+        XCTAssertEqual(StatsStore.modelNormKey("deepseek-ai/DeepSeek-V4-Flash"), "deepseek-v4-flash")
+        XCTAssertEqual(StatsStore.modelNormKey("global.anthropic.claude-opus-4-8"), "claude-opus-4-8")
+        XCTAssertEqual(StatsStore.modelNormKey("jp.anthropic.Claude-Opus-4-8"), "claude-opus-4-8")
+        XCTAssertEqual(StatsStore.modelNormKey("claude-opus-4-8-ps-gcp-dst"), "claude-opus-4-8-ps-gcp-dst")
+        XCTAssertEqual(StatsStore.modelNormKey("claude-opus-4-8[1m]"), "claude-opus-4-8[1m]")
+
+        // 夹具：两个同款不同写法的模型 + 一个独立模型
+        makeFixtureSource()
+        XCTAssertTrue(insertFixtureRow(id: "m1", createdAt: StatsStore.localMidnight(2) + 3600,
+                                       input: 1000, output: 1000, model: "GLM-5.3-Flash"))
+        XCTAssertTrue(insertFixtureRow(id: "m2", createdAt: StatsStore.localMidnight(1) + 3600,
+                                       input: 2000, output: 2000, model: "glm-5.3-flash"))
+        XCTAssertTrue(insertFixtureRow(id: "m3", createdAt: StatsStore.localMidnight(1) + 7200,
+                                       input: 500, output: 500, model: "claude-opus-4-8"))
+        rebuildWithFixture()
+        store.syncIfNeeded()
+        XCTAssertEqual(store.queryModelHistory().count, 3)
+
+        // 自动合并：glm 一组并入用量大的写法（glm-5.3-flash），claude 不动
+        let result = store.autoMergeModels()
+        XCTAssertEqual(result.groups, 1)
+        XCTAssertGreaterThan(result.changed, 0)
+        let history = store.queryModelHistory()
+        XCTAssertEqual(history.count, 2)
+        XCTAssertTrue(history.contains { $0.model == "glm-5.3-flash" && $0.token == 6000 })
+        XCTAssertFalse(history.contains { $0.model == "GLM-5.3-Flash" })
+
+        // 手动合并：claude-opus-4-8 并入 glm-5.3-flash
+        let changed = store.mergeModel(from: "claude-opus-4-8", to: "glm-5.3-flash")
+        XCTAssertEqual(changed, 1)
+        XCTAssertEqual(store.queryModelHistory().count, 1)
+    }
+
+    func testMergeFromDB() throws {
+        // 本库 1 行 + 另一库 2 行（1 行同主键重复）
+        makeFixtureSource()
+        XCTAssertTrue(insertFixtureRow(id: "dup", createdAt: StatsStore.localMidnight(1) + 3600,
+                                       input: 100, output: 100))
+        rebuildWithFixture()
+        store.syncIfNeeded()
+
+        let otherDir = tmpDir + "other-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: otherDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: otherDir) }
+        let other = StatsStore(storePath: otherDir + "/ccbar.db")
+        let otherSource = otherDir + "/src.db"
+        // 给另一库造独立 fixture 源再同步
+        makeFixtureSource(at: otherSource)
+        XCTAssertTrue(insertFixtureRow(id: "dup", createdAt: StatsStore.localMidnight(1) + 3600,
+                                       input: 100, output: 100, at: otherSource))
+        XCTAssertTrue(insertFixtureRow(id: "only-other", createdAt: StatsStore.localMidnight(2) + 3600,
+                                       input: 700, output: 700, at: otherSource))
+        other.rebuild(configs: [SourceConfig(id: "ccswitch", enabled: true, dbPath: otherSource)])
+        other.syncIfNeeded()
+        other.close()
+
+        // 合并：对方 2 行，新增 1 行（dup 主键相同跳过）
+        let r = store.mergeFromDB(path: otherDir + "/ccbar.db")
+        XCTAssertEqual(r.read, 2)
+        XCTAssertEqual(r.inserted, 1)
+        // 幂等：再合并一次零新增
+        let r2 = store.mergeFromDB(path: otherDir + "/ccbar.db")
+        XCTAssertEqual(r2.inserted, 0)
+        // 明细与聚合都对
+        XCTAssertEqual(store.queryDayStats(days: 3)?.total, 1600)
+        // 坏文件：(0, 0)
+        XCTAssertEqual(store.mergeFromDB(path: otherDir + "/not-exist.db").read, 0)
     }
 
     func testSyncIdempotentAcrossRepeats() throws {
