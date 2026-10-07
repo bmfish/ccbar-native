@@ -28,15 +28,31 @@ struct DetailCell: Identifiable {
     }
 }
 
-/// 表格行（isHeader 时用 10pt 半粗小字、22pt 行高）
+/// 表格行（isHeader 时用 10pt 半粗小字、22pt 行高；highlight 行铺主题色淡底）
 struct DetailRow: Identifiable {
     let id = UUID()
     let cells: [DetailCell]
     let isHeader: Bool
+    let highlight: Bool
 
-    init(cells: [DetailCell], isHeader: Bool = false) {
+    init(cells: [DetailCell], isHeader: Bool = false, highlight: Bool = false) {
         self.cells = cells
         self.isHeader = isHeader
+        self.highlight = highlight
+    }
+}
+
+/// 顶部统计卡片（大数字 + 小标签）
+struct DetailStat: Identifiable {
+    let id = UUID()
+    let label: String
+    let value: String
+    var accent: NSColor = Design.dataHighlightColor
+
+    init(label: String, value: String, accent: NSColor = Design.dataHighlightColor) {
+        self.label = label
+        self.value = value
+        self.accent = accent
     }
 }
 
@@ -53,6 +69,7 @@ struct DetailBlock: Identifiable {
     let kind: Kind
 
     enum Kind {
+        case statCards([DetailStat])
         case chart(DetailChartSpec, height: CGFloat)
         case separator
         case rows([DetailRow])
@@ -78,6 +95,7 @@ struct DetailRootView: View {
     var onPrev: (() -> Void)?
     var onNext: (() -> Void)?
     var onExport: (() -> Void)?
+    var onToday: (() -> Void)?
 
     var body: some View {
         ZStack {
@@ -101,23 +119,30 @@ struct DetailRootView: View {
     }
 
     private var navBar: some View {
-        ZStack {
+        HStack(spacing: 8) {
             Text(model.dateText)
-                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                .font(.system(size: 14, weight: .semibold).monospacedDigit())
                 .foregroundColor(Color(nsColor: Design.textPrimary))
-            HStack {
-                if let onPrev {
-                    navButton("chevron.left", action: onPrev)
+            Spacer()
+            if let onToday {
+                Button(action: onToday) {
+                    Text(L("回到今天"))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(Color(nsColor: Design.brandColor))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color(nsColor: Design.brandColor).opacity(0.12)))
                 }
-                Spacer()
-                HStack(spacing: 16) {
-                    if let onExport {
-                        navButton("square.and.arrow.up", action: onExport)
-                    }
-                    if let onNext {
-                        navButton("chevron.right", action: onNext)
-                    }
-                }
+                .buttonStyle(.plain)
+            }
+            if let onPrev {
+                navButton("chevron.left", action: onPrev)
+            }
+            if let onExport {
+                navButton("square.and.arrow.up", action: onExport)
+            }
+            if let onNext {
+                navButton("chevron.right", action: onNext)
             }
         }
         .frame(height: 30)
@@ -126,17 +151,35 @@ struct DetailRootView: View {
     }
 
     private func navButton(_ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(Color(nsColor: Design.textSecondary))
-        }
-        .buttonStyle(.plain)
+        NavCircleButton(symbol: symbol, action: action)
     }
 
     @ViewBuilder
     private func blockView(_ kind: DetailBlock.Kind) -> some View {
         switch kind {
+        case .statCards(let stats):
+            HStack(spacing: 8) {
+                ForEach(stats) { s in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(s.label)
+                            .font(.system(size: 10))
+                            .foregroundColor(Color(nsColor: Design.textMuted))
+                        Text(s.value)
+                            .font(.system(size: 16, weight: .bold).monospacedDigit())
+                            .foregroundColor(Color(nsColor: s.accent))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+                        .fill(Color(nsColor: Design.cardFillDark)))
+                    .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+                        .strokeBorder(Color(nsColor: Design.cardBorderDark), lineWidth: 0.5))
+                }
+            }
+            .padding(.vertical, 2)
         case .chart(let spec, let height):
             chartView(spec)
                 .frame(height: height)
@@ -147,12 +190,18 @@ struct DetailRootView: View {
                 .fill(Color(nsColor: Design.separatorColor))
                 .frame(height: 1)
         case .rows(let rows):
-            ForEach(rows) { rowView($0) }
+            ForEach(rows) { RowView(row: $0) }
         case .empty(let text):
-            Text(text)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(Color(nsColor: Design.textMuted))
-                .padding(.top, 20)
+            VStack(spacing: 8) {
+                Image(systemName: "chart.bar.xaxis")
+                    .font(.system(size: 22))
+                    .foregroundColor(Color(nsColor: Design.textMuted).opacity(0.6))
+                Text(text)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 28)
         }
     }
 
@@ -168,22 +217,54 @@ struct DetailRootView: View {
         }
     }
 
-    private func rowView(_ row: DetailRow) -> some View {
-        HStack(spacing: 0) {
-            ForEach(row.cells) { cell in
-                Text(cell.text)
-                    .font(row.isHeader
-                          ? .system(size: 10, weight: .semibold)
-                          : .system(size: cell.bold ? 12 : 11,
-                                    weight: cell.bold ? .bold : .medium).monospacedDigit())
-                    .foregroundColor(cell.color)
-                    .lineLimit(1)
-                    .frame(width: cell.width, alignment: cell.alignment == .leading ? .leading : .trailing)
-                    .padding(.leading, cell.alignment == .trailing ? 8 : 0)
+    /// 表格行：hover 微亮，highlight 行铺主题色淡底（峰值日）
+    private struct RowView: View {
+        let row: DetailRow
+        @State private var hovering = false
+
+        var body: some View {
+            HStack(spacing: 0) {
+                ForEach(row.cells) { cell in
+                    Text(cell.text)
+                        .font(row.isHeader
+                              ? .system(size: 10, weight: .semibold)
+                              : .system(size: cell.bold ? 12 : 11,
+                                        weight: cell.bold ? .bold : .medium).monospacedDigit())
+                        .foregroundColor(cell.color)
+                        .lineLimit(1)
+                        .frame(width: cell.width, alignment: cell.alignment == .leading ? .leading : .trailing)
+                        .padding(.leading, cell.alignment == .trailing ? 8 : 0)
+                }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            .frame(height: row.isHeader ? 22 : 24)
+            .padding(.horizontal, row.highlight || hovering ? 5 : 0)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(row.highlight ? Color(nsColor: Design.brandColor).opacity(0.10)
+                          : hovering ? Color.white.opacity(0.04) : Color.clear)
+            )
+            .onHover { hovering = $0 }
         }
-        .frame(height: row.isHeader ? 22 : 24)
+    }
+}
+
+/// 导航圆形按钮（hover 反馈）
+private struct NavCircleButton: View {
+    let symbol: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(Color(nsColor: hovering ? Design.textPrimary : Design.textSecondary))
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(Color(nsColor: hovering ? Design.activeFill : .clear)))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
 
@@ -207,12 +288,14 @@ struct DonutLegendRepresenter: NSViewRepresentable {
 class DetailBaseWindowController: NSWindowController {
     let content = DetailContentModel()
 
-    /// 装配 SwiftUI 内容视图；导航/导出由子类闭包提供
+    /// 装配 SwiftUI 内容视图；导航/导出/回到今天由子类闭包提供
     func installContent(onPrev: (() -> Void)? = nil,
                         onNext: (() -> Void)? = nil,
-                        onExport: (() -> Void)? = nil) {
+                        onExport: (() -> Void)? = nil,
+                        onToday: (() -> Void)? = nil) {
         window?.contentViewController = NSHostingController(
-            rootView: DetailRootView(model: content, onPrev: onPrev, onNext: onNext, onExport: onExport))
+            rootView: DetailRootView(model: content, onPrev: onPrev, onNext: onNext,
+                                     onExport: onExport, onToday: onToday))
     }
 
     func detailCell(_ text: String, _ width: CGFloat, _ color: NSColor,
@@ -221,14 +304,18 @@ class DetailBaseWindowController: NSWindowController {
                    color: Color(nsColor: color), alignment: leading ? .leading : .trailing)
     }
 
-    /// 数据行（日期/名称, 请求, 总Token, 缓存读）——各窗口共用同套配色口径
-    func dataRow(col0: String, reqs: Int, token: Int64, cache: Int64, widths: [CGFloat]) -> DetailRow {
+    /// 数据行（日期/名称, 请求, 总Token, 缓存读）——各窗口共用同套配色口径。
+    /// highlight = 峰值行（主题色淡底）；markToday = 今天（首列主题色）
+    func dataRow(col0: String, reqs: Int, token: Int64, cache: Int64, widths: [CGFloat],
+                 highlight: Bool = false, markToday: Bool = false) -> DetailRow {
         DetailRow(cells: [
-            detailCell(col0, widths[0], token == 0 ? Design.textMuted : Design.dataHighlightColor, leading: true),
+            detailCell(col0, widths[0],
+                       markToday ? Design.brandColor : (token == 0 ? Design.textMuted : Design.dataHighlightColor),
+                       bold: markToday, leading: true),
             detailCell(reqs == 0 ? "-" : "\(reqs)", widths[1], reqs == 0 ? Design.textMuted : Design.textPrimary),
             detailCell(fmtNum(token), widths[2], token == 0 ? Design.textMuted : Design.textPrimary),
             detailCell(fmtNum(cache), widths[3], cache == 0 ? Design.textMuted : Design.textSecondary)
-        ])
+        ], highlight: highlight)
     }
 
     func totalRow(_ label: String, reqs: Int, token: Int64, cache: Int64, widths: [CGFloat]) -> DetailRow {
@@ -327,7 +414,7 @@ class DetailWindowController: DetailBaseWindowController {
 
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 356),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 402),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered, defer: false
         )
@@ -339,7 +426,8 @@ class DetailWindowController: DetailBaseWindowController {
         self.init(window: window)
         installContent(onPrev: { [weak self] in self?.goPrevWeek() },
                        onNext: { [weak self] in self?.goNextWeek() },
-                       onExport: { [weak self] in self?.exportCSVClicked() })
+                       onExport: { [weak self] in self?.exportCSVClicked() },
+                       onToday: { [weak self] in self?.goThisWeek() })
     }
 
     func goPrevWeek() {
@@ -350,6 +438,16 @@ class DetailWindowController: DetailBaseWindowController {
     func goNextWeek() {
         let next = Calendar.current.date(byAdding: .day, value: 7, to: currentWeekStart)!
         if next <= Date() { currentWeekStart = next; onDateChange?(next) }
+    }
+
+    /// 回到本周（周一起始，与打开时的口径一致）
+    func goThisWeek() {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let weekday = cal.component(.weekday, from: today)
+        let monday = cal.date(byAdding: .day, value: -(weekday - 2), to: today)!
+        currentWeekStart = monday
+        onDateChange?(monday)
     }
 
     func reloadData(db: OpaquePointer?, weekStart: Date) {
@@ -374,6 +472,7 @@ class DetailWindowController: DetailBaseWindowController {
         let agg = queryDailyRows(db: db, fromDay: dayKey.string(from: weekStart),
                                  toDay: dayKey.string(from: endOfWeek))
 
+        var dayData: [(dateStr: String, reqs: Int, token: Int64, cache: Int64, daysAgo: Int)] = []
         for d in 0..<7 {
             guard let date = cal.date(byAdding: .day, value: d, to: weekStart) else { continue }
             let dateStr = dayKey.string(from: date)
@@ -385,13 +484,28 @@ class DetailWindowController: DetailBaseWindowController {
                 reqs = a.reqs; token = a.token; cache = a.cache
             }
             totalReqs += reqs; totalToken += token; totalCache += cache
-            exportRows.append([dateStr, "\(reqs)", "\(token)", "\(cache)"])
-            dayRows.append(dataRow(col0: fmt.string(from: date), reqs: reqs,
-                                   token: token, cache: cache, widths: widths))
+            dayData.append((dateStr, reqs, token, cache, daysAgo))
             chartEntries.append(ChartEntry(label: String(dateStr.suffix(5)), value: token))
         }
 
+        let peakToken = dayData.map(\.token).max() ?? 0
+        let daysWithData = dayData.filter { $0.token > 0 }.count
+        let dailyAvg = daysWithData > 0 ? totalToken / Int64(daysWithData) : 0
+        for e in dayData {
+            exportRows.append([e.dateStr, "\(e.reqs)", "\(e.token)", "\(e.cache)"])
+            dayRows.append(dataRow(col0: e.dateStr, reqs: e.reqs, token: e.token, cache: e.cache,
+                                   widths: widths,
+                                   highlight: peakToken > 0 && e.token == peakToken,
+                                   markToday: e.daysAgo == 0))
+        }
+
         content.set([
+            .statCards([
+                DetailStat(label: L("总 Token"), value: Design.formatTokens(totalToken)),
+                DetailStat(label: L("日均"), value: Design.formatTokens(dailyAvg)),
+                DetailStat(label: L("请求数"), value: "\(totalReqs)"),
+                DetailStat(label: L("缓存读"), value: Design.formatTokens(totalCache)),
+            ]),
             .chart(.trend(chartEntries), height: 90),
             .separator,
             tableHeader([L("日期"), L("请求"), L("总 Token"), L("缓存读")], widths: widths),
@@ -418,7 +532,7 @@ class MonthDetailWindowController: DetailBaseWindowController {
 
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 606),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered, defer: false
         )
@@ -430,7 +544,8 @@ class MonthDetailWindowController: DetailBaseWindowController {
         self.init(window: window)
         installContent(onPrev: { [weak self] in self?.goPrevMonth() },
                        onNext: { [weak self] in self?.goNextMonth() },
-                       onExport: { [weak self] in self?.exportCSVClicked() })
+                       onExport: { [weak self] in self?.exportCSVClicked() },
+                       onToday: { [weak self] in self?.goThisMonth() })
     }
 
     func goPrevMonth() {
@@ -441,6 +556,11 @@ class MonthDetailWindowController: DetailBaseWindowController {
     func goNextMonth() {
         let next = Calendar.current.date(byAdding: .month, value: 1, to: currentMonth)!
         if next <= Date() { currentMonth = next; reloadData() }
+    }
+
+    func goThisMonth() {
+        currentMonth = Date()
+        reloadData()
     }
 
     func reloadData() {
@@ -466,6 +586,7 @@ class MonthDetailWindowController: DetailBaseWindowController {
         let agg = queryDailyRows(db: db, fromDay: dayKey.string(from: first),
                                  toDay: dayKey.string(from: lastDay))
 
+        var dayData: [(dateStr: String, keyStr: String, reqs: Int, token: Int64, cache: Int64, daysAgo: Int)] = []
         for day in 1...days {
             guard let date = cal.date(byAdding: .day, value: day - 1, to: first) else { continue }
             if cal.startOfDay(for: date) > today { break }
@@ -478,13 +599,29 @@ class MonthDetailWindowController: DetailBaseWindowController {
                 reqs = a.reqs; token = a.token; cache = a.cache
             }
             totalReqs += reqs; totalToken += token; totalCache += cache
-            exportRows.append([keyStr, "\(reqs)", "\(token)", "\(cache)"])
             let dateStr = String(format: "%02d/%02d", comps.month!, day)
-            dayRows.append(dataRow(col0: dateStr, reqs: reqs, token: token, cache: cache, widths: widths))
+            dayData.append((dateStr, keyStr, reqs, token, cache, daysAgo))
             chartEntries.append(ChartEntry(label: dateStr, value: token))
         }
 
+        let peakToken = dayData.map(\.token).max() ?? 0
+        let daysWithData = dayData.filter { $0.token > 0 }.count
+        let dailyAvg = daysWithData > 0 ? totalToken / Int64(daysWithData) : 0
+        for e in dayData {
+            exportRows.append([e.keyStr, "\(e.reqs)", "\(e.token)", "\(e.cache)"])
+            dayRows.append(dataRow(col0: e.dateStr, reqs: e.reqs, token: e.token, cache: e.cache,
+                                   widths: widths,
+                                   highlight: peakToken > 0 && e.token == peakToken,
+                                   markToday: e.daysAgo == 0))
+        }
+
         content.set([
+            .statCards([
+                DetailStat(label: L("总 Token"), value: Design.formatTokens(totalToken)),
+                DetailStat(label: L("日均"), value: Design.formatTokens(dailyAvg)),
+                DetailStat(label: L("请求数"), value: "\(totalReqs)"),
+                DetailStat(label: L("缓存读"), value: Design.formatTokens(totalCache)),
+            ]),
             .chart(.bars(chartEntries, showXAxis: false), height: 100),
             .separator,
             tableHeader([L("日期"), L("请求"), L("总 Token"), L("缓存读")], widths: widths),
@@ -511,7 +648,7 @@ class ModelDetailWindowController: DetailBaseWindowController {
 
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 466),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered, defer: false
         )
@@ -590,7 +727,15 @@ class ModelDetailWindowController: DetailBaseWindowController {
         }
 
         let widths: [CGFloat] = [160, 65, 100, 100]
+        let topShare = totalToken > 0
+            ? Double(donutModels.first?.value.token ?? 0) / Double(totalToken) * 100 : 0
         var blocks: [DetailBlock.Kind] = [
+            .statCards([
+                DetailStat(label: L("总 Token"), value: Design.formatTokens(totalToken)),
+                DetailStat(label: L("模型数"), value: "\(donutModels.count)"),
+                DetailStat(label: L("Top1 占比"), value: String(format: "%.0f%%", topShare),
+                           accent: Design.warningColor),
+            ]),
             .chart(.donut(donutItems), height: 140),
             .separator,
             tableHeader([L("模型"), L("请求"), L("总 Token"), L("缓存读")], widths: widths)
@@ -670,7 +815,8 @@ class HourlyDetailWindowController: DetailBaseWindowController {
         window.minSize = NSSize(width: 360, height: 300)
         self.init(window: window)
         installContent(onPrev: { [weak self] in self?.goPrevDay() },
-                       onNext: { [weak self] in self?.goNextDay() })
+                       onNext: { [weak self] in self?.goNextDay() },
+                       onToday: { [weak self] in self?.goToday() })
     }
 
     func goPrevDay() {
@@ -681,6 +827,11 @@ class HourlyDetailWindowController: DetailBaseWindowController {
     func goNextDay() {
         let t = Calendar.current.date(byAdding: .day, value: 1, to: currentDate)!
         if t <= Date() { currentDate = t; onDateChange?(t) }
+    }
+
+    func goToday() {
+        currentDate = Date()
+        onDateChange?(currentDate)
     }
 
     func reloadData(db: OpaquePointer?, date: Date) {
@@ -730,18 +881,30 @@ class HourlyDetailWindowController: DetailBaseWindowController {
         }
 
         var totR = 0; var totT: Int64 = 0; var totC: Int64 = 0
+        var peakHour = start
         for h in start...end {
             let d = hourly[h]; totR += d.0; totT += d.1; totC += d.2
+            if d.1 > hourly[peakHour].1 { peakHour = h }
         }
 
         let widths: [CGFloat] = [50, 65, 100, 100]
         var hourRows: [DetailRow] = []
         for h in start...end {
             let d = hourly[h]
-            hourRows.append(dataRow(col0: L10n.isEnglish ? String(format: "%02d:00", h) : "\(h)时", reqs: d.0, token: d.1, cache: d.2, widths: widths))
+            hourRows.append(dataRow(col0: L10n.isEnglish ? String(format: "%02d:00", h) : "\(h)时",
+                                    reqs: d.0, token: d.1, cache: d.2, widths: widths,
+                                    highlight: d.1 > 0 && h == peakHour,
+                                    markToday: daysAgo == 0))
         }
 
         content.set([
+            .statCards([
+                DetailStat(label: L("总 Token"), value: Design.formatTokens(totT)),
+                DetailStat(label: L("请求数"), value: "\(totR)"),
+                DetailStat(label: L("峰值时段"),
+                           value: L10n.isEnglish ? String(format: "%02d:00", peakHour) : "\(peakHour)时",
+                           accent: Design.warningColor),
+            ]),
             .chart(.bars((0..<24).map { ChartEntry(label: String(format: "%02d", $0), value: hourly[$0].1) },
                          showXAxis: true), height: 100),
             .separator,
@@ -752,10 +915,10 @@ class HourlyDetailWindowController: DetailBaseWindowController {
             .rows(hourRows)
         ])
 
-        // 内容高度 = 图表 100 + 表头/合计/分隔 ≈ 71 + 每行 24；
+        // 内容高度 = 统计卡 ≈50 + 图表 100 + 表头/合计/分隔 ≈ 71 + 每行 24；
         // 再加导航/留白 56（顶 10 + 导航 30 + 间隔 6 + 底 10）。
-        let h = CGFloat(end - start + 1) * 24 + 227
-        window?.setContentSize(NSSize(width: 440, height: min(h, 650)))
+        let h = CGFloat(end - start + 1) * 24 + 277
+        window?.setContentSize(NSSize(width: 440, height: min(h, 680)))
     }
 }
 
@@ -766,7 +929,7 @@ class AllTimeDetailWindowController: DetailBaseWindowController {
 
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 480),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 526),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered, defer: false
         )
@@ -809,16 +972,26 @@ class AllTimeDetailWindowController: DetailBaseWindowController {
         let widths: [CGFloat] = [70, 65, 95, 95]
         var monthRows: [DetailRow] = []
         var totalReqs = 0; var totalToken: Int64 = 0; var totalCache: Int64 = 0
+        let peakMonthToken = rows.map(\.token).max() ?? 0
         for r in rows {
             totalReqs += r.reqs; totalToken += r.token; totalCache += r.cache
             exportRows.append([r.month, "\(r.reqs)", "\(r.token)", "\(r.cache)"])
-            monthRows.append(dataRow(col0: r.month, reqs: r.reqs, token: r.token, cache: r.cache, widths: widths))
+            monthRows.append(dataRow(col0: r.month, reqs: r.reqs, token: r.token, cache: r.cache,
+                                     widths: widths,
+                                     highlight: peakMonthToken > 0 && r.token == peakMonthToken))
         }
+        let bestMonth = rows.max { $0.token < $1.token }?.month ?? "-"
 
         // 图表（最近月份在上 → 图表用倒序让时间从左到右）
         let monthEntries = rows.reversed().map { ChartEntry(label: $0.month, value: $0.token) }
 
         content.set([
+            .statCards([
+                DetailStat(label: L("历史总量"), value: Design.formatTokens(totalToken)),
+                DetailStat(label: L("月均"), value: Design.formatTokens(totalToken / Int64(max(rows.count, 1)))),
+                DetailStat(label: L("最佳月"), value: bestMonth, accent: Design.warningColor),
+                DetailStat(label: L("请求数"), value: "\(totalReqs)"),
+            ]),
             .chart(.bars(monthEntries, showXAxis: true), height: 100),
             .separator,
             tableHeader([L("月份"), L("请求"), L("总 Token"), L("缓存读")], widths: widths),

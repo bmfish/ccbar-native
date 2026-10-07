@@ -41,6 +41,17 @@ struct LineTrendChart: View {
                 .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round))
                 .interpolationMethod(.catmullRom)
 
+                // 峰值点常驻小标记
+                if e.value > 0, e.value == peakValue {
+                    PointMark(
+                        x: .value("日", e.label),
+                        y: .value("Token", e.value)
+                    )
+                    .foregroundStyle(Color(nsColor: lineColor))
+                    .symbolSize(20)
+                    .opacity(0.9)
+                }
+
                 if selected == i {
                     PointMark(
                         x: .value("日", e.label),
@@ -77,6 +88,10 @@ struct LineTrendChart: View {
                 }
             }
         }
+    }
+
+    private var peakValue: Int64 {
+        entries.map(\.value).max() ?? 0
     }
 
     private func dragGesture(width: CGFloat) -> some Gesture {
@@ -161,10 +176,11 @@ struct BarReadoutChart: View {
         }
     }
 
-    /// 每根柱子一个颜色：主题色板按小时种子打散（稳定不闪变，整点换一批）
+    /// 柱子统一主题色系：峰值柱实色，其余降透明度（不再彩虹配色，视觉聚焦峰值）
     private func barColor(for i: Int) -> Color {
-        let palette = Design.modelColors(count: max(entries.count, 1))
-        return Color(nsColor: palette[i % palette.count])
+        let maxV = entries.map(\.value).max() ?? 0
+        let isPeak = maxV > 0 && entries[i].value == maxV
+        return Color(nsColor: Design.brandColor).opacity(isPeak ? 1.0 : 0.32)
     }
 
     private func dragGesture(width: CGFloat) -> some Gesture {

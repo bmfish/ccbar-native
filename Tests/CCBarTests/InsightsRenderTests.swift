@@ -87,11 +87,12 @@ final class InsightsRenderTests: XCTestCase {
         XCTAssertTrue(PopoverViewModel.hourPoints(from: [5: 0]).isEmpty)
         XCTAssertTrue(PopoverViewModel.hourPoints(from: [:]).isEmpty)
 
-        // 首数据晚于 9 点：固定从 9 点起线（9 点补零），9/10/11 共 3 点
-        let late = PopoverViewModel.hourPoints(from: [11: 100])
-        XCTAssertEqual(late.count, 3)
-        XCTAssertEqual(late.first?.token, 0)
-        XCTAssertEqual(late.last?.token, 100)
+        // 首数据晚于 9 点：固定从 9 点起线（9 点补零）；结尾以数据最晚小时(23)封口，与运行时刻无关
+        let late = PopoverViewModel.hourPoints(from: [11: 100, 23: 5])
+        XCTAssertEqual(late.count, 15)          // 9...23
+        XCTAssertEqual(late.first?.token, 0)    // 9 时补零
+        XCTAssertEqual(late[2].token, 100)      // 11 时
+        XCTAssertEqual(late.last?.token, 5)
         // 首数据早于 9 点：从首数据时刻起线
         let early = PopoverViewModel.hourPoints(from: [7: 80, 23: 10])
         XCTAssertEqual(early.count, 17)
@@ -126,6 +127,54 @@ final class InsightsRenderTests: XCTestCase {
             return XCTFail("弹窗渲染失败")
         }
         try data.write(to: URL(fileURLWithPath: "/tmp/popover-render.png"))
+    }
+
+    func testDetailWindowRender() throws {
+        // 详情窗口新版版式：统计卡 + 图表 + 峰值行高亮 + 空态
+        let model = DetailContentModel()
+        model.dateText = "26-09-30  ~  26-10-06"
+        let entries = (0..<7).map { d in
+            ChartEntry(label: String(format: "10-%02d", d + 1), value: [3, 8, 5, 12, 6, 0, 9][d] * 100_000)
+        }
+        let widths: [CGFloat] = [70, 65, 95, 95]
+        func cell(_ t: String, _ w: CGFloat, _ leading: Bool = false) -> DetailCell {
+            DetailCell(text: t, width: w, color: .white, alignment: leading ? .leading : .trailing)
+        }
+        var rows: [DetailRow] = []
+        for (i, e) in entries.enumerated() {
+            rows.append(DetailRow(cells: [
+                cell(e.label, widths[0], true), cell("\(i + 1)0", widths[1]),
+                cell(Design.formatTokens(e.value), widths[2]), cell("-", widths[3]),
+            ], highlight: e.value == 1_200_000))
+        }
+        model.set([
+            .statCards([
+                DetailStat(label: L("总 Token"), value: "430.00万"),
+                DetailStat(label: L("日均"), value: "61.42万"),
+                DetailStat(label: L("请求数"), value: "342"),
+                DetailStat(label: L("缓存读"), value: "120.00万"),
+            ]),
+            .chart(.trend(entries), height: 90),
+            .separator,
+            .rows([DetailRow(cells: [cell(L("日期"), widths[0], true), cell(L("请求"), widths[1]),
+                                     cell(L("总 Token"), widths[2]), cell(L("缓存读"), widths[3])], isHeader: true)]),
+            .separator,
+            .rows(rows),
+            .separator,
+            .empty(L("暂无数据")),
+        ])
+        let v = NSHostingView(rootView: DetailRootView(model: model).frame(width: 500)
+            .background(Color(nsColor: Design.backgroundDark)))
+        v.frame = NSRect(x: 0, y: 0, width: 500, height: 520)
+        v.layoutSubtreeIfNeeded()
+        guard let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds),
+              let data = {
+                v.cacheDisplay(in: v.bounds, to: rep)
+                return rep.representation(using: .png, properties: [:])
+        }() else {
+            return XCTFail("详情窗口渲染失败")
+        }
+        try data.write(to: URL(fileURLWithPath: "/tmp/detail-render.png"))
     }
 
     func testTimelineGrouping() throws {
