@@ -73,18 +73,20 @@ final class PopoverViewModel: ObservableObject {
         }
     }
 
-    /// 逐时序列：掐掉开头没数据的整点（从首个有数据的小时起线），结尾补到当前小时，中间空洞补零
+    /// 逐时序列：起点 = 今天首个有数据的整点，但首数据晚于 9 点时固定从 9 点起线
+    ///（9 点是稳定的工作日锚点）；结尾补到当前小时，中间空洞补零
     static func hourPoints(from hist: [Int: Int64]) -> [HourPoint] {
         let cal = Calendar.current
         let now = Date()
         let dataHours = hist.filter { $0.value > 0 }.map(\.key)
         guard let first = dataHours.min() else { return [] }
+        let start = min(first, 9)
         let currentHour = cal.component(.hour, from: now)
         let last = max(currentHour, dataHours.max() ?? currentHour)
-        guard first <= last else { return [] }
+        guard start <= last else { return [] }
         let startOfDay = cal.startOfDay(for: now)
         var out: [HourPoint] = []
-        for h in first...last {
+        for h in start...last {
             let date = cal.date(byAdding: .hour, value: h, to: startOfDay) ?? now
             out.append(HourPoint(hourDate: date, token: hist[h] ?? 0))
         }

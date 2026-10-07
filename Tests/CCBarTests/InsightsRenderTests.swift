@@ -87,6 +87,16 @@ final class InsightsRenderTests: XCTestCase {
         XCTAssertTrue(PopoverViewModel.hourPoints(from: [5: 0]).isEmpty)
         XCTAssertTrue(PopoverViewModel.hourPoints(from: [:]).isEmpty)
 
+        // 首数据晚于 9 点：固定从 9 点起线（9 点补零），9/10/11 共 3 点
+        let late = PopoverViewModel.hourPoints(from: [11: 100])
+        XCTAssertEqual(late.count, 3)
+        XCTAssertEqual(late.first?.token, 0)
+        XCTAssertEqual(late.last?.token, 100)
+        // 首数据早于 9 点：从首数据时刻起线
+        let early = PopoverViewModel.hourPoints(from: [7: 80, 23: 10])
+        XCTAssertEqual(early.count, 17)
+        XCTAssertEqual(early.first?.token, 80)
+
         // 弹窗整版离屏渲染（布局目检用）
         let vm = PopoverViewModel(greeting: "测试问候语")
         vm.today = DayStats(reqs: 90, input: 9_000_000, output: 5_000_000, cacheCreate: 100, cacheRead: 1_980_000)
