@@ -207,12 +207,12 @@ struct PopoverRootView: View {
                     .foregroundStyle(.linearGradient(
                         colors: [Color.white.opacity(0.05), Color.white.opacity(0.0)],
                         startPoint: .top, endPoint: .bottom))
-                    .interpolationMethod(.catmullRom)
+                    .interpolationMethod(.monotone)
                 LineMark(x: .value(L("时间"), p.hourDate),
                          y: .value(L("Token"), p.token))
                     .foregroundStyle(Color.white.opacity(0.22))
                     .lineStyle(StrokeStyle(lineWidth: 1))
-                    .interpolationMethod(.catmullRom)
+                    .interpolationMethod(.monotone)
             }
         }
         .chartXAxis(.hidden)

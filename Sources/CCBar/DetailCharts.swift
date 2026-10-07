@@ -31,7 +31,7 @@ struct LineTrendChart: View {
                              Color(nsColor: lineColor).opacity(0.02)],
                     startPoint: .top, endPoint: .bottom
                 ))
-                .interpolationMethod(.catmullRom)
+                .interpolationMethod(.monotone)
 
                 LineMark(
                     x: .value("日", e.label),
@@ -39,7 +39,7 @@ struct LineTrendChart: View {
                 )
                 .foregroundStyle(Color(nsColor: lineColor))
                 .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round))
-                .interpolationMethod(.catmullRom)
+                .interpolationMethod(.monotone)
 
                 // 峰值点常驻小标记
                 if e.value > 0, e.value == peakValue {

@@ -118,7 +118,7 @@ final class InsightsRenderTests: XCTestCase {
         let cal = Calendar.current
         vm.todayHourly = (9...11).map { h in
             HourPoint(hourDate: cal.date(byAdding: .hour, value: h, to: cal.startOfDay(for: Date()))!,
-                      token: Int64(h - 8) * 800_000)
+                      token: h == 10 ? 0 : Int64(h - 8) * 8_000_000)   // 中间夹 0，验证单调插值不断线
         }
         let v = NSHostingView(rootView: PopoverRootView(vm: vm).frame(width: 380)
             .background(Color(nsColor: Design.backgroundDark)))
