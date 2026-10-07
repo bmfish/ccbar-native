@@ -1089,8 +1089,8 @@ final class StatsStore {
         return (monthStats.total + today.total, daysElapsed, daysInMonth)
     }
 
-    /// 模型编年史：每个模型的首用/末用 epoch 与总 token，按首用时间升序
-    func queryModelHistory(limit: Int = 12) -> [(model: String, firstEpoch: Int64, lastEpoch: Int64, token: Int64)] {
+    /// 模型编年史：每个模型的首用/末用 epoch 与总 token，按首用时间升序（全量不截断，模型数通常几十以内）
+    func queryModelHistory() -> [(model: String, firstEpoch: Int64, lastEpoch: Int64, token: Int64)] {
         lock.lock(); defer { lock.unlock() }
         guard handle != nil else { return [] }
         var result: [(model: String, firstEpoch: Int64, lastEpoch: Int64, token: Int64)] = []
@@ -1098,7 +1098,7 @@ final class StatsStore {
         SELECT model, MIN(created_at), MAX(created_at),
                COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0) AS t
         FROM usage_log
-        GROUP BY model ORDER BY MIN(created_at) LIMIT \(max(1, limit))
+        GROUP BY model ORDER BY MIN(created_at)
         """) { stmt in
             result.append((String(cString: sqlite3_column_text(stmt, 0)),
                            sqlite3_column_int64(stmt, 1), sqlite3_column_int64(stmt, 2),

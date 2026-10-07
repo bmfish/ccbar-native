@@ -288,6 +288,8 @@ let L10nEN: [String: String] = [
     "月费用预算，0=关闭；费用页显示进度与预算线": "Monthly cost budget, 0=off; shows progress bar & budget line on Cost page",
     "月度预算（≥ 0 的数字，$，0=关闭）": "Monthly budget (≥ 0, $, 0=off)",
     "该日暂无请求": "No requests on this day",
+    "今天": "Today",
+    "昨天": "Yesterday",
 
     // ---- 小猫文案（彩蛋） ----
     "Git commit -m '又一个 Bug' 🔧": "git commit -m 'yet another bug' 🔧",

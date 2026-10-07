@@ -1284,6 +1284,7 @@ struct TimelinePage: View {
     @ObservedObject var vm: InsightsViewModel
     @State private var sourceFilter = "all"
     @State private var modelFilter = "all"
+    @State private var showCalendar = false
 
     /// 流水页行模型：组头与数据行拍平成单一序列。
     /// 曾用嵌套 ForEach（外层 id=hour、内层 id=offset），30 秒刷新时行视图按位置复用，
@@ -1354,13 +1355,63 @@ struct TimelinePage: View {
         )
     }
 
+    // MARK: 日期导航（‹ 前一天 / 后一天 ›，点日期弹日历）
+
+    private var isToday: Bool { Calendar.current.isDateInToday(vm.timelineDay) }
+
+    private var dayLabel: String {
+        if isToday { return L("今天") }
+        if Calendar.current.isDateInYesterday(vm.timelineDay) { return L("昨天") }
+        let fmt = DateFormatter()
+        fmt.dateFormat = "M月d日"
+        return fmt.string(from: vm.timelineDay)
+    }
+
+    private func stepDay(_ n: Int) {
+        let next = Calendar.current.date(byAdding: .day, value: n, to: vm.timelineDay) ?? vm.timelineDay
+        guard next <= Date() else { return }
+        vm.loadTimeline(day: next)
+    }
+
+    private var dayNav: some View {
+        HStack(spacing: 2) {
+            Button { stepDay(-1) } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(Color(nsColor: Design.textSecondary))
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Button(dayLabel) { showCalendar = true }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                .foregroundColor(Color(nsColor: isToday ? Design.brandColor : Design.textPrimary))
+                .frame(minWidth: 52)
+                .popover(isPresented: $showCalendar, arrowEdge: .bottom) {
+                    DatePicker("", selection: dayBinding, in: ...Date(), displayedComponents: .date)
+                        .datePickerStyle(.graphical)
+                        .labelsHidden()
+                        .padding(10)
+                }
+            Button { stepDay(1) } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(Color(nsColor: isToday ? Design.textMuted : Design.textSecondary))
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isToday)
+        }
+    }
+
     private var filtersBar: some View {
         HStack(spacing: 10) {
             Text(L("筛选"))
                 .font(.system(size: 11))
                 .foregroundColor(Color(nsColor: Design.textMuted))
-            DatePicker("", selection: dayBinding, in: ...Date(), displayedComponents: .date)
-                .labelsHidden()
+            dayNav
             Picker("", selection: $sourceFilter) {
                 ForEach(sourceOptions, id: \.self) { option in
                     Text(option == "all" ? L("全部渠道") : (AppDelegate.shared?.sourceDisplayName(option) ?? option)).tag(option)
