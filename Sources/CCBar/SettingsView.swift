@@ -34,6 +34,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var menuPetEnabled = true
     @Published var menuEmojiEnabled = true
     @Published var popoverWide = false
+    @Published var autoWeeklyReport = true
     @Published var sources: [SourceRowDraft] = []
     @Published var language: AppLanguage = .system
     @Published var lastBackupDate = ""
@@ -73,6 +74,7 @@ final class SettingsViewModel: ObservableObject {
         menuPetEnabled = settings.menuPetEnabled
         menuEmojiEnabled = settings.menuEmojiEnabled
         popoverWide = settings.popoverWide
+        autoWeeklyReport = settings.autoWeeklyReport
         language = AppLanguage(rawValue: UserDefaults.standard.string(forKey: "appLanguage") ?? "") ?? .system
         lastBackupDate = UserDefaults.standard.string(forKey: "lastAutoBackupDate") ?? ""
 
@@ -194,6 +196,7 @@ final class SettingsViewModel: ObservableObject {
         settings.menuPetEnabled = menuPetEnabled
         settings.menuEmojiEnabled = menuEmojiEnabled
         settings.popoverWide = popoverWide
+        settings.autoWeeklyReport = autoWeeklyReport
         settings.notifyInterval = notify!
         settings.ledRedThreshold = led!
         applyTheme(theme)
@@ -212,6 +215,7 @@ final class SettingsViewModel: ObservableObject {
         settings.menuPetEnabled = true
         settings.menuEmojiEnabled = true
         settings.popoverWide = false
+        settings.autoWeeklyReport = true
         settings.ledRedThreshold = 100
         reload()
     }
@@ -461,6 +465,7 @@ struct SettingsRootView: View {
         Toggle(L("菜单栏动画伴侣（小猫随用量跑动）"), isOn: $vm.menuPetEnabled)
         Toggle(L("菜单栏表情分级（🙂→🥵）"), isOn: $vm.menuEmojiEnabled)
         Toggle(L("宽版弹窗（380pt）"), isOn: $vm.popoverWide)
+        Toggle(L("每周一自动生成用量周报"), isOn: $vm.autoWeeklyReport)
 
         // 自动备份状态（每天首次启动静默备份，滚动保留 7 份）
         HStack(spacing: 6) {

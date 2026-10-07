@@ -90,6 +90,12 @@ class Settings {
         set { defaults.set(newValue, forKey: "popoverWide") }
     }
 
+    /// 自动生成用量周报（每周出到 ~/Documents/CCBar 周报/）
+    var autoWeeklyReport: Bool {
+        get { defaults.object(forKey: "autoWeeklyReport") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "autoWeeklyReport") }
+    }
+
     /// 闪电 LED 红色门槛（万）：单次刷新增量达到即变红，0 = 不变红
     var ledRedThreshold: Int {
         get { defaults.object(forKey: "ledRedThreshold") == nil ? 100 : defaults.integer(forKey: "ledRedThreshold") }

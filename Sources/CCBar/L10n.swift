@@ -271,6 +271,7 @@ let L10nEN: [String: String] = [
     "AI 用量周报（上周）": "AI Usage Weekly (last week)",
     "打开周报目录": "Open Weekly Folder",
     "每周一自动生成到周报目录 🗓": "Auto-generated every Monday 🗓",
+    "每周一自动生成用量周报": "Auto-generate weekly report",
     "周消耗": "Week Burn",
     "日均": "Daily Avg",
     "峰值": "Peak",

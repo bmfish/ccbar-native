@@ -338,11 +338,19 @@ final class InsightsViewModel: ObservableObject {
 
 struct InsightsRootView: View {
     @ObservedObject var vm: InsightsViewModel
-    @State private var page: InsightsPage = .cost
+    // 记住上次停留的页签（重启也保留）
+    @AppStorage("insightsLastPage") private var pageRaw: String = InsightsPage.cost.rawValue
+
+    private var pageBinding: Binding<InsightsPage> {
+        Binding(
+            get: { InsightsPage(rawValue: pageRaw) ?? .cost },
+            set: { pageRaw = $0.rawValue }
+        )
+    }
 
     var body: some View {
         NavigationSplitView {
-            List(InsightsPage.allCases, selection: $page) { p in
+            List(InsightsPage.allCases, selection: pageBinding) { p in
                 Label(L(p.rawValue), systemImage: p.icon)
                     .tag(p)
             }
@@ -362,7 +370,7 @@ struct InsightsRootView: View {
 
     @ViewBuilder
     private var detail: some View {
-        switch page {
+        switch pageBinding.wrappedValue {
         case .cost: CostPage(vm: vm)
         case .insights: InsightsPageView(vm: vm)
         case .share: SharePage(vm: vm)
@@ -976,34 +984,39 @@ enum WeeklyReport {
         return (from: daysSinceMonday + 7, to: daysSinceMonday + 1)
     }
 
-    /// 周报输出目录 ~/Documents/CCBar 周报/
+    /// 周报输出目录 ~/Documents/CCBar 周报/（测试可注入 directoryOverride）
+    static var directoryOverride: URL?
     static func directoryURL() -> URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        directoryOverride ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("CCBar 周报", isDirectory: true)
     }
 
+    /// 报告标识 = 上一个完整周后面的那个周一（也是文件名日期），一周内任何一天补生成同一个文件
+    static func reportKey(now: Date = Date()) -> String {
+        let w = lastWeekWindow(now: now)
+        return StatsStore.dayString(fromEpoch: StatsStore.localMidnight(w.to - 1, now: now))
+    }
+
+    /// 生成"上一个完整周"的周报。周一例行出报；其余日子用来补账——周一没开机也不会错过。
+    /// 幂等：周报文件已存在即跳过，删掉文件可在下次启动重新生成。
     @MainActor
     @discardableResult
     static func generateIfNeeded(store: StatsStore, now: Date = Date()) -> String? {
-        let cal = Calendar.current
-        guard cal.component(.weekday, from: now) == 2 else { return nil }   // 只在周一生成
-        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
-        let weekKey = fmt.string(from: now)
-        let defaults = UserDefaults.standard
-        guard defaults.string(forKey: "lastWeeklyReportWeek") != weekKey else { return nil }
+        if let app = AppDelegate.shared, !app.settings.autoWeeklyReport { return nil }
 
         let w = lastWeekWindow(now: now)
+        let dir = directoryURL()
+        let url = dir.appendingPathComponent("ccbar-weekly-\(reportKey(now: now)).png")
+        guard !FileManager.default.fileExists(atPath: url.path) else { return nil }
+
         guard let stats = store.queryWindowStats(daysAgoFrom: w.from, daysAgoTo: w.to),
-              stats.total > 0 else {
-            defaults.set(weekKey, forKey: "lastWeeklyReportWeek")   // 没数据也记账，避免反复查
-            return nil
-        }
+              stats.total > 0 else { return nil }   // 该周无数据；查询很便宜，不记账下次再试
         let daily = store.queryDailyTokensBetween(daysAgoFrom: w.from, daysAgoTo: w.to)
         let peakToken = daily.map(\.token).max() ?? 0
 
         let dateFmt = DateFormatter(); dateFmt.dateStyle = .medium; dateFmt.timeStyle = .none
-        let from = cal.date(byAdding: .day, value: -w.from, to: cal.startOfDay(for: now))!
-        let to = cal.date(byAdding: .day, value: -w.to, to: cal.startOfDay(for: now))!
+        let from = Calendar.current.date(byAdding: .day, value: -w.from, to: Calendar.current.startOfDay(for: now))!
+        let to = Calendar.current.date(byAdding: .day, value: -w.to, to: Calendar.current.startOfDay(for: now))!
 
         let card = weeklyShareCard(
             dateRange: "\(dateFmt.string(from: from)) ~ \(dateFmt.string(from: to))",
@@ -1015,12 +1028,9 @@ enum WeeklyReport {
             return nil
         }
 
-        let dir = directoryURL()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("ccbar-weekly-\(weekKey).png")
         do {
             try png.write(to: url)
-            defaults.set(weekKey, forKey: "lastWeeklyReportWeek")
             NSLog("[weekly] 周报已生成 \(url.path)")
             return url.path
         } catch {
