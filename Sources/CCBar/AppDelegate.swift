@@ -233,6 +233,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             self.popover = popover
         }
 
+        // 每次打开重新抽一句问候语
+        if let vc = popover?.contentViewController as? PopoverViewController {
+            vc.rollGreeting()
+        }
+
         if let button = statusItem.button {
             popover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }

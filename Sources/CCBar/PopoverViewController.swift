@@ -51,11 +51,16 @@ final class PopoverViewModel: ObservableObject {
     @Published var theme: Theme = .current
     @Published var todayHourly: [HourPoint] = []
 
-    /// 问候语在弹窗创建时随机一次（popover 实例复用，期间不换）
-    let greeting: String
+    /// 问候语：初始化时随机一次，之后每次打开弹窗重新抽（rollGreeting）
+    @Published var greeting: String
 
     init(greeting: String? = nil) {
         self.greeting = greeting ?? AppDelegate.shared?.greetings.randomElement() ?? "ccBar 用量统计"
+    }
+
+    /// 弹窗每次打开时重新随机问候语（popover 实例常驻，不重抽会一直显示同一句）
+    func rollGreeting() {
+        greeting = AppDelegate.shared?.greetings.randomElement() ?? greeting
     }
 
     func refresh() {
@@ -74,15 +79,15 @@ final class PopoverViewModel: ObservableObject {
     }
 
     /// 逐时序列：起点 = 今天首个有数据的整点，但首数据晚于 9 点时固定从 9 点起线
-    ///（9 点是稳定的工作日锚点）；结尾补到当前小时，中间空洞补零
+    ///（9 点是稳定的工作日锚点）；结尾 = 最后一个有数据的小时——
+    /// 刚开始的当前小时还没有数据，不画它，避免线尾坠到零
     static func hourPoints(from hist: [Int: Int64]) -> [HourPoint] {
         let cal = Calendar.current
         let now = Date()
         let dataHours = hist.filter { $0.value > 0 }.map(\.key)
         guard let first = dataHours.min() else { return [] }
         let start = min(first, 9)
-        let currentHour = cal.component(.hour, from: now)
-        let last = max(currentHour, dataHours.max() ?? currentHour)
+        let last = dataHours.max() ?? first
         guard start <= last else { return [] }
         let startOfDay = cal.startOfDay(for: now)
         var out: [HourPoint] = []
@@ -117,6 +122,11 @@ final class PopoverViewController: NSHostingController<PopoverRootView> {
 
     func refresh() {
         vm.refresh()
+    }
+
+    /// 每次打开弹窗时重新随机问候语
+    func rollGreeting() {
+        vm.rollGreeting()
     }
 }
 

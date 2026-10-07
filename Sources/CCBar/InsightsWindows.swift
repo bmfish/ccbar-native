@@ -962,7 +962,8 @@ struct InsightsPageView: View {
                     .foregroundColor(Color(nsColor: Design.textMuted))
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // 撑满网格单元：同排卡片顶/底对齐（有无副行都一样高）
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(14)
         .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
             .fill(Color(nsColor: Design.cardFillDark)))

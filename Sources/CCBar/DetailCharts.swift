@@ -176,11 +176,10 @@ struct BarReadoutChart: View {
         }
     }
 
-    /// 柱子统一主题色系：峰值柱实色，其余降透明度（不再彩虹配色，视觉聚焦峰值）
+    /// 每根柱子一个颜色：主题色板按位置取色（随机但稳定不闪变）
     private func barColor(for i: Int) -> Color {
-        let maxV = entries.map(\.value).max() ?? 0
-        let isPeak = maxV > 0 && entries[i].value == maxV
-        return Color(nsColor: Design.brandColor).opacity(isPeak ? 1.0 : 0.32)
+        let palette = Design.modelColors(count: max(entries.count, 1))
+        return Color(nsColor: palette[i % palette.count])
     }
 
     private func dragGesture(width: CGFloat) -> some Gesture {

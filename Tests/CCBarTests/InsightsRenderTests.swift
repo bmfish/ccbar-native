@@ -98,6 +98,11 @@ final class InsightsRenderTests: XCTestCase {
         XCTAssertEqual(early.count, 17)
         XCTAssertEqual(early.first?.token, 80)
 
+        // 空的当前小时不画：线止于最后有数据的小时，不坠到零
+        let trimmed = PopoverViewModel.hourPoints(from: [9: 100, 10: 200])
+        XCTAssertEqual(trimmed.count, 2)        // 9...10，没有拖到当前小时的尾巴
+        XCTAssertEqual(trimmed.last?.token, 200)
+
         // 弹窗整版离屏渲染（布局目检用）
         let vm = PopoverViewModel(greeting: "测试问候语")
         vm.today = DayStats(reqs: 90, input: 9_000_000, output: 5_000_000, cacheCreate: 100, cacheRead: 1_980_000)
