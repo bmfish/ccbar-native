@@ -76,6 +76,48 @@ final class InsightsRenderTests: XCTestCase {
         XCTAssertNil(WeeklyReport.generateIfNeeded(store: store, now: thursday))
     }
 
+    func testPopoverHourlyAndRender() throws {
+        // hourPoints：掐头（首个有数据的整点起线）+ 尾部补到当天最后、空洞补零
+        var hist: [Int: Int64] = [0: 50, 23: 100]
+        hist[5] = 0   // 无数据整点，不作为起点
+        let points = PopoverViewModel.hourPoints(from: hist)
+        XCTAssertEqual(points.count, 24)
+        XCTAssertEqual(points.first?.token, 50)
+        XCTAssertEqual(points.last?.token, 100)
+        XCTAssertTrue(PopoverViewModel.hourPoints(from: [5: 0]).isEmpty)
+        XCTAssertTrue(PopoverViewModel.hourPoints(from: [:]).isEmpty)
+
+        // 弹窗整版离屏渲染（布局目检用）
+        let vm = PopoverViewModel(greeting: "测试问候语")
+        vm.today = DayStats(reqs: 90, input: 9_000_000, output: 5_000_000, cacheCreate: 100, cacheRead: 1_980_000)
+        vm.yesterday = DayStats(reqs: 120, input: 52_000_000, output: 51_000_000, cacheCreate: 0, cacheRead: 1_000_000)
+        vm.week = DayStats(reqs: 800, input: 200_000_000, output: 200_000_000, cacheCreate: 0, cacheRead: 5_000_000)
+        vm.month = DayStats(reqs: 3400, input: 1_900_000_000, output: 1_900_000_000, cacheCreate: 0, cacheRead: 30_000_000)
+        vm.total = TotalStats(reqs: 9200, total: 10_333_000_000)
+        vm.models = [
+            ModelStat(model: "glm-5.3-flash", input: 0, output: 0, total: 15_830_000),
+            ModelStat(model: "mimo-v2.6-pro", input: 0, output: 0, total: 140_000),
+        ]
+        vm.workHours = 1.8
+        let cal = Calendar.current
+        vm.todayHourly = (9...11).map { h in
+            HourPoint(hourDate: cal.date(byAdding: .hour, value: h, to: cal.startOfDay(for: Date()))!,
+                      token: Int64(h - 8) * 800_000)
+        }
+        let v = NSHostingView(rootView: PopoverRootView(vm: vm).frame(width: 380)
+            .background(Color(nsColor: Design.backgroundDark)))
+        v.frame = NSRect(x: 0, y: 0, width: 380, height: 560)
+        v.layoutSubtreeIfNeeded()
+        guard let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds),
+              let data = {
+                v.cacheDisplay(in: v.bounds, to: rep)
+                return rep.representation(using: .png, properties: [:])
+        }() else {
+            return XCTFail("弹窗渲染失败")
+        }
+        try data.write(to: URL(fileURLWithPath: "/tmp/popover-render.png"))
+    }
+
     func testTimelineGrouping() throws {
         // 复刻线上串组场景：20/19/12/11 点的行混杂的 DESC 序列
         let cal = Calendar.current

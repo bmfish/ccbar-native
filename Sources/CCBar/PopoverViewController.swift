@@ -1,5 +1,6 @@
 import Cocoa
 import SwiftUI
+import Charts
 
 // MARK: - 弹窗动作桥（连接旧的 AppDelegate selector 流程）
 
@@ -29,6 +30,13 @@ struct PopoverActions {
     )
 }
 
+/// 今日逐小时用量点（弹窗折线图）
+struct HourPoint: Identifiable {
+    let id = UUID()
+    let hourDate: Date
+    let token: Int64
+}
+
 // MARK: - ViewModel（主线程读缓存，驱动 SwiftUI 重渲染）
 
 @MainActor
@@ -41,6 +49,7 @@ final class PopoverViewModel: ObservableObject {
     @Published var models: [ModelStat] = []
     @Published var workHours: Double?
     @Published var theme: Theme = .current
+    @Published var todayHourly: [HourPoint] = []
 
     /// 问候语在弹窗创建时随机一次（popover 实例复用，期间不换）
     let greeting: String
@@ -59,6 +68,27 @@ final class PopoverViewModel: ObservableObject {
         models = c.getCachedModelBreakdown() ?? []
         workHours = c.getCachedWorkHours()
         theme = .current
+        if let store = AppDelegate.shared?.store {
+            todayHourly = Self.hourPoints(from: store.queryHourHistogram(days: 0))
+        }
+    }
+
+    /// 逐时序列：掐掉开头没数据的整点（从首个有数据的小时起线），结尾补到当前小时，中间空洞补零
+    static func hourPoints(from hist: [Int: Int64]) -> [HourPoint] {
+        let cal = Calendar.current
+        let now = Date()
+        let dataHours = hist.filter { $0.value > 0 }.map(\.key)
+        guard let first = dataHours.min() else { return [] }
+        let currentHour = cal.component(.hour, from: now)
+        let last = max(currentHour, dataHours.max() ?? currentHour)
+        guard first <= last else { return [] }
+        let startOfDay = cal.startOfDay(for: now)
+        var out: [HourPoint] = []
+        for h in first...last {
+            let date = cal.date(byAdding: .hour, value: h, to: startOfDay) ?? now
+            out.append(HourPoint(hourDate: date, token: hist[h] ?? 0))
+        }
+        return out
     }
 
     /// 按已跑时长把今日用量折算到 24:00
@@ -144,14 +174,64 @@ struct PopoverRootView: View {
                 .padding(.bottom, 8)
         }
 
-        if vm.yesterday != nil || vm.week != nil || vm.month != nil || vm.total != nil {
-            trendSection
+        // 底部双卡：左 = 今日每小时折线（从首个有数据的整点起线），右 = 趋势列表
+        HStack(alignment: .top, spacing: 8) {
+            hourlyCard
+                .frame(maxWidth: .infinity)
+            if vm.yesterday != nil || vm.week != nil || vm.month != nil || vm.total != nil {
+                trendCard
+                    .frame(width: 168)
+            }
         }
+        .padding(.bottom, 2)
 
         Rectangle()
             .fill(Color(nsColor: Design.separatorColor))
             .frame(height: 1)
             .padding(.vertical, 6)
+    }
+
+    // MARK: 今日每小时折线卡
+
+    private var hourlyCard: some View {
+        popoverCard {
+            VStack(alignment: .leading, spacing: 4) {
+                if vm.todayHourly.count > 1 {
+                    Chart {
+                        ForEach(vm.todayHourly) { p in
+                            AreaMark(x: .value(L("时间"), p.hourDate, unit: .hour),
+                                     y: .value(L("Token"), p.token))
+                                .foregroundStyle(.linearGradient(
+                                    colors: [Color(nsColor: vm.theme.accent).opacity(0.45),
+                                             Color(nsColor: vm.theme.accent).opacity(0.02)],
+                                    startPoint: .top, endPoint: .bottom))
+                                .interpolationMethod(.catmullRom)
+                            LineMark(x: .value(L("时间"), p.hourDate, unit: .hour),
+                                     y: .value(L("Token"), p.token))
+                                .foregroundStyle(Color(nsColor: vm.theme.accent))
+                                .lineStyle(StrokeStyle(lineWidth: 1.5))
+                                .interpolationMethod(.catmullRom)
+                        }
+                    }
+                    .chartYAxis(.hidden)
+                    .chartXAxis {
+                        AxisMarks(values: .automatic(desiredCount: 3)) { _ in
+                            AxisValueLabel(format: .dateTime.hour(), centered: true)
+                                .font(.system(size: 8).monospacedDigit())
+                                .foregroundStyle(Color(nsColor: Design.textMuted))
+                        }
+                    }
+                    .frame(height: 92)
+                } else {
+                    Text(L("今日暂无逐时数据"))
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 34)
+                }
+            }
+        }
+        .onTapGesture { PopoverActions.shared.openHourlyToday() }
     }
 
     // MARK: 今日卡片
@@ -290,14 +370,14 @@ struct PopoverRootView: View {
 
     // MARK: 趋势
 
-    private var trendSection: some View {
+    private var trendCard: some View {
         let tc = vm.theme.trendIconColors
-        return VStack(alignment: .leading, spacing: 0) {
-            Text(L("趋势"))
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(Color(nsColor: Design.textMuted))
-                .padding(.top, 6)
-                .padding(.bottom, 4)
+        return popoverCard {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(L("趋势"))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Color(nsColor: Design.textPrimary))
+                    .padding(.bottom, 4)
             if let y = vm.yesterday {
                 trendRow(icon: "calendar", color: tc.yesterday, title: L("昨日"),
                          value: Design.formatTokens(y.total), action: PopoverActions.shared.openHourlyYesterday)
@@ -314,22 +394,23 @@ struct PopoverRootView: View {
                 trendRow(icon: "sum", color: tc.total, title: L("历史总量"),
                          value: Design.formatTokens(t.total), action: PopoverActions.shared.openMonth)
             }
+            }
         }
     }
 
     private func trendRow(icon: String, color: NSColor, title: String, value: String, action: @escaping () -> Void) -> some View {
         HStack(spacing: 6) {
             Image(systemName: icon)
-                .font(.system(size: 12))
+                .font(.system(size: 11))
                 .foregroundColor(Color(nsColor: color))
             Text(title)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundColor(Color(nsColor: Design.textPrimary))
             Spacer()
             Text(value)
-                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
                 .foregroundColor(Color(nsColor: Design.dataHighlightColor))
-            Text("›").font(.system(size: 15, weight: .medium))
+            Text("›").font(.system(size: 13, weight: .medium))
                 .foregroundColor(Color(nsColor: Design.textMuted))
         }
         .padding(.vertical, 5)

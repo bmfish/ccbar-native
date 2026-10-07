@@ -288,6 +288,7 @@ let L10nEN: [String: String] = [
     "月费用预算，0=关闭；费用页显示进度与预算线": "Monthly cost budget, 0=off; shows progress bar & budget line on Cost page",
     "月度预算（≥ 0 的数字，$，0=关闭）": "Monthly budget (≥ 0, $, 0=off)",
     "该日暂无请求": "No requests on this day",
+    "今日暂无逐时数据": "No hourly data today",
     "今天": "Today",
     "昨天": "Yesterday",
     "导出长图": "Export Full Image",
