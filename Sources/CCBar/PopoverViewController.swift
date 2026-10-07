@@ -174,16 +174,9 @@ struct PopoverRootView: View {
                 .padding(.bottom, 8)
         }
 
-        // 底部双卡：左 = 今日每小时折线（从首个有数据的整点起线），右 = 趋势列表
-        HStack(alignment: .top, spacing: 8) {
-            hourlyCard
-                .frame(maxWidth: .infinity)
-            if vm.yesterday != nil || vm.week != nil || vm.month != nil || vm.total != nil {
-                trendCard
-                    .frame(width: 168)
-            }
+        if vm.yesterday != nil || vm.week != nil || vm.month != nil || vm.total != nil {
+            trendSection
         }
-        .padding(.bottom, 2)
 
         Rectangle()
             .fill(Color(nsColor: Design.separatorColor))
@@ -191,46 +184,36 @@ struct PopoverRootView: View {
             .padding(.vertical, 6)
     }
 
-    // MARK: 今日每小时折线卡
+    // MARK: 今日每小时 sparkline（垫在趋势列表背后，隐晦版）
 
-    private var hourlyCard: some View {
-        popoverCard {
-            VStack(alignment: .leading, spacing: 4) {
-                if vm.todayHourly.count > 1 {
-                    Chart {
-                        ForEach(vm.todayHourly) { p in
-                            AreaMark(x: .value(L("时间"), p.hourDate, unit: .hour),
-                                     y: .value(L("Token"), p.token))
-                                .foregroundStyle(.linearGradient(
-                                    colors: [Color(nsColor: vm.theme.accent).opacity(0.45),
-                                             Color(nsColor: vm.theme.accent).opacity(0.02)],
-                                    startPoint: .top, endPoint: .bottom))
-                                .interpolationMethod(.catmullRom)
-                            LineMark(x: .value(L("时间"), p.hourDate, unit: .hour),
-                                     y: .value(L("Token"), p.token))
-                                .foregroundStyle(Color(nsColor: vm.theme.accent))
-                                .lineStyle(StrokeStyle(lineWidth: 1.5))
-                                .interpolationMethod(.catmullRom)
-                        }
-                    }
-                    .chartYAxis(.hidden)
-                    .chartXAxis {
-                        AxisMarks(values: .automatic(desiredCount: 3)) { _ in
-                            AxisValueLabel(format: .dateTime.hour(), centered: true)
-                                .font(.system(size: 8).monospacedDigit())
-                                .foregroundStyle(Color(nsColor: Design.textMuted))
-                        }
-                    }
-                    .frame(height: 92)
-                } else {
-                    Text(L("今日暂无逐时数据"))
-                        .font(.system(size: 11))
-                        .foregroundColor(Color(nsColor: Design.textMuted))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 34)
-                }
+    /// 细线 + 极淡渐变、无坐标轴；点它进每小时详情
+    private var hourlySparkline: some View {
+        Chart {
+            ForEach(vm.todayHourly) { p in
+                AreaMark(x: .value(L("时间"), p.hourDate),
+                         y: .value(L("Token"), p.token))
+                    .foregroundStyle(.linearGradient(
+                        colors: [Color.white.opacity(0.05), Color.white.opacity(0.0)],
+                        startPoint: .top, endPoint: .bottom))
+                    .interpolationMethod(.catmullRom)
+                LineMark(x: .value(L("时间"), p.hourDate),
+                         y: .value(L("Token"), p.token))
+                    .foregroundStyle(Color.white.opacity(0.22))
+                    .lineStyle(StrokeStyle(lineWidth: 1))
+                    .interpolationMethod(.catmullRom)
             }
         }
+        .chartXAxis(.hidden)
+        .chartYAxis(.hidden)
+        .frame(height: 118)
+        // 两端渐隐，收掉面积填充的生硬边缘
+        .mask(LinearGradient(stops: [
+            .init(color: .clear, location: 0),
+            .init(color: .white, location: 0.05),
+            .init(color: .white, location: 0.94),
+            .init(color: .clear, location: 1),
+        ], startPoint: .leading, endPoint: .trailing))
+        .contentShape(Rectangle())
         .onTapGesture { PopoverActions.shared.openHourlyToday() }
     }
 
@@ -370,47 +353,57 @@ struct PopoverRootView: View {
 
     // MARK: 趋势
 
-    private var trendCard: some View {
+    private var trendSection: some View {
         let tc = vm.theme.trendIconColors
-        return popoverCard {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(L("趋势"))
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(Color(nsColor: Design.textPrimary))
-                    .padding(.bottom, 4)
-            if let y = vm.yesterday {
-                trendRow(icon: "calendar", color: tc.yesterday, title: L("昨日"),
-                         value: Design.formatTokens(y.total), action: PopoverActions.shared.openHourlyYesterday)
-            }
-            if let w = vm.week {
-                trendRow(icon: "chart.bar", color: tc.week, title: L("近7天"),
-                         value: Design.formatTokens(w.total), action: PopoverActions.shared.openWeek)
-            }
-            if let m = vm.month {
-                trendRow(icon: "calendar.badge.clock", color: tc.month, title: L("近30天"),
-                         value: Design.formatTokens(m.total), action: PopoverActions.shared.openMonth)
-            }
-            if let t = vm.total {
-                trendRow(icon: "sum", color: tc.total, title: L("历史总量"),
-                         value: Design.formatTokens(t.total), action: PopoverActions.shared.openMonth)
-            }
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(L("趋势"))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(Color(nsColor: Design.textPrimary))
+                .padding(.bottom, 2)
+            // 今日逐时 sparkline 垫底：隐晦地透出今天的节奏，不抢数据的戏
+            ZStack {
+                if vm.todayHourly.count > 1 {
+                    hourlySparkline
+                        .padding(.leading, -4)
+                        .padding(.trailing, -2)
+                }
+                VStack(spacing: 0) {
+                    if let y = vm.yesterday {
+                        trendRow(icon: "calendar", color: tc.yesterday, title: L("昨日"),
+                                 value: Design.formatTokens(y.total), action: PopoverActions.shared.openHourlyYesterday)
+                    }
+                    if let w = vm.week {
+                        trendRow(icon: "chart.bar", color: tc.week, title: L("近7天"),
+                                 value: Design.formatTokens(w.total), action: PopoverActions.shared.openWeek)
+                    }
+                    if let m = vm.month {
+                        trendRow(icon: "calendar.badge.clock", color: tc.month, title: L("近30天"),
+                                 value: Design.formatTokens(m.total), action: PopoverActions.shared.openMonth)
+                    }
+                    if let t = vm.total {
+                        trendRow(icon: "sum", color: tc.total, title: L("历史总量"),
+                                 value: Design.formatTokens(t.total), action: PopoverActions.shared.openMonth)
+                    }
+                }
             }
         }
+        .padding(.top, 6)
+        .padding(.bottom, 4)
     }
 
     private func trendRow(icon: String, color: NSColor, title: String, value: String, action: @escaping () -> Void) -> some View {
         HStack(spacing: 6) {
             Image(systemName: icon)
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .foregroundColor(Color(nsColor: color))
             Text(title)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundColor(Color(nsColor: Design.textPrimary))
             Spacer()
             Text(value)
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
                 .foregroundColor(Color(nsColor: Design.dataHighlightColor))
-            Text("›").font(.system(size: 13, weight: .medium))
+            Text("›").font(.system(size: 15, weight: .medium))
                 .foregroundColor(Color(nsColor: Design.textMuted))
         }
         .padding(.vertical, 5)
