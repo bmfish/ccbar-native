@@ -914,6 +914,22 @@ final class StatsStore {
         return (total, daysElapsed, daysInMonth)
     }
 
+    /// 近 N 天（含今天）未计费渠道（total_cost_usd 为 0/空）消耗的 token，
+    /// 供"默认单价估算"折算——cc-switch 只记部分渠道成本，ZCode 等渠道费用为 0
+    func queryUnmeteredTokens(days: Int) -> Int64 {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return 0 }
+        var total: Int64 = 0
+        forEachRow("""
+        SELECT COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
+        FROM usage_all
+        WHERE created_at >= ? AND created_at < ? AND COALESCE(total_cost_usd, 0) = 0
+        """, binds: [Self.localMidnight(days), Self.localMidnight(-1)]) { stmt in
+            total = sqlite3_column_int64(stmt, 0)
+        }
+        return total
+    }
+
     /// 近 N 天（含今天）每日费用曲线，日期升序（可能有空洞，调用方补零）
     func queryCostDaily(days: Int) -> [(date: String, cost: Double)] {
         lock.lock(); defer { lock.unlock() }

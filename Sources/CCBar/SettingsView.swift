@@ -30,6 +30,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var notifyIntervalText = ""
     @Published var ledThresholdText = ""
     @Published var budgetText = ""
+    @Published var priceText = ""
     @Published var warningEnabled = true
     @Published var launchAtLogin = false
     @Published var menuPetEnabled = true
@@ -71,6 +72,7 @@ final class SettingsViewModel: ObservableObject {
         notifyIntervalText = "\(settings.notifyInterval)"
         ledThresholdText = "\(settings.ledRedThreshold)"
         budgetText = settings.monthlyBudgetUsd > 0 ? String(format: "%g", settings.monthlyBudgetUsd) : ""
+        priceText = settings.defaultTokenPrice > 0 ? String(format: "%g", settings.defaultTokenPrice) : ""
         warningEnabled = settings.warningEnabled
         launchAtLogin = settings.launchAtLogin
         menuPetEnabled = settings.menuPetEnabled
@@ -182,6 +184,8 @@ final class SettingsViewModel: ObservableObject {
         if led == nil || led! < 0 { invalid.append(L("红色门槛（≥ 0 的整数，万，0=不变红）")) }
         let budget = Double(budgetText.isEmpty ? "0" : budgetText)
         if budget == nil || budget! < 0 { invalid.append(L("月度预算（≥ 0 的数字，$，0=关闭）")) }
+        let price = Double(priceText.isEmpty ? "0" : priceText)
+        if price == nil || price! < 0 { invalid.append(L("默认单价（≥ 0 的数字，$/M tokens，0=关闭）")) }
         if !invalid.isEmpty {
             showAlert(L("无法保存"), L("以下字段无效：") + "\n" + invalid.joined(separator: "\n"))
             return
@@ -204,6 +208,7 @@ final class SettingsViewModel: ObservableObject {
         settings.notifyInterval = notify!
         settings.ledRedThreshold = led!
         settings.monthlyBudgetUsd = budget!
+        settings.defaultTokenPrice = price!
         applyTheme(theme)
         UserDefaults.standard.set(language.rawValue, forKey: "appLanguage")
 
@@ -223,6 +228,7 @@ final class SettingsViewModel: ObservableObject {
         settings.autoWeeklyReport = true
         settings.ledRedThreshold = 100
         settings.monthlyBudgetUsd = 0
+        settings.defaultTokenPrice = 0
         reload()
     }
 
@@ -484,6 +490,9 @@ struct SettingsRootView: View {
 
         settingRow(icon: "dollarsign.circle", label: L("月度预算"),
                    text: $vm.budgetText, unit: "$", hint: L("月费用预算，0=关闭；费用页显示进度与预算线"))
+
+        settingRow(icon: "banknote", label: L("默认单价"),
+                   text: $vm.priceText, unit: "$/M", hint: L("未计费渠道（ZCode 等）按此单价折算，0=关闭"))
 
         sep
 

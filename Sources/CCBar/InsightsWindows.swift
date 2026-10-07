@@ -2,6 +2,7 @@ import Cocoa
 import SwiftUI
 import Charts
 import CoreImage
+import UniformTypeIdentifiers
 
 // MARK: - 洞察中心（费用 / 洞察 / 分享 / 渠道 / 流水）
 //
@@ -140,6 +141,14 @@ final class InsightsViewModel: ObservableObject {
     @Published var monthDaysElapsed = 1
     @Published var monthDaysTotal = 30
     @Published var monthlyBudget: Double = 0
+    // 未计费渠道按默认单价折算的估算费用
+    @Published var estToday = 0.0
+    @Published var est7 = 0.0
+    @Published var est30 = 0.0
+    // 今日会话（30 分钟内连续请求算同一会话）
+    @Published var sessionCount = 0
+    @Published var sessionAvgMin = 0
+    @Published var sessionLongestMin = 0
     // 分享卡近 7 天趋势
     @Published var weekTrend: [ChartEntry] = []
     @Published var shareToday: Int64 = 0
@@ -203,6 +212,12 @@ final class InsightsViewModel: ObservableObject {
         var monthDaysElapsed = 1
         var monthDaysTotal = 30
         var monthlyBudget: Double = 0
+        var estToday = 0.0
+        var est7 = 0.0
+        var est30 = 0.0
+        var sessionCount = 0
+        var sessionAvgMin = 0
+        var sessionLongestMin = 0
         var weekTrend: [ChartEntry] = []
         var shareToday: Int64 = 0
         var shareWeek: Int64 = 0
@@ -240,6 +255,13 @@ final class InsightsViewModel: ObservableObject {
         s.monthDaysElapsed = mtd.daysElapsed
         s.monthDaysTotal = mtd.daysInMonth
         s.monthlyBudget = AppDelegate.shared?.settings.monthlyBudgetUsd ?? 0
+        // 未计费渠道估算（默认单价 $/M tokens）
+        let price = AppDelegate.shared?.settings.defaultTokenPrice ?? 0
+        if price > 0 {
+            s.estToday = Double(store.queryUnmeteredTokens(days: 0)) / 1_000_000 * price
+            s.est7 = Double(store.queryUnmeteredTokens(days: 7)) / 1_000_000 * price
+            s.est30 = Double(store.queryUnmeteredTokens(days: 30)) / 1_000_000 * price
+        }
         // 洞察页
         s.streak = store.queryStreak()
         let delta = store.queryWeeklyDelta()
@@ -318,6 +340,11 @@ final class InsightsViewModel: ObservableObject {
         s.todaySources = store.querySourceBreakdown()
         // 流水页（按当前选中日期查，切日期走 loadTimeline 增量刷新）
         s.timeline = store.queryTimeline(day: timelineDay)
+        // 今日会话：30 分钟内连续请求算同一会话
+        let (cnt, avg, longest) = Self.sessionStats(from: s.timeline)
+        s.sessionCount = cnt
+        s.sessionAvgMin = avg
+        s.sessionLongestMin = longest
         return s
     }
 
@@ -350,6 +377,12 @@ final class InsightsViewModel: ObservableObject {
         monthDaysElapsed = s.monthDaysElapsed
         monthDaysTotal = s.monthDaysTotal
         monthlyBudget = s.monthlyBudget
+        estToday = s.estToday
+        est7 = s.est7
+        est30 = s.est30
+        sessionCount = s.sessionCount
+        sessionAvgMin = s.sessionAvgMin
+        sessionLongestMin = s.sessionLongestMin
         weekTrend = s.weekTrend
         shareToday = s.shareToday
         shareWeek = s.shareWeek
@@ -360,6 +393,25 @@ final class InsightsViewModel: ObservableObject {
         weeklyReqs = s.weeklyReqs
         weeklyPeak = s.weeklyPeak
         weeklyTrend = s.weeklyTrend
+    }
+
+    /// 今日会话统计：相邻请求间隔 > 30 分钟切新会话，返回（会话数, 平均时长分钟, 最长时长分钟）
+    static func sessionStats(from rows: [(time: Int, model: String, source: String, token: Int64, cost: Double)]) -> (Int, Int, Int) {
+        let times = rows.map(\.time).sorted()
+        guard !times.isEmpty else { return (0, 0, 0) }
+        var durations: [Int] = []
+        var start = times[0], last = times[0]
+        for t in times.dropFirst() {
+            if t - last > 30 * 60 {
+                durations.append(last - start)
+                start = t
+            }
+            last = t
+        }
+        durations.append(last - start)
+        let avgMin = durations.reduce(0, +) / max(durations.count, 1) / 60
+        let longestMin = (durations.max() ?? 0) / 60
+        return (durations.count, avgMin, longestMin)
     }
 }
 
@@ -463,9 +515,9 @@ struct CostPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 14) {
-                    bigCostCard(L("今日费用"), vm.costToday)
-                    bigCostCard(L("近 7 天"), vm.cost7)
-                    bigCostCard(L("近 30 天"), vm.cost30)
+                    bigCostCard(L("今日费用"), vm.costToday, estimated: vm.estToday)
+                    bigCostCard(L("近 7 天"), vm.cost7, estimated: vm.est7)
+                    bigCostCard(L("近 30 天"), vm.cost30, estimated: vm.est30)
                 }
 
                 if vm.monthlyBudget > 0 {
@@ -559,21 +611,26 @@ struct CostPage: View {
                     }
                 }
 
-                Text(L("费用按 cc-switch 记录的单价折算；ZCode 渠道官方未计费，不计入"))
+                Text(L("费用按 cc-switch 记录的单价折算；未计费渠道可在设置里配默认单价估算"))
                     .font(.system(size: 10))
                     .foregroundColor(Color(nsColor: Design.textMuted))
             }
         }
     }
 
-    private func bigCostCard(_ title: String, _ value: Double) -> some View {
+    private func bigCostCard(_ title: String, _ value: Double, estimated: Double = 0) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.system(size: 12))
                 .foregroundColor(Color(nsColor: Design.textSecondary))
-            Text(money(value))
+            Text(money(value + estimated))
                 .font(.system(size: 26, weight: .bold).monospacedDigit())
                 .foregroundColor(Color(nsColor: Design.bigNumberColor))
+            if estimated > 0 {
+                Text(L("实测 ") + money(value) + L(" · 估算 ") + money(estimated))
+                    .font(.system(size: 9).monospacedDigit())
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
@@ -662,6 +719,9 @@ struct InsightsPageView: View {
         VStack(spacing: 14) {
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
                 insightCard("🔥 " + L("连续使用"), "\(vm.streak)", unit: L("天"))
+                insightCard(L("今日会话"), "\(vm.sessionCount)", unit: L("个"),
+                            sub: String(format: L("平均 %d 分钟 · 最长 %d 分钟"),
+                                        vm.sessionAvgMin, vm.sessionLongestMin))
                 insightCard(L("本周用量"), Design.formatTokens(vm.thisWeek),
                             badge: weekDeltaBadge)
                 insightCard(L("日均用量（近 30 天）"), Design.formatTokens(vm.dailyAvg))
@@ -1235,7 +1295,8 @@ enum WeeklyReport {
             AppDelegate.shared?.sendNotification(
                 title: L("上周周报已生成"),
                 body: L("已存到 CCBar 周报目录，点击打开洞察中心查看"),
-                identifier: "ccbar.weekly")
+                identifier: "ccbar.weekly",
+                category: "CCBAR_WEEKLY")
             return url.path
         } catch {
             NSLog("[weekly] 周报写入失败 \(error)")
@@ -1551,7 +1612,30 @@ struct TimelinePage: View {
             .labelsHidden()
             .frame(width: 170)
             Spacer()
+            Button(L("导出 CSV")) { exportTimelineCSV() }
+                .font(.system(size: 11))
         }
+    }
+
+    /// 当前筛选下的逐笔流水导出 CSV（带 BOM，Excel 直开）
+    private func exportTimelineCSV() {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        var csv = "\u{FEFF}" + [L("时间"), L("模型"), L("渠道"), L("总 Token"), L("费用")]
+            .joined(separator: ",") + "\n"
+        for line in filtered {
+            let t = Date(timeIntervalSince1970: TimeInterval(line.time))
+            let cost = line.cost > 0 ? String(format: "%.4f", line.cost) : "0"
+            csv += [fmt.string(from: t), line.model, line.source, "\(line.token)", cost]
+                .map { $0.contains(",") ? "\"\($0)\"" : $0 }.joined(separator: ",") + "\n"
+        }
+        let panel = NSSavePanel()
+        let stamp = DateFormatter.localizedString(from: vm.timelineDay, dateStyle: .short, timeStyle: .none)
+            .replacingOccurrences(of: "/", with: "")
+        panel.nameFieldStringValue = "ccbar-timeline-\(stamp).csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? csv.write(to: url, atomically: true, encoding: .utf8)
     }
 
     private var detailList: some View {

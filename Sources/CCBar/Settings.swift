@@ -102,6 +102,13 @@ class Settings {
         set { defaults.set(newValue, forKey: "monthlyBudgetUsd") }
     }
 
+    /// 未计费渠道默认单价（$/M tokens），0 = 关闭估算。
+    /// cc-switch 只记部分渠道成本；ZCode 等渠道 total_cost_usd 为 0，按此单价折算
+    var defaultTokenPrice: Double {
+        get { defaults.double(forKey: "defaultTokenPrice") }
+        set { defaults.set(newValue, forKey: "defaultTokenPrice") }
+    }
+
     /// 闪电 LED 红色门槛（万）：单次刷新增量达到即变红，0 = 不变红
     var ledRedThreshold: Int {
         get { defaults.object(forKey: "ledRedThreshold") == nil ? 100 : defaults.integer(forKey: "ledRedThreshold") }

@@ -282,6 +282,10 @@ final class StatsStoreTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(mtd.mtd, 0.5)
         XCTAssertGreaterThanOrEqual(mtd.daysElapsed, 1)
         XCTAssertTrue((28...31).contains(mtd.daysInMonth))
+
+        // 未计费 token：往源库插一行 $0 的今日请求（今日走实时视图，无需再同步）
+        fixtureExec("INSERT INTO proxy_request_logs VALUES ('req-free', 'claude', 'free-model', 10, 20, 0, 0, 0.0, \(Int64(Date().timeIntervalSince1970)))")
+        XCTAssertEqual(store.queryUnmeteredTokens(days: 7), 30)
     }
 
     func testModelHistoryAndWindowStats() throws {

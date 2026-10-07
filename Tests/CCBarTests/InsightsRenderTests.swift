@@ -177,6 +177,22 @@ final class InsightsRenderTests: XCTestCase {
         try data.write(to: URL(fileURLWithPath: "/tmp/detail-render.png"))
     }
 
+    func testSessionStats() throws {
+        // 30 分钟间隔切会话：t0、t0+1min 一段；t0+4000s（>30min）新一段
+        let base = 1_800_000_000
+        let rows: [(time: Int, model: String, source: String, token: Int64, cost: Double)] = [
+            (base, "m", "zcode", 0, 0),
+            (base + 60, "m", "zcode", 0, 0),
+            (base + 4000, "m", "zcode", 0, 0),
+        ]
+        let (count, avgMin, longestMin) = InsightsViewModel.sessionStats(from: rows)
+        XCTAssertEqual(count, 2)
+        XCTAssertEqual(avgMin, 0)        // (60s + 0s)/2 = 30s → 0 分钟
+        XCTAssertEqual(longestMin, 1)    // 60s → 1 分钟
+        let empty: [(time: Int, model: String, source: String, token: Int64, cost: Double)] = []
+        XCTAssertEqual(InsightsViewModel.sessionStats(from: empty).0, 0)
+    }
+
     func testTimelineGrouping() throws {
         // 复刻线上串组场景：20/19/12/11 点的行混杂的 DESC 序列
         let cal = Calendar.current

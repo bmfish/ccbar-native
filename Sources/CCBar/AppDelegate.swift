@@ -550,14 +550,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                 print("[ccBar] 用户未授权通知，用量预警/里程碑将不弹系统通知")
             }
         }
+        // 周报通知的「打开周报目录」按钮
+        let openFolder = UNNotificationAction(identifier: "OPEN_WEEKLY_FOLDER", title: L("打开周报目录"))
+        center.setNotificationCategories([
+            UNNotificationCategory(identifier: "CCBAR_WEEKLY", actions: [openFolder], intentIdentifiers: [])
+        ])
     }
 
-    func sendNotification(title: String, body: String, identifier: String = "ccbar.notice") {
+    func sendNotification(title: String, body: String, identifier: String = "ccbar.notice", category: String? = nil) {
         guard Bundle.main.bundleIdentifier != nil else { return }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
+        if let category {
+            content.categoryIdentifier = category
+        }
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
     }
@@ -567,7 +575,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                                 didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let id = response.notification.request.identifier
+        let action = response.actionIdentifier
         DispatchQueue.main.async { [weak self] in
+            // 周报通知上的「打开周报目录」按钮
+            if action == "OPEN_WEEKLY_FOLDER" {
+                let dir = WeeklyReport.directoryURL()
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                NSWorkspace.shared.open(dir)
+                completionHandler()
+                return
+            }
             if id.hasPrefix("ccbar.warning") {
                 self?.openSettings()
             } else if id.hasPrefix("ccbar.weekly") {
