@@ -570,6 +570,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         DispatchQueue.main.async { [weak self] in
             if id.hasPrefix("ccbar.warning") {
                 self?.openSettings()
+            } else if id.hasPrefix("ccbar.weekly") {
+                self?.openInsights()
             } else {
                 self?.showPopover()
             }

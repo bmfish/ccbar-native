@@ -96,6 +96,12 @@ class Settings {
         set { defaults.set(newValue, forKey: "autoWeeklyReport") }
     }
 
+    /// 月度费用预算（美元），0 = 关闭预算显示
+    var monthlyBudgetUsd: Double {
+        get { defaults.double(forKey: "monthlyBudgetUsd") }
+        set { defaults.set(newValue, forKey: "monthlyBudgetUsd") }
+    }
+
     /// 闪电 LED 红色门槛（万）：单次刷新增量达到即变红，0 = 不变红
     var ledRedThreshold: Int {
         get { defaults.object(forKey: "ledRedThreshold") == nil ? 100 : defaults.integer(forKey: "ledRedThreshold") }

@@ -29,6 +29,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var warningThresholdText = ""
     @Published var notifyIntervalText = ""
     @Published var ledThresholdText = ""
+    @Published var budgetText = ""
     @Published var warningEnabled = true
     @Published var launchAtLogin = false
     @Published var menuPetEnabled = true
@@ -69,6 +70,7 @@ final class SettingsViewModel: ObservableObject {
         warningThresholdText = "\(settings.warningThreshold)"
         notifyIntervalText = "\(settings.notifyInterval)"
         ledThresholdText = "\(settings.ledRedThreshold)"
+        budgetText = settings.monthlyBudgetUsd > 0 ? String(format: "%g", settings.monthlyBudgetUsd) : ""
         warningEnabled = settings.warningEnabled
         launchAtLogin = settings.launchAtLogin
         menuPetEnabled = settings.menuPetEnabled
@@ -178,6 +180,8 @@ final class SettingsViewModel: ObservableObject {
         if notify == nil || notify! < 0 { invalid.append(L("通知间隔（≥ 0 的整数，万，0=关闭）")) }
         let led = Int(ledThresholdText)
         if led == nil || led! < 0 { invalid.append(L("红色门槛（≥ 0 的整数，万，0=不变红）")) }
+        let budget = Double(budgetText.isEmpty ? "0" : budgetText)
+        if budget == nil || budget! < 0 { invalid.append(L("月度预算（≥ 0 的数字，$，0=关闭）")) }
         if !invalid.isEmpty {
             showAlert(L("无法保存"), L("以下字段无效：") + "\n" + invalid.joined(separator: "\n"))
             return
@@ -199,6 +203,7 @@ final class SettingsViewModel: ObservableObject {
         settings.autoWeeklyReport = autoWeeklyReport
         settings.notifyInterval = notify!
         settings.ledRedThreshold = led!
+        settings.monthlyBudgetUsd = budget!
         applyTheme(theme)
         UserDefaults.standard.set(language.rawValue, forKey: "appLanguage")
 
@@ -217,6 +222,7 @@ final class SettingsViewModel: ObservableObject {
         settings.popoverWide = false
         settings.autoWeeklyReport = true
         settings.ledRedThreshold = 100
+        settings.monthlyBudgetUsd = 0
         reload()
     }
 
@@ -457,6 +463,9 @@ struct SettingsRootView: View {
         .frame(height: 24)
         settingRow(icon: "bolt.badge.automatic", label: L("红色门槛"),
                    text: $vm.ledThresholdText, unit: L("万"), hint: L("单次刷新增量达到变红，0=不变红"))
+
+        settingRow(icon: "dollarsign.circle", label: L("月度预算"),
+                   text: $vm.budgetText, unit: "$", hint: L("月费用预算，0=关闭；费用页显示进度与预算线"))
 
         sep
 

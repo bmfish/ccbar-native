@@ -134,9 +134,10 @@ final class InsightsRenderTests: XCTestCase {
         let vm = InsightsViewModel()
         vm.load(store: store, force: true)
         XCTAssertGreaterThan(vm.totalAll, 0, "VM 应有数据")
+        vm.monthlyBudget = 50   // 注入预算，验证预算卡与走势图预算线（真机读自设置）
 
         let pages: [(String, AnyView, CGFloat)] = [
-            ("cost", AnyView(CostPage(vm: vm)), 500),
+            ("cost", AnyView(CostPage(vm: vm)), 700),
             ("insights", AnyView(InsightsPageView(vm: vm)), 1350),
             ("share", AnyView(SharePage(vm: vm)), 1050),
             ("channels", AnyView(ChannelsPage(vm: vm)), 1250),

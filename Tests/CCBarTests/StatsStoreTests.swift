@@ -265,6 +265,22 @@ final class StatsStoreTests: XCTestCase {
         let top = store.queryTopModel(days: 30)
         XCTAssertEqual(top?.model, "test-model")
         XCTAssertEqual(top?.token, 33960)
+
+        // 任意日期流水：昨天的历史行（今日实时行不混入）
+        let yesterday = Date(timeIntervalSince1970: TimeInterval(StatsStore.localMidnight(1)))
+        let yTimeline = store.queryTimeline(day: yesterday)
+        XCTAssertEqual(yTimeline.count, 1)
+        XCTAssertEqual(yTimeline.first?.token, 3600)
+        XCTAssertEqual(yTimeline.first?.model, "test-model")
+        XCTAssertEqual(yTimeline.first?.cost ?? 0, 0.5, accuracy: 0.0001)
+        // 今日流水走实时视图
+        XCTAssertEqual(store.queryTimeline(day: Date()).count, 1)
+
+        // 本月费用 MTD：至少含今日实时的 $0.5；天数口径合法
+        let mtd = store.queryCostMTD()
+        XCTAssertGreaterThanOrEqual(mtd.mtd, 0.5)
+        XCTAssertGreaterThanOrEqual(mtd.daysElapsed, 1)
+        XCTAssertTrue((28...31).contains(mtd.daysInMonth))
     }
 
     func testModelHistoryAndWindowStats() throws {

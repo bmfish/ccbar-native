@@ -895,6 +895,25 @@ final class StatsStore {
         return total
     }
 
+    /// 本月累计费用（月初 0 点 ~ 明日 0 点），供月度预算对照
+    func queryCostMTD() -> (mtd: Double, daysElapsed: Int, daysInMonth: Int) {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return (0, 1, 30) }
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.year, .month], from: Date())
+        guard let first = cal.date(from: comps) else { return (0, 1, 30) }
+        var total = 0.0
+        forEachRow("""
+        SELECT COALESCE(SUM(total_cost_usd), 0) FROM usage_all
+        WHERE created_at >= ? AND created_at < ?
+        """, binds: [Int64(first.timeIntervalSince1970), Self.localMidnight(-1)]) { stmt in
+            total = sqlite3_column_double(stmt, 0)
+        }
+        let daysElapsed = max(cal.component(.day, from: Date()), 1)
+        let daysInMonth = cal.range(of: .day, in: .month, for: Date())?.count ?? 30
+        return (total, daysElapsed, daysInMonth)
+    }
+
     /// 近 N 天（含今天）每日费用曲线，日期升序（可能有空洞，调用方补零）
     func queryCostDaily(days: Int) -> [(date: String, cost: Double)] {
         lock.lock(); defer { lock.unlock() }
@@ -1204,6 +1223,32 @@ final class StatsStore {
         WHERE created_at >= ?
         ORDER BY created_at DESC LIMIT \(max(1, limit))
         """, binds: [Self.localMidnight(0)]) { stmt in
+            let model = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? "-" : String(cString: sqlite3_column_text(stmt, 1))
+            result.append((time: Int(sqlite3_column_int64(stmt, 0)),
+                           model: model,
+                           source: String(cString: sqlite3_column_text(stmt, 2)),
+                           token: sqlite3_column_int64(stmt, 3),
+                           cost: sqlite3_column_double(stmt, 4)))
+        }
+        return result
+    }
+
+    /// 指定日期（本地 0 点起 24 小时）的逐笔流水，时间 DESC。今日走实时视图，历史走已同步的 usage_log
+    func queryTimeline(day: Date, limit: Int = 800) -> [(time: Int, model: String, source: String, token: Int64, cost: Double)] {
+        let cal = Calendar.current
+        if cal.isDateInToday(day) { return queryTodayTimeline(limit: limit) }
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        let start = Int64(cal.startOfDay(for: day).timeIntervalSince1970)
+        var result: [(time: Int, model: String, source: String, token: Int64, cost: Double)] = []
+        forEachRow("""
+        SELECT created_at, model, source,
+               COALESCE(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens, 0),
+               COALESCE(total_cost_usd, 0)
+        FROM usage_log
+        WHERE created_at >= \(start) AND created_at < \(start + 86_400)
+        ORDER BY created_at DESC LIMIT \(max(1, limit))
+        """) { stmt in
             let model = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? "-" : String(cString: sqlite3_column_text(stmt, 1))
             result.append((time: Int(sqlite3_column_int64(stmt, 0)),
                            model: model,

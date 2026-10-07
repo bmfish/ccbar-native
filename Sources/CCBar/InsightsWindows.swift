@@ -134,6 +134,12 @@ final class InsightsViewModel: ObservableObject {
     @Published var todaySources: [SourceStat] = []
     // 流水
     @Published var timeline: [(time: Int, model: String, source: String, token: Int64, cost: Double)] = []
+    @Published var timelineDay: Date = Calendar.current.startOfDay(for: Date())
+    // 费用页月度预算
+    @Published var costMtd = 0.0
+    @Published var monthDaysElapsed = 1
+    @Published var monthDaysTotal = 30
+    @Published var monthlyBudget: Double = 0
     // 分享卡近 7 天趋势
     @Published var weekTrend: [ChartEntry] = []
     @Published var shareToday: Int64 = 0
@@ -163,6 +169,14 @@ final class InsightsViewModel: ObservableObject {
         apply(compute(store: store))
     }
 
+    /// 流水页切日期：只重查流水，其余字段不动（一次性全量加载的增量通道）
+    func loadTimeline(day: Date) {
+        guard let store = AppDelegate.shared?.store else { return }
+        let day = Calendar.current.startOfDay(for: day)
+        timelineDay = day
+        timeline = store.queryTimeline(day: day)
+    }
+
     private struct Snapshot {
         var costToday = 0.0, cost7 = 0.0, cost30 = 0.0
         var costDaily: [CostPoint] = []
@@ -184,6 +198,11 @@ final class InsightsViewModel: ObservableObject {
         var channelPoints: [ChannelPoint] = []
         var todaySources: [SourceStat] = []
         var timeline: [(time: Int, model: String, source: String, token: Int64, cost: Double)] = []
+        var timelineDay: Date = Calendar.current.startOfDay(for: Date())
+        var costMtd = 0.0
+        var monthDaysElapsed = 1
+        var monthDaysTotal = 30
+        var monthlyBudget: Double = 0
         var weekTrend: [ChartEntry] = []
         var shareToday: Int64 = 0
         var shareWeek: Int64 = 0
@@ -216,6 +235,11 @@ final class InsightsViewModel: ObservableObject {
         }
         s.costDaily = points
         s.costModels = store.queryCostByModel(days: 30)
+        let mtd = store.queryCostMTD()
+        s.costMtd = mtd.mtd
+        s.monthDaysElapsed = mtd.daysElapsed
+        s.monthDaysTotal = mtd.daysInMonth
+        s.monthlyBudget = AppDelegate.shared?.settings.monthlyBudgetUsd ?? 0
         // 洞察页
         s.streak = store.queryStreak()
         let delta = store.queryWeeklyDelta()
@@ -292,8 +316,8 @@ final class InsightsViewModel: ObservableObject {
                          token: $0.token)
         }
         s.todaySources = store.querySourceBreakdown()
-        // 流水页
-        s.timeline = store.queryTodayTimeline()
+        // 流水页（按当前选中日期查，切日期走 loadTimeline 增量刷新）
+        s.timeline = store.queryTimeline(day: timelineDay)
         return s
     }
 
@@ -321,6 +345,11 @@ final class InsightsViewModel: ObservableObject {
         channelPoints = s.channelPoints
         todaySources = s.todaySources
         timeline = s.timeline
+        timelineDay = s.timelineDay
+        costMtd = s.costMtd
+        monthDaysElapsed = s.monthDaysElapsed
+        monthDaysTotal = s.monthDaysTotal
+        monthlyBudget = s.monthlyBudget
         weekTrend = s.weekTrend
         shareToday = s.shareToday
         shareWeek = s.shareWeek
@@ -415,6 +444,10 @@ struct CostPage: View {
                     bigCostCard(L("近 30 天"), vm.cost30)
                 }
 
+                if vm.monthlyBudget > 0 {
+                    budgetCard
+                }
+
                 pageCard(L("近 30 天费用走势")) {
                     Chart {
                         ForEach(vm.costDaily) { p in
@@ -424,6 +457,9 @@ struct CostPage: View {
                             )
                             .foregroundStyle(Color(nsColor: Design.brandColor).opacity(0.85))
                             .cornerRadius(2)
+                        }
+                        if vm.monthlyBudget > 0 {
+                            budgetRule
                         }
                     }
                     .chartYAxis {
@@ -521,6 +557,56 @@ struct CostPage: View {
             .fill(Color(nsColor: Design.cardFillDark)))
         .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
             .stroke(Color(nsColor: Design.cardBorderDark)))
+    }
+
+    // MARK: 月度预算（设置里月度预算 > 0 时出现）
+
+    private var dailyBudget: Double { vm.monthlyBudget / Double(max(vm.monthDaysTotal, 1)) }
+
+    /// 走势图上的日预算虚线
+    private var budgetRule: some ChartContent {
+        RuleMark(y: .value(L("日预算"), dailyBudget))
+            .foregroundStyle(Color(nsColor: Design.warningColor))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            .annotation(position: .top, alignment: .trailing) {
+                Text(L("日预算 ") + money(dailyBudget))
+                    .font(.system(size: 9))
+                    .foregroundColor(Color(nsColor: Design.warningColor))
+            }
+    }
+
+    private var budgetCard: some View {
+        let ratio = vm.costMtd / vm.monthlyBudget
+        let over = vm.costMtd > vm.monthlyBudget
+        let projected = Double(vm.monthDaysElapsed) > 0
+            ? vm.costMtd / Double(vm.monthDaysElapsed) * Double(vm.monthDaysTotal) : 0
+        return pageCard(String(format: L("本月预算 $%.2f"), vm.monthlyBudget)) {
+            VStack(alignment: .leading, spacing: 8) {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.06))
+                        Capsule().fill(Color(nsColor: Design.usageColor(progress: CGFloat(min(ratio, 1)))))
+                            .frame(width: geo.size.width * CGFloat(min(ratio, 1)))
+                    }
+                }
+                .frame(height: 6)
+                HStack(alignment: .firstTextBaseline) {
+                    Text(L("本月已花 ") + money(vm.costMtd))
+                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                        .foregroundColor(Color(nsColor: Design.textPrimary))
+                    Spacer()
+                    Text(over
+                         ? L("已超预算 ") + money(vm.costMtd - vm.monthlyBudget)
+                         : L("剩余 ") + money(vm.monthlyBudget - vm.costMtd))
+                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                        .foregroundColor(Color(nsColor: over ? Design.errorColor : Design.successColor))
+                }
+                Text(L("按当前速率预计 ") + money(projected)
+                     + L(" · 已用预算 ") + String(format: "%.0f%%", ratio * 100))
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+            }
+        }
     }
 }
 
@@ -1032,6 +1118,10 @@ enum WeeklyReport {
         do {
             try png.write(to: url)
             NSLog("[weekly] 周报已生成 \(url.path)")
+            AppDelegate.shared?.sendNotification(
+                title: L("上周周报已生成"),
+                body: L("已存到 CCBar 周报目录，点击打开洞察中心查看"),
+                identifier: "ccbar.weekly")
             return url.path
         } catch {
             NSLog("[weekly] 周报写入失败 \(error)")
@@ -1257,11 +1347,20 @@ struct TimelinePage: View {
         }
     }
 
+    private var dayBinding: Binding<Date> {
+        Binding(
+            get: { vm.timelineDay },
+            set: { vm.loadTimeline(day: $0) }
+        )
+    }
+
     private var filtersBar: some View {
         HStack(spacing: 10) {
             Text(L("筛选"))
                 .font(.system(size: 11))
                 .foregroundColor(Color(nsColor: Design.textMuted))
+            DatePicker("", selection: dayBinding, in: ...Date(), displayedComponents: .date)
+                .labelsHidden()
             Picker("", selection: $sourceFilter) {
                 ForEach(sourceOptions, id: \.self) { option in
                     Text(option == "all" ? L("全部渠道") : (AppDelegate.shared?.sourceDisplayName(option) ?? option)).tag(option)
@@ -1284,7 +1383,8 @@ struct TimelinePage: View {
         Group {
             if filtered.isEmpty {
                 VStack(spacing: 8) {
-                    mutedHint(L("今日暂无请求"))
+                    mutedHint(Calendar.current.isDateInToday(vm.timelineDay)
+                              ? L("今日暂无请求") : L("该日暂无请求"))
                     Text(L("去干活吧，流水会记住每一笔 💪"))
                         .font(.system(size: 11))
                         .foregroundColor(Color(nsColor: Design.textMuted))
