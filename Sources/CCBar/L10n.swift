@@ -235,7 +235,6 @@ let L10nEN: [String: String] = [
     "分享": "Share",
     "渠道": "Channels",
     "流水": "Timeline",
-    "积分": "Credits",
     "今日积分": "Today",
     "积分余额（官方账单）": "Credit Balance (official)",
     "已用 / 共": "used of",

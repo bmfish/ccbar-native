@@ -815,8 +815,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     }
 
     /// 洞察中心（费用 / 洞察 / 分享 / 渠道 / 流水）
+    /// 弹窗唯一不收起的入口：保持弹窗挂着，方便对照菜单数据
     @objc func openInsights() {
-        closePopover()
         if insightsWindow == nil {
             insightsWindow = InsightsWindowController()
         }
