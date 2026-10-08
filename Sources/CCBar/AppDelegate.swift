@@ -326,6 +326,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             // Trae 是 HTTP 源，另走自己的节流同步（内部锁外网络）。
             self.store.syncIfNeeded()
             self.store.syncTraeIfNeeded()
+            self.notifyCheckin(self.store.traeCheckinIfNeeded())
 
             let todayStats = self.store.queryDayStats(days: 0)
             let workHours = self.store.queryWorkHours()
@@ -404,7 +405,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         queryQueue.async { [weak self] in
             guard let self = self else { return }
             // 点开弹窗 = 主动查看：走更短的交互节流，保证看到的数据尽量新鲜
+            // （夜间点弹窗同样会查：静默只限定时器，不拦主动查看）
             self.store.syncTraeIfNeeded(interactive: true)
+            self.notifyCheckin(self.store.traeCheckinIfNeeded(interactive: true))
             let todayStats = self.store.queryDayStats(days: 0)
             let modelBreakdown = self.store.queryModelBreakdown()
             let workHours = self.store.queryWorkHours()
@@ -579,6 +582,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         }
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+    }
+
+    /// Trae 每日签到结果 → 系统通知（只有"签到成功"才打扰，已签/失败静默）
+    func notifyCheckin(_ outcome: TraeSync.TraeCheckinOutcome?) {
+        guard case .claimed(let credits)? = outcome else { return }
+        let amount = credits > 0 ? "今日 +\(Int(credits)) 积分" : "今日积分已到账"
+        sendNotification(title: "Trae 签到成功", body: amount, identifier: "ccbar.checkin")
     }
 
     /// 点击通知：预警 → 打开设置调阈值；里程碑 → 打开面板

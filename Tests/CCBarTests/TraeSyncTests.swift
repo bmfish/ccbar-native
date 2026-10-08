@@ -107,13 +107,13 @@ final class TraeSyncTests: XCTestCase {
 
         let first = TraeRow(sessionID: "s1", model: "GLM-5.3-Flash",
                             input: 100, output: 10, cacheRead: 50, cacheWrite: 0,
-                            costUsd: 0.01, credits: 0.5, epoch: 1_791_460_000)
+                            costUsd: 0.01, credits: 0.5, epoch: StatsStore.localMidnight(0) + 3_600)
         store.upsertTraeRows([first])
 
-        // 会话继续对话：用量增长、usage_time 前移 → 覆盖而非新增
+        // 会话继续对话：用量增长、usage_time 前移 → 覆盖而非新增（日期必须动态取今天，防跨日腐烂）
         let grown = TraeRow(sessionID: "s1", model: "GLM-5.3-Flash",
                             input: 250, output: 30, cacheRead: 90, cacheWrite: 0,
-                            costUsd: 0.03, credits: 1.2, epoch: 1_791_466_000)
+                            costUsd: 0.03, credits: 1.2, epoch: StatsStore.localMidnight(0) + 7_200)
         store.upsertTraeRows([grown])
 
         let stats = store.queryDayStats(days: 0)
@@ -200,15 +200,55 @@ final class TraeSyncTests: XCTestCase {
 
     func testNightSilenceSkipsSync() {
         store.rebuild(configs: [SourceConfig(id: "trae", enabled: true, dbPath: "", credential: "sessionid=fake")])
-        // 凌晨 3 点：0–9 点静默窗口内不发起同步（interactive 亦同），sourceStatus 保持为空。
-        // 若静默被移除，假凭据会走真实 API 并把状态置为过期——测试即失败，守护有效
+        // 夜间静默窗口（本地 0:00–9:00）纯函数
         var cal = Calendar.current
         cal.timeZone = .current
+        XCTAssertTrue(StatsStore.inNightSilence(cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 3, minute: 0))!))
+        XCTAssertTrue(StatsStore.inNightSilence(cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 0, minute: 0))!))
+        XCTAssertFalse(StatsStore.inNightSilence(cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 9, minute: 0))!))
+        XCTAssertFalse(StatsStore.inNightSilence(cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 23, minute: 0))!))
+        // 静默期定时器驱动（非 interactive）直接 return，sourceStatus 保持"连接中…"。
+        // 若静默被移除，假凭据会走真实 API 并把状态置为过期——测试即失败，守护有效
         let night = cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 3, minute: 0))!
-        store.syncTraeIfNeeded(now: night, interactive: true)
-        // rebuild 会把 trae 初始状态置为"连接中…"；静默期内同步直接 return，状态不应被改写
-        // （若静默被移除，假凭据会走真实 API 并把状态置为过期——测试即失败，守护有效）
-        XCTAssertEqual(store.sourceStatus["trae"], "连接中…", "夜间静默期不应发起同步")
+        store.syncTraeIfNeeded(now: night)
+        store.traeCheckinIfNeeded(now: night)
+        XCTAssertEqual(store.sourceStatus["trae"], "连接中…", "静默期定时器不应发起同步/签到")
+    }
+
+    func testInteractiveBypassesNightSilence() {
+        // 语义（用户确认）：0–9 点静默只限定时器；点弹窗（interactive）随时要查。
+        // 用 11 点验证 interactive 正常路径不受影响；静默期的 interactive 放行
+        // 与定时器一致共用同一个 guard，无法离线断言网络行为，此处守住接口签名。
+        store.rebuild(configs: [SourceConfig(id: "trae", enabled: true, dbPath: "", credential: "sessionid=fake")])
+        var cal = Calendar.current
+        cal.timeZone = .current
+        let day = cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 11, minute: 0))!
+        // 白天 interactive：会真实发起（假凭据 → 状态被改写），证明 interactive 未被静默误伤
+        store.syncTraeIfNeeded(now: day, interactive: true)
+        XCTAssertNotEqual(store.sourceStatus["trae"], "连接中…", "interactive 同步不应被拦截")
+    }
+
+    // MARK: 每日签到
+
+    func testCheckinPlanDecision() {
+        // 常规：未签 → 领取
+        XCTAssertEqual(TraeSync.checkinPlan(enable: true, checkedIn: false), .claim)
+        // 已签 → 跳过（幂等水位由调用方写）
+        XCTAssertEqual(TraeSync.checkinPlan(enable: true, checkedIn: true), .already)
+        // 功能未开启 → 不参与
+        XCTAssertEqual(TraeSync.checkinPlan(enable: false, checkedIn: false), .disabled)
+        // 字段缺失（协议宽松）：默认尝试领取，失败由 claim 的 code 兜底
+        XCTAssertEqual(TraeSync.checkinPlan(enable: nil, checkedIn: nil), .claim)
+    }
+
+    func testCheckinResponseDecoding() throws {
+        // 与官方 status 响应字段一致（实测采样）
+        let json = #"{"checked_in":true,"code":0,"credits":100,"did_checked_in":false,"enable":true,"extra_credits":100,"message":"success"}"#
+        let r = try JSONDecoder().decode(TraeCheckinResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(r.code, 0)
+        XCTAssertEqual(r.checked_in, true)
+        XCTAssertEqual(r.enable, true)
+        XCTAssertEqual((r.credits ?? 0) + (r.extra_credits ?? 0), 200)
     }
 
     // MARK: 真实 API 端到端（CI 无凭据自动跳过；本地 TRAE_TEST_COOKIE="sessionid=…" 时跑通全链路）

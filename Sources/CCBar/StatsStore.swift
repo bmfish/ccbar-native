@@ -220,6 +220,9 @@ final class StatsStore {
     static let traeInteractiveMinInterval: TimeInterval = 60
     /// 积分账单（ent_usage）刷新间隔：菜单栏不显示它、仅设置页展示，1 小时一次足够
     static let traeEntMinInterval: TimeInterval = 3600
+    /// 每日签到：失败后的重试间隔（成功/已签由 trae_checkin_day 水位挡住，不会重复）
+    static let traeCheckinRetryInterval: TimeInterval = 3600
+    private var lastCheckinAttemptAt: TimeInterval = 0
 
     private let lock = NSLock()
 
@@ -557,12 +560,18 @@ final class StatsStore {
 
     // MARK: Trae 同步（HTTP 源）
 
+    /// 夜间静默窗口（本地 0:00–9:00）：只限定时器驱动的任务；点弹窗（interactive）不受限
+    static func inNightSilence(_ date: Date) -> Bool {
+        Calendar.current.component(.hour, from: date) < 9
+    }
+
     /// Trae 用量同步。网络在锁外跑（最长 ~15s×3），入库短临界区。
     /// AppDelegate 定时调用；interactive=true 用于用户点开弹窗的主动刷新（间隔更短）。
-    /// 夜间静默（0:00–9:00 本地时间）不拉 API：凌晨会话由 9 点后第一次同步的
-    /// "水位-2 天"窗口覆盖，不会丢数；期间直接 return，不占节流窗口。
+    /// 夜间静默（0:00–9:00 本地时间）只限定时器驱动：定时器不同步、签到也不跑，
+    /// 凌晨会话由 9 点后第一次同步的"水位-2 天"窗口覆盖，不会丢数；
+    /// 点弹窗（interactive）不受静默限制，随时可查。
     func syncTraeIfNeeded(now: Date = Date(), interactive: Bool = false) {
-        guard Calendar.current.component(.hour, from: now) >= 9 else { return }
+        guard interactive || !Self.inNightSilence(now) else { return }
 
         // 凭据快照（锁内）
         lock.lock()
@@ -622,6 +631,48 @@ final class StatsStore {
             print("[ccBar] Trae 同步失败: \(msg)")
             sourceStatus["trae"] = "同步失败：\(msg)"
         }
+    }
+
+    /// Trae 每日自动签到。与用量同步共用夜间静默规则：定时器夜里不跑（9 点后第一轮
+    /// 定时器领到，或用户更早点开弹窗即领）；成功/已签写 trae_checkin_day 水位，
+    /// 一天只到账一次；失败按小时重试。返回非 nil 时由调用方决定是否发通知（UI 层职责）。
+    @discardableResult
+    func traeCheckinIfNeeded(now: Date = Date(), interactive: Bool = false) -> TraeSync.TraeCheckinOutcome? {
+        guard interactive || !Self.inNightSilence(now) else { return nil }
+
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        let today = fmt.string(from: now)
+
+        lock.lock()
+        let credential = traeCredential
+        let doneDay = metaGet("trae_checkin_day")
+        let delta = now.timeIntervalSince1970 - lastCheckinAttemptAt
+        lock.unlock()
+        guard !credential.isEmpty, doneDay != today,
+              delta >= Self.traeCheckinRetryInterval else { return nil }
+
+        // 占住尝试窗口，防止定时器与弹窗同时触发打双发（网络在锁外）
+        lock.lock()
+        lastCheckinAttemptAt = now.timeIntervalSince1970
+        let auth = Self.traeAuthFromMeta(metaGet("trae_auth"))
+        lock.unlock()
+
+        let (outcome, newAuth) = TraeSync.checkin(passportCookie: credential, auth: auth)
+
+        lock.lock(); defer { lock.unlock() }
+        metaSet("trae_auth", value: Self.traeAuthToMeta(newAuth))
+        switch outcome {
+        case .claimed, .already:
+            metaSet("trae_checkin_day", value: today)
+        case .notConfigured:
+            sourceStatus["trae"] = "未配置登录"
+        case .authExpired:
+            sourceStatus["trae"] = "登录已过期，请重新提供 sessionid"
+        case .disabled, .failed:
+            break   // 不占水位，按小时重试；状态文案留给用量同步维护
+        }
+        return outcome
     }
 
     /// Trae 明细入库：会话级 UPSERT（同一 session 用量随对话推进增长，覆盖旧值）。
