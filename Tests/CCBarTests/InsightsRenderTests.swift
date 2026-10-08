@@ -185,16 +185,16 @@ final class InsightsRenderTests: XCTestCase {
     func testSessionStats() throws {
         // 30 分钟间隔切会话：t0、t0+1min 一段；t0+4000s（>30min）新一段
         let base = 1_800_000_000
-        let rows: [(time: Int, model: String, source: String, token: Int64, cost: Double)] = [
-            (base, "m", "zcode", 0, 0),
-            (base + 60, "m", "zcode", 0, 0),
-            (base + 4000, "m", "zcode", 0, 0),
+        let rows: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] = [
+            (base, "m", "zcode", 0, 0, 0),
+            (base + 60, "m", "zcode", 0, 0, 0),
+            (base + 4000, "m", "zcode", 0, 0, 0),
         ]
         let (count, avgMin, longestMin) = InsightsViewModel.sessionStats(from: rows)
         XCTAssertEqual(count, 2)
         XCTAssertEqual(avgMin, 0)        // (60s + 0s)/2 = 30s → 0 分钟
         XCTAssertEqual(longestMin, 1)    // 60s → 1 分钟
-        let empty: [(time: Int, model: String, source: String, token: Int64, cost: Double)] = []
+        let empty: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] = []
         XCTAssertEqual(InsightsViewModel.sessionStats(from: empty).0, 0)
     }
 
@@ -203,14 +203,14 @@ final class InsightsRenderTests: XCTestCase {
         let cal = Calendar.current
         let base = Int(cal.startOfDay(for: Date()).timeIntervalSince1970)
         func at(_ h: Int, _ m: Int, _ s: Int) -> Int { base + h * 3600 + m * 60 + s }
-        let rows: [(time: Int, model: String, source: String, token: Int64, cost: Double)] = [
-            (at(20, 26, 50), "GLM", "zcode", 0, 0),
-            (at(19, 42, 10), "GLM", "zcode", 520_000, 0),
-            (at(19, 41, 23), "GLM", "zcode", 520_000, 0),
-            (at(12, 57, 54), "GLM", "zcode", 460_000, 0),
-            (at(12, 39, 26), "GLM", "zcode", 450_000, 0),
-            (at(11, 42, 38), "GLM", "zcode", 420_000, 0),
-            (at(11, 40, 0), "GLM", "zcode", 420_000, 0),
+        let rows: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] = [
+            (at(20, 26, 50), "GLM", "zcode", 0, 0, 0),
+            (at(19, 42, 10), "GLM", "zcode", 520_000, 0, 0),
+            (at(19, 41, 23), "GLM", "zcode", 520_000, 0, 0),
+            (at(12, 57, 54), "GLM", "zcode", 460_000, 0, 0),
+            (at(12, 39, 26), "GLM", "zcode", 450_000, 0, 0),
+            (at(11, 42, 38), "GLM", "zcode", 420_000, 0, 0),
+            (at(11, 40, 0), "GLM", "zcode", 420_000, 0, 0),
         ]
         let lines = TimelinePage.buildLines(rows)
 
@@ -224,14 +224,14 @@ final class InsightsRenderTests: XCTestCase {
 
         // 数据行顺序保持 DESC、总数一致
         let dataRows = lines.compactMap { line -> Int? in
-            if case .row(let time, _, _, _, _) = line { return time }
+            if case .row(let time, _, _, _, _, _) = line { return time }
             return nil
         }
         XCTAssertEqual(dataRows, rows.map(\.time), "顺序必须保持 DESC 且不串行")
 
         // 每行紧随其组头之后
         for (i, line) in lines.enumerated() {
-            if case .row(let time, _, _, _, _) = line {
+            if case .row(let time, _, _, _, _, _) = line {
                 let h = cal.component(.hour, from: Date(timeIntervalSince1970: TimeInterval(time)))
                 if case .header(let hh, _)? = i > 0 ? lines[i - 1] : nil {
                     XCTAssertEqual(hh, h, "行必须紧跟自己的组头")

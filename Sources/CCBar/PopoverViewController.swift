@@ -50,6 +50,8 @@ final class PopoverViewModel: ObservableObject {
     @Published var workHours: Double?
     @Published var theme: Theme = .current
     @Published var todayHourly: [HourPoint] = []
+    /// 今日积分消耗（Trae 口径；今天没有积分使用时为 0，不显示）
+    @Published var todayCredits: Double = 0
 
     /// 问候语：初始化时随机一次，之后每次打开弹窗重新抽（rollGreeting）
     @Published var greeting: String
@@ -75,6 +77,7 @@ final class PopoverViewModel: ObservableObject {
         theme = .current
         if let store = AppDelegate.shared?.store {
             todayHourly = Self.hourPoints(from: store.queryHourHistogram(days: 0))
+            todayCredits = store.queryTodayCredits()
         }
     }
 
@@ -250,17 +253,25 @@ struct PopoverRootView: View {
                             .foregroundColor(Color(nsColor: Design.textMuted))
                     }
 
-                    Text(Design.formatTokens(today.total))
-                        .font(.system(size: vm.theme.bigNumberFontSize,
-                                      weight: swiftUIFontWeight(vm.theme.bigNumberWeight),
-                                      design: .rounded))
-                        .monospacedDigit()
-                        .foregroundColor(Color(nsColor: Design.bigNumberColor))
-                        .shadow(color: Color(nsColor: Design.bigNumberColor).opacity(vm.theme.glowAlpha),
-                                radius: vm.theme.glowRadius)
-                        .contentTransition(.numericText())
-                        .animation(.easeOut(duration: 0.35), value: today.total)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(Design.formatTokens(today.total))
+                            .font(.system(size: vm.theme.bigNumberFontSize,
+                                          weight: swiftUIFontWeight(vm.theme.bigNumberWeight),
+                                          design: .rounded))
+                            .monospacedDigit()
+                            .foregroundColor(Color(nsColor: Design.bigNumberColor))
+                            .shadow(color: Color(nsColor: Design.bigNumberColor).opacity(vm.theme.glowAlpha),
+                                    radius: vm.theme.glowRadius)
+                            .contentTransition(.numericText())
+                            .animation(.easeOut(duration: 0.35), value: today.total)
+                        // 今天有积分使用（Trae）时在大数字后透出当日积分
+                        if vm.todayCredits > 0 {
+                            Text("\(SettingsViewModel.fmtCredits(vm.todayCredits)) " + L("积分"))
+                                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                                .foregroundColor(Color(nsColor: Design.textSecondary))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                     HStack(alignment: .center, spacing: 0) {
                         statColumn(L("请求数"), "\(today.reqs)", Design.textPrimary)

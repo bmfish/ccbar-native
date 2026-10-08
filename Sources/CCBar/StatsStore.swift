@@ -125,7 +125,8 @@ struct CCSwitchAdapter: SourceAdapter {
         return """
         SELECT 'cc-switch' AS source, app_type, model, input_tokens, output_tokens,
                cache_read_tokens, cache_creation_tokens, 0 AS reasoning_tokens,
-               CAST(total_cost_usd AS REAL) AS total_cost_usd, created_at, 1 AS request_count
+               CAST(total_cost_usd AS REAL) AS total_cost_usd, 0.0 AS credits,
+               created_at, 1 AS request_count
         FROM \(alias).proxy_request_logs
         WHERE created_at >= \(todayStartEpoch)
         """
@@ -170,7 +171,7 @@ struct ZCodeAdapter: SourceAdapter {
                input_tokens, output_tokens,
                0 AS cache_read_tokens,
                0 AS cache_creation_tokens,
-               reasoning_tokens, 0.0 AS total_cost_usd,
+               reasoning_tokens, 0.0 AS total_cost_usd, 0.0 AS credits,
                started_at / 1000 AS created_at, 1 AS request_count
         FROM \(alias).model_usage
         WHERE status != 'running'
@@ -205,6 +206,20 @@ final class StatsStore {
     private(set) var attachedAdapters: [SourceAdapter] = []
     /// 每个数据源的连接诊断信息（设置页展示）：已连接 / 未启用 / 具体失败原因
     private(set) var sourceStatus: [String: String] = [:]
+    /// 是否有任一可用数据源（SQLite ATTACH 或 Trae HTTP）。查询侧的早退判据，
+    /// 避免空库时菜单栏把"未启用"误显示为 0
+    private(set) var hasActiveSource = false
+    /// Trae 的 passport 登录凭据（sessionid cookie），rebuild 时从配置快照进来
+    private var traeCredential = ""
+    /// Trae 节流：上次成功同步的时刻（in-memory 即可，重启后立即同步一次无妨）
+    private var lastTraeSyncAt: TimeInterval = 0
+    /// Trae 同步最小间隔（秒）：云端计费接口要克制，默认 15 分钟（后台定时跟随）。
+    /// 弹窗打开属于用户主动查看，走更短的 interactive 间隔
+    static let traeSyncMinInterval: TimeInterval = 900
+    /// 用户主动触发（点开菜单栏弹窗）时的最小间隔：保证"看的时候是新的"，又不至于连点刷接口
+    static let traeInteractiveMinInterval: TimeInterval = 60
+    /// 积分账单（ent_usage）刷新间隔：菜单栏不显示它、仅设置页展示，1 小时一次足够
+    static let traeEntMinInterval: TimeInterval = 3600
 
     private let lock = NSLock()
 
@@ -353,6 +368,8 @@ final class StatsStore {
             return
         }
         exec("CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_log(created_at)")
+        // v1.8 新增 credits 列（Trae 积分口径，其他源为 0）。老库 ALTER 迁移，列已存在则静默跳过。
+        exec("ALTER TABLE usage_log ADD COLUMN credits REAL NOT NULL DEFAULT 0")
         exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
 
         // 每日聚合缓存：区间/总量/按月查询直接读它，不再扫明细。
@@ -383,8 +400,19 @@ final class StatsStore {
         // ATTACH 各数据源并记录连接状态（供设置页展示）
         attachedAdapters.removeAll()
         sourceStatus.removeAll()
+        var traeEnabled = false
         for config in configs {
-            guard let adapter = SourceRegistry.adapter(for: config.id) else { continue }
+            guard let adapter = SourceRegistry.adapter(for: config.id) else {
+                // Trae 是 HTTP 源，不走 ATTACH；凭据与启用状态在同步时使用
+                if config.id == "trae" {
+                    traeEnabled = config.enabled
+                    traeCredential = (config.credential ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    sourceStatus["trae"] = config.enabled
+                        ? (traeCredential.isEmpty ? "未配置登录" : "连接中…")
+                        : "未启用"
+                }
+                continue
+            }
             guard config.enabled else {
                 sourceStatus[config.id] = "未启用"
                 continue
@@ -396,6 +424,7 @@ final class StatsStore {
                 sourceStatus[config.id] = "已连接"
             }
         }
+        hasActiveSource = !attachedAdapters.isEmpty || traeEnabled
 
         rebuildView()
     }
@@ -436,7 +465,7 @@ final class StatsStore {
         var parts = ["""
         SELECT source, app_type, model, input_tokens, output_tokens,
                cache_read_tokens, cache_creation_tokens, reasoning_tokens,
-               total_cost_usd, created_at, request_count
+               total_cost_usd, credits, created_at, request_count
         FROM usage_log
         """]
         for adapter in attachedAdapters {
@@ -523,6 +552,142 @@ final class StatsStore {
         """)
     }
 
+    // MARK: Trae 同步（HTTP 源）
+
+    /// Trae 用量同步。网络在锁外跑（最长 ~15s×3），入库短临界区。
+    /// AppDelegate 定时调用；interactive=true 用于用户点开弹窗的主动刷新（间隔更短）。
+    /// 夜间静默（0:00–9:00 本地时间）不拉 API：凌晨会话由 9 点后第一次同步的
+    /// "水位-2 天"窗口覆盖，不会丢数；期间直接 return，不占节流窗口。
+    func syncTraeIfNeeded(now: Date = Date(), interactive: Bool = false) {
+        guard Calendar.current.component(.hour, from: now) >= 9 else { return }
+
+        // 凭据快照（锁内）
+        lock.lock()
+        let credential = traeCredential
+        guard !credential.isEmpty else { lock.unlock(); return }
+        let minInterval = interactive ? Self.traeInteractiveMinInterval : Self.traeSyncMinInterval
+        let delta = now.timeIntervalSince1970 - lastTraeSyncAt
+        lock.unlock()
+        guard delta >= minInterval else { return }
+
+        // 拉取窗口：水位 -2 天回看（跨零点迟到会话 + 会话跨天推进），首次 90 天全量。
+        // 积分账单按小时节流（ent_usage 只喂设置页展示，没必要跟着每次同步拉）
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        lock.lock()
+        let waterline = metaGet("trae_synced_day")
+        let auth = Self.traeAuthFromMeta(metaGet("trae_auth"))
+        let lastEntAt = Double(metaGet("trae_ent_at")) ?? 0
+        lock.unlock()
+        let fetchEnt = now.timeIntervalSince1970 - lastEntAt >= Self.traeEntMinInterval
+
+        var fromEpoch: Int64
+        if !waterline.isEmpty, let day = fmt.date(from: waterline),
+           let back = Calendar.current.date(byAdding: .day, value: -TraeAPI.pageLookbackDays, to: day) {
+            fromEpoch = Self.localMidnight(0, now: back)
+        } else {
+            fromEpoch = Self.localMidnight(TraeAPI.firstFetchDays, now: now)
+        }
+        let toEpoch = Int64(now.timeIntervalSince1970)
+
+        // 网络（锁外）
+        let (outcome, newAuth) = TraeSync.run(passportCookie: credential, auth: auth,
+                                              fromEpoch: fromEpoch, toEpoch: toEpoch,
+                                              fetchEnt: fetchEnt)
+
+        // 入库 + 状态（锁内）。节流时间戳在所有出口都推进：
+        // 失败/过期也占掉节流窗口，防止弹窗反复开关时把请求打爆（下次后台周期自然重试）
+        lock.lock(); defer { lock.unlock() }
+        lastTraeSyncAt = now.timeIntervalSince1970
+        metaSet("trae_auth", value: Self.traeAuthToMeta(newAuth))
+        switch outcome {
+        case .success(let rows, let consumed, let total):
+            upsertTraeRows(rows)
+            // 今日行进 usage_log 由视图实时可见，daily_agg 只结算完整日（≤昨天）
+            refreshDailyAgg(fromEpoch: fromEpoch, toEpoch: Self.localMidnight(0, now: now))
+            metaSet("trae_synced_day", value: fmt.string(from: now))
+            if let c = consumed, let t = total {
+                metaSet("trae_ent", value: "\(c)|\(t)")
+                metaSet("trae_ent_at", value: String(Int(now.timeIntervalSince1970)))
+            }
+            sourceStatus["trae"] = "已连接"
+        case .notConfigured:
+            sourceStatus["trae"] = "未配置登录"
+        case .authExpired:
+            sourceStatus["trae"] = "登录已过期，请重新提供 sessionid"
+        case .failed(let msg):
+            print("[ccBar] Trae 同步失败: \(msg)")
+            sourceStatus["trae"] = "同步失败：\(msg)"
+        }
+    }
+
+    /// Trae 明细入库：会话级 UPSERT（同一 session 用量随对话推进增长，覆盖旧值）。
+    /// 与其他源的 INSERT OR IGNORE 不同——Trae 行是"会话聚合快照"而非不可变流水。
+    /// internal 供测试验证 upsert 语义。
+    func upsertTraeRows(_ rows: [TraeRow]) {
+        guard let db = handle, !rows.isEmpty else { return }
+        exec("BEGIN IMMEDIATE")
+        var stmt: OpaquePointer?
+        let sql = """
+        INSERT INTO usage_log
+            (source, request_id, app_type, model, input_tokens, output_tokens,
+             cache_read_tokens, cache_creation_tokens, reasoning_tokens,
+             total_cost_usd, credits, created_at, request_count)
+        VALUES ('trae', ?, 'trae', ?, ?, ?, ?, ?, 0, ?, ?, ?, 1)
+        ON CONFLICT(source, request_id) DO UPDATE SET
+            model=excluded.model,
+            input_tokens=excluded.input_tokens,
+            output_tokens=excluded.output_tokens,
+            cache_read_tokens=excluded.cache_read_tokens,
+            cache_creation_tokens=excluded.cache_creation_tokens,
+            total_cost_usd=excluded.total_cost_usd,
+            credits=excluded.credits,
+            created_at=excluded.created_at
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            exec("ROLLBACK")
+            return
+        }
+        defer { sqlite3_finalize(stmt) }
+        for row in rows {
+            sqlite3_reset(stmt)
+            sqlite3_bind_text(stmt, 1, row.requestID, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(stmt, 2, row.model, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_int64(stmt, 3, row.input)
+            sqlite3_bind_int64(stmt, 4, row.output)
+            sqlite3_bind_int64(stmt, 5, row.cacheRead)
+            sqlite3_bind_int64(stmt, 6, row.cacheWrite)
+            sqlite3_bind_double(stmt, 7, row.costUsd)
+            sqlite3_bind_double(stmt, 8, row.credits)
+            sqlite3_bind_int64(stmt, 9, row.epoch)
+            if sqlite3_step(stmt) != SQLITE_DONE {
+                print("[ccBar] Trae 行入库失败: \(row.requestID)")
+            }
+        }
+        exec("COMMIT")
+    }
+
+    /// Trae 官方积分账单（consumed|total），无数据显示 nil
+    func traeEntSummary() -> (consumed: Double, total: Double)? {
+        lock.lock(); defer { lock.unlock() }
+        let raw = metaGet("trae_ent")
+        let parts = raw.split(separator: "|")
+        guard parts.count == 2,
+              let c = Double(parts[0]), let t = Double(parts[1]) else { return nil }
+        return (c, t)
+    }
+
+    static func traeAuthFromMeta(_ raw: String) -> TraeAuth {
+        guard let data = raw.data(using: .utf8),
+              let auth = try? JSONDecoder().decode(TraeAuth.self, from: data) else { return TraeAuth() }
+        return auth
+    }
+
+    static func traeAuthToMeta(_ auth: TraeAuth) -> String {
+        guard let data = try? JSONEncoder().encode(auth) else { return "" }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
     /// daily_agg 区间汇总（仅覆盖"昨天及更早"；今日数据由调用方叠加实时值）。
     /// 聚合无 GROUP BY 时即使空区间也会返回一行全 0。
     private func dailyAggSum(fromDay: String, toDay: String) -> DayStats? {
@@ -563,11 +728,11 @@ final class StatsStore {
 
     // MARK: 导出 / 导入（幂等）
 
-    /// 明细表列头（导出 CSV 用，导入按此顺序解析）
+    /// 明细表列头（导出 CSV 用，导入按此顺序解析；v1.8 起含 credits，导入兼容旧 12 列格式）
     private static let exportColumns = ["source", "request_id", "app_type", "model",
                                         "input_tokens", "output_tokens", "cache_read_tokens",
                                         "cache_creation_tokens", "reasoning_tokens",
-                                        "total_cost_usd", "created_at", "request_count"]
+                                        "total_cost_usd", "credits", "created_at", "request_count"]
 
     /// 导出 usage_log 全量明细为 CSV（Excel 可开；字段含逗号/引号时按 RFC4180 转义）
     func exportCSV(to path: String) -> Bool {
@@ -578,7 +743,7 @@ final class StatsStore {
         let sql = """
         SELECT source, request_id, app_type, model, input_tokens, output_tokens,
                cache_read_tokens, cache_creation_tokens, reasoning_tokens,
-               total_cost_usd, created_at, request_count
+               total_cost_usd, credits, created_at, request_count
         FROM usage_log ORDER BY created_at
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
@@ -587,11 +752,11 @@ final class StatsStore {
         var out = Self.exportColumns.joined(separator: ",") + "\n"
         while sqlite3_step(stmt) == SQLITE_ROW {
             var fields: [String] = []
-            for i in 0..<12 {
+            for i in 0..<13 {
                 switch i {
-                case 4...8, 10, 11:
+                case 4...8, 11, 12:
                     fields.append(String(sqlite3_column_int64(stmt, Int32(i))))
-                case 9:
+                case 9, 10:
                     fields.append(String(format: "%.6f", sqlite3_column_double(stmt, Int32(i))))
                 default:
                     let text = sqlite3_column_text(stmt, Int32(i)).map {
@@ -635,8 +800,8 @@ final class StatsStore {
         INSERT OR IGNORE INTO usage_log
             (source, request_id, app_type, model, input_tokens, output_tokens,
              cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_cost_usd,
-             created_at, request_count)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+             credits, created_at, request_count)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return (0, 0, 0) }
         defer { sqlite3_finalize(stmt) }
@@ -646,15 +811,18 @@ final class StatsStore {
         var maxEpoch: Int64?
 
         for record in records.dropFirst() {
-            guard record.count == 12,
+            // v1.8 = 13 列（含 credits）；旧版导出 = 12 列，credits 按 0 处理
+            guard record.count == 12 || record.count == 13,
                   let input = Int64(record[4]), let output = Int64(record[5]),
                   let cacheRead = Int64(record[6]), let cacheCreate = Int64(record[7]),
                   let reasoning = Int64(record[8]), let cost = Double(record[9]),
-                  let epoch = Int64(record[10]), let reqCount = Int64(record[11]),
+                  let epoch = Int64(record[record.count - 2]),
+                  let reqCount = Int64(record[record.count - 1]),
                   !record[0].isEmpty, !record[1].isEmpty else {
                 skipped += 1
                 continue
             }
+            let credits = record.count == 13 ? (Double(record[10]) ?? 0) : 0
             read += 1
             sqlite3_reset(stmt)
             sqlite3_bind_text(stmt, 1, record[0], -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
@@ -667,8 +835,9 @@ final class StatsStore {
             sqlite3_bind_int64(stmt, 8, cacheCreate)
             sqlite3_bind_int64(stmt, 9, reasoning)
             sqlite3_bind_double(stmt, 10, cost)
-            sqlite3_bind_int64(stmt, 11, epoch)
-            sqlite3_bind_int64(stmt, 12, reqCount)
+            sqlite3_bind_double(stmt, 11, credits)
+            sqlite3_bind_int64(stmt, 12, epoch)
+            sqlite3_bind_int64(stmt, 13, reqCount)
             if sqlite3_step(stmt) == SQLITE_DONE {
                 if sqlite3_changes(db) > 0 { inserted += 1 } else { skipped += 1 }
             } else {
@@ -770,7 +939,7 @@ final class StatsStore {
     /// days == 0 今日（实时）；days == 1 昨日；其余：近 N 天（含今天，自 N 天前 0 点起）
     func queryDayStats(days: Int) -> DayStats? {
         lock.lock(); defer { lock.unlock() }
-        guard handle != nil, !attachedAdapters.isEmpty else { return nil }
+        guard handle != nil, hasActiveSource else { return nil }
 
         let now = Date()
         if days == 0 {
@@ -825,7 +994,7 @@ final class StatsStore {
     /// 历史总量：daily_agg 全量 + 今日实时
     func queryTotalStats() -> TotalStats? {
         lock.lock(); defer { lock.unlock() }
-        guard handle != nil, !attachedAdapters.isEmpty else { return nil }
+        guard handle != nil, hasActiveSource else { return nil }
 
         guard let history = dailyAggSum(fromDay: "0000-01-01", toDay: "9999-12-31") else { return nil }
         let all = history + (todayLive(now: Date()) ?? Self.zeroStats)
@@ -858,7 +1027,7 @@ final class StatsStore {
 
     /// 无锁版（调用方必须已持锁；NSLock 不可重入，别在持锁方法里调公开查询）
     private func sourceBreakdownUnlocked() -> [SourceStat] {
-        guard handle != nil, !attachedAdapters.isEmpty else { return [] }
+        guard handle != nil, hasActiveSource else { return [] }
 
         var result: [SourceStat] = []
         forEachRow("""
@@ -961,6 +1130,47 @@ final class StatsStore {
             result.append((model: String(cString: sqlite3_column_text(stmt, 0)),
                            cost: sqlite3_column_double(stmt, 1),
                            token: sqlite3_column_int64(stmt, 2)))
+        }
+        return result
+    }
+
+    /// 今日积分消耗（SUM(credits)；Trae 行有值，其他源恒为 0。
+    /// Trae 是会话级累计快照 + UPSERT 覆盖，SUM 不会重复计数）
+    func queryTodayCredits() -> Double {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return 0 }
+        var sum = 0.0
+        forEachRow("SELECT COALESCE(SUM(credits), 0) FROM usage_all WHERE created_at >= ?",
+                   binds: [Self.localMidnight(0)]) { stmt in
+            sum = sqlite3_column_double(stmt, 0)
+        }
+        return sum
+    }
+
+    /// 近 N 天（含今天）积分消耗，0 天即今日
+    func queryCreditsSum(days: Int) -> Double {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return 0 }
+        var sum = 0.0
+        forEachRow("SELECT COALESCE(SUM(credits), 0) FROM usage_all WHERE created_at >= ?",
+                   binds: [Self.localMidnight(days)]) { stmt in
+            sum = sqlite3_column_double(stmt, 0)
+        }
+        return sum
+    }
+
+    /// 近 N 天（含今天）每日积分曲线，日期升序（可能有空洞，调用方补零）
+    func queryCreditsDaily(days: Int) -> [(date: String, credits: Double)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var result: [(date: String, credits: Double)] = []
+        forEachRow("""
+        SELECT date(created_at, 'unixepoch', 'localtime'), COALESCE(SUM(credits), 0)
+        FROM usage_all
+        WHERE created_at >= ? AND created_at < ?
+        GROUP BY 1 ORDER BY 1
+        """, binds: [Self.localMidnight(days), Self.localMidnight(-1)]) { stmt in
+            result.append((String(cString: sqlite3_column_text(stmt, 0)), sqlite3_column_double(stmt, 1)))
         }
         return result
     }
@@ -1346,15 +1556,15 @@ final class StatsStore {
         return result
     }
 
-    /// 今日请求流水（最新在前）：时间 / 模型 / 来源 / token / 费用
-    func queryTodayTimeline(limit: Int = 800) -> [(time: Int, model: String, source: String, token: Int64, cost: Double)] {
+    /// 今日请求流水（最新在前）：时间 / 模型 / 来源 / token / 费用 / 积分（仅 trae 有值）
+    func queryTodayTimeline(limit: Int = 800) -> [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] {
         lock.lock(); defer { lock.unlock() }
         guard handle != nil else { return [] }
-        var result: [(time: Int, model: String, source: String, token: Int64, cost: Double)] = []
+        var result: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] = []
         forEachRow("""
         SELECT created_at, model, source,
                COALESCE(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens, 0),
-               COALESCE(total_cost_usd, 0)
+               COALESCE(total_cost_usd, 0), COALESCE(credits, 0)
         FROM usage_all
         WHERE created_at >= ?
         ORDER BY created_at DESC LIMIT \(max(1, limit))
@@ -1364,23 +1574,24 @@ final class StatsStore {
                            model: model,
                            source: String(cString: sqlite3_column_text(stmt, 2)),
                            token: sqlite3_column_int64(stmt, 3),
-                           cost: sqlite3_column_double(stmt, 4)))
+                           cost: sqlite3_column_double(stmt, 4),
+                           credits: sqlite3_column_double(stmt, 5)))
         }
         return result
     }
 
     /// 指定日期（本地 0 点起 24 小时）的逐笔流水，时间 DESC。今日走实时视图，历史走已同步的 usage_log
-    func queryTimeline(day: Date, limit: Int = 800) -> [(time: Int, model: String, source: String, token: Int64, cost: Double)] {
+    func queryTimeline(day: Date, limit: Int = 800) -> [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] {
         let cal = Calendar.current
         if cal.isDateInToday(day) { return queryTodayTimeline(limit: limit) }
         lock.lock(); defer { lock.unlock() }
         guard handle != nil else { return [] }
         let start = Int64(cal.startOfDay(for: day).timeIntervalSince1970)
-        var result: [(time: Int, model: String, source: String, token: Int64, cost: Double)] = []
+        var result: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] = []
         forEachRow("""
         SELECT created_at, model, source,
                COALESCE(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens, 0),
-               COALESCE(total_cost_usd, 0)
+               COALESCE(total_cost_usd, 0), COALESCE(credits, 0)
         FROM usage_log
         WHERE created_at >= \(start) AND created_at < \(start + 86_400)
         ORDER BY created_at DESC LIMIT \(max(1, limit))
@@ -1390,7 +1601,8 @@ final class StatsStore {
                            model: model,
                            source: String(cString: sqlite3_column_text(stmt, 2)),
                            token: sqlite3_column_int64(stmt, 3),
-                           cost: sqlite3_column_double(stmt, 4)))
+                           cost: sqlite3_column_double(stmt, 4),
+                           credits: sqlite3_column_double(stmt, 5)))
         }
         return result
     }

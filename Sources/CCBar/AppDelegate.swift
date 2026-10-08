@@ -320,8 +320,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         queryQueue.async { [weak self] in
             guard let self = self else { return }
 
-            // 懒惰补账：历史（昨天及更早）落后就同步进自建库，今日走实时查询
+            // 懒惰补账：历史（昨天及更早）落后就同步进自建库，今日走实时查询。
+            // Trae 是 HTTP 源，另走自己的节流同步（内部锁外网络）。
             self.store.syncIfNeeded()
+            self.store.syncTraeIfNeeded()
 
             let todayStats = self.store.queryDayStats(days: 0)
             let workHours = self.store.queryWorkHours()
@@ -399,6 +401,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     @objc func refreshData() {
         queryQueue.async { [weak self] in
             guard let self = self else { return }
+            // 点开弹窗 = 主动查看：走更短的交互节流，保证看到的数据尽量新鲜
+            self.store.syncTraeIfNeeded(interactive: true)
             let todayStats = self.store.queryDayStats(days: 0)
             let modelBreakdown = self.store.queryModelBreakdown()
             let workHours = self.store.queryWorkHours()

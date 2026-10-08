@@ -17,6 +17,7 @@ enum InsightsPage: String, CaseIterable, Identifiable {
     case share      = "分享"
     case channels   = "渠道"
     case timeline   = "流水"
+    case credits    = "积分"
 
     var id: String { rawValue }
 
@@ -27,6 +28,7 @@ enum InsightsPage: String, CaseIterable, Identifiable {
         case .share: return "square.and.arrow.up"
         case .channels: return "square.stack.3d.up"
         case .timeline: return "list.bullet.rectangle"
+        case .credits: return "bolt.circle"
         }
     }
 }
@@ -67,6 +69,13 @@ struct CostPoint: Identifiable {
     let id = UUID()
     let day: Date
     let cents: Int64
+}
+
+/// 积分走势点（Trae 口径，X 用时间标度）
+struct CreditsPoint: Identifiable {
+    let id = UUID()
+    let day: Date
+    let credits: Double
 }
 
 /// 构成堆叠图的展开切片（预先拍平，图表表达式保持轻量）
@@ -134,8 +143,14 @@ final class InsightsViewModel: ObservableObject {
     @Published var channelPoints: [ChannelPoint] = []
     @Published var todaySources: [SourceStat] = []
     // 流水
-    @Published var timeline: [(time: Int, model: String, source: String, token: Int64, cost: Double)] = []
+    @Published var timeline: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] = []
     @Published var timelineDay: Date = Calendar.current.startOfDay(for: Date())
+    // 积分页（Trae 口径）
+    @Published var creditsToday = 0.0
+    @Published var credits7 = 0.0
+    @Published var credits30 = 0.0
+    @Published var creditsDaily: [CreditsPoint] = []
+    @Published var creditsEnt: (consumed: Double, total: Double)?
     // 费用页月度预算
     @Published var costMtd = 0.0
     @Published var monthDaysElapsed = 1
@@ -206,7 +221,7 @@ final class InsightsViewModel: ObservableObject {
         var totalAll: Int64 = 0
         var channelPoints: [ChannelPoint] = []
         var todaySources: [SourceStat] = []
-        var timeline: [(time: Int, model: String, source: String, token: Int64, cost: Double)] = []
+        var timeline: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] = []
         var timelineDay: Date = Calendar.current.startOfDay(for: Date())
         var costMtd = 0.0
         var monthDaysElapsed = 1
@@ -228,6 +243,11 @@ final class InsightsViewModel: ObservableObject {
         var weeklyReqs: Int = 0
         var weeklyPeak: Int64 = 0
         var weeklyTrend: [ChartEntry] = []
+        var creditsToday = 0.0
+        var credits7 = 0.0
+        var credits30 = 0.0
+        var creditsDaily: [CreditsPoint] = []
+        var creditsEnt: (consumed: Double, total: Double)?
     }
 
     private func compute(store: StatsStore) -> Snapshot {
@@ -345,6 +365,20 @@ final class InsightsViewModel: ObservableObject {
         s.sessionCount = cnt
         s.sessionAvgMin = avg
         s.sessionLongestMin = longest
+        // 积分页（Trae 行 credits 聚合；官方账单余额一并带上）
+        s.creditsToday = store.queryCreditsSum(days: 0)
+        s.credits7 = store.queryCreditsSum(days: 7)
+        s.credits30 = store.queryCreditsSum(days: 30)
+        let rawCredits = store.queryCreditsDaily(days: 30)
+        var creditsByDate: [String: Double] = [:]
+        for r in rawCredits { creditsByDate[r.date] = r.credits }
+        var creditPoints: [CreditsPoint] = []
+        for d in 0..<30 {
+            guard let day = cal.date(byAdding: .day, value: -29 + d, to: cal.startOfDay(for: Date())) else { continue }
+            creditPoints.append(CreditsPoint(day: day, credits: creditsByDate[fmt.string(from: day)] ?? 0))
+        }
+        s.creditsDaily = creditPoints
+        s.creditsEnt = store.traeEntSummary()
         return s
     }
 
@@ -393,10 +427,15 @@ final class InsightsViewModel: ObservableObject {
         weeklyReqs = s.weeklyReqs
         weeklyPeak = s.weeklyPeak
         weeklyTrend = s.weeklyTrend
+        creditsToday = s.creditsToday
+        credits7 = s.credits7
+        credits30 = s.credits30
+        creditsDaily = s.creditsDaily
+        creditsEnt = s.creditsEnt
     }
 
     /// 今日会话统计：相邻请求间隔 > 30 分钟切新会话，返回（会话数, 平均时长分钟, 最长时长分钟）
-    static func sessionStats(from rows: [(time: Int, model: String, source: String, token: Int64, cost: Double)]) -> (Int, Int, Int) {
+    static func sessionStats(from rows: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)]) -> (Int, Int, Int) {
         let times = rows.map(\.time).sorted()
         guard !times.isEmpty else { return (0, 0, 0) }
         var durations: [Int] = []
@@ -457,6 +496,7 @@ struct InsightsRootView: View {
         case .share: SharePage(vm: vm)
         case .channels: ChannelsPage(vm: vm)
         case .timeline: TimelinePage(vm: vm)
+        case .credits: CreditsPage(vm: vm)
         }
     }
 }
@@ -506,6 +546,11 @@ private func money(_ v: Double) -> String {
     String(format: "$%.2f", v)
 }
 
+/// 积分显示：整数不带小数点，小数保留两位（与设置页 fmtCredits 口径一致）
+private func formatCredits(_ v: Double) -> String {
+    v == v.rounded() && abs(v) < 100_000 ? String(Int(v)) : String(format: "%.2f", v)
+}
+
 // MARK: - 费用页
 
 struct CostPage: View {
@@ -526,12 +571,13 @@ struct CostPage: View {
 
                 pageCard(L("近 30 天费用走势")) {
                     Chart {
-                        ForEach(vm.costDaily) { p in
+                        ForEach(Array(vm.costDaily.enumerated()), id: \.element.id) { i, p in
                             BarMark(
                                 x: .value(L("日期"), p.day, unit: .day),
                                 y: .value(L("费用"), Double(p.cents) / 100)
                             )
-                            .foregroundStyle(Color(nsColor: Design.brandColor).opacity(0.85))
+                            // 多彩柱色：随小时种子洗牌的调色板逐柱取色（与积分页同一机制）
+                            .foregroundStyle(Color(nsColor: Design.modelColors(count: vm.costDaily.count)[i]).opacity(0.85))
                             .cornerRadius(2)
                         }
                         if vm.monthlyBudget > 0 {
@@ -877,7 +923,7 @@ struct InsightsPageView: View {
                     x: .value(L("星期"), labels[i]),
                     y: .value(L("Token"), vm.weekdayTotals[i])
                 )
-                .foregroundStyle(Color(nsColor: Design.brandColor).opacity(0.85))
+                .foregroundStyle(Color(nsColor: Design.modelColors(count: 7)[i]).opacity(0.85))
                 .cornerRadius(2)
             }
         }
@@ -1454,6 +1500,105 @@ struct ChannelsPage: View {
     }
 }
 
+// MARK: - 积分页（Trae 口径）
+
+struct CreditsPage: View {
+    @ObservedObject var vm: InsightsViewModel
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 14) {
+                    bigCreditsCard(L("今日积分"), vm.creditsToday)
+                    bigCreditsCard(L("近 7 天"), vm.credits7)
+                    bigCreditsCard(L("近 30 天"), vm.credits30)
+                }
+
+                if let ent = vm.creditsEnt {
+                    pageCard(L("积分余额（官方账单）")) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(formatCredits(ent.consumed))
+                                .font(.system(size: 22, weight: .bold).monospacedDigit())
+                                .foregroundColor(Color(nsColor: Design.dataHighlightColor))
+                            Text(L("已用 / 共") + " " + formatCredits(ent.total))
+                                .font(.system(size: 12).monospacedDigit())
+                                .foregroundColor(Color(nsColor: Design.textSecondary))
+                            Spacer()
+                            if ent.total > 0 {
+                                Text(String(format: "%.0f%%", ent.consumed / ent.total * 100))
+                                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                                    .foregroundColor(Color(nsColor: Design.brandColor))
+                            }
+                        }
+                        if ent.total > 0 {
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    Capsule().fill(Color.white.opacity(0.06))
+                                    Capsule().fill(Color(nsColor: Design.brandColor).opacity(0.75))
+                                        .frame(width: geo.size.width * CGFloat(min(max(ent.consumed / ent.total, 0), 1)))
+                                }
+                            }
+                            .frame(height: 5)
+                            .padding(.top, 6)
+                        }
+                    }
+                }
+
+                pageCard(L("近 30 天积分走势")) {
+                    if vm.credits30 <= 0 {
+                        mutedHint(L("接入 Trae 并产生用量后展示积分消耗"))
+                    } else {
+                        Chart {
+                            ForEach(Array(vm.creditsDaily.enumerated()), id: \.element.id) { i, p in
+                                BarMark(
+                                    x: .value(L("日期"), p.day, unit: .day),
+                                    y: .value(L("积分"), p.credits)
+                                )
+                                // 多彩柱色：随小时种子洗牌的调色板逐柱取色（与模型分布卡同一机制）
+                                .foregroundStyle(Color(nsColor: Design.modelColors(count: vm.creditsDaily.count)[i]).opacity(0.85))
+                                .cornerRadius(2)
+                            }
+                        }
+                        .chartYAxis {
+                            AxisMarks { value in
+                                AxisGridLine()
+                                AxisValueLabel {
+                                    if let v = value.as(Double.self) {
+                                        Text(formatCredits(v)).font(.system(size: 9).monospacedDigit())
+                                    }
+                                }
+                            }
+                        }
+                        .chartXAxis { dateXAxis() }
+                        .frame(height: 140)
+                    }
+                }
+
+                Text(L("积分为 Trae 官方计费口径；历史数据自接入起最多回溯 90 天"))
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+            }
+        }
+    }
+
+    private func bigCreditsCard(_ title: String, _ value: Double) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 12))
+                .foregroundColor(Color(nsColor: Design.textSecondary))
+            Text(formatCredits(value))
+                .font(.system(size: 26, weight: .bold).monospacedDigit())
+                .foregroundColor(Color(nsColor: Design.bigNumberColor))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .fill(Color(nsColor: Design.cardFillDark)))
+        .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .stroke(Color(nsColor: Design.cardBorderDark)))
+    }
+}
+
 // MARK: - 流水页
 
 struct TimelinePage: View {
@@ -1467,18 +1612,18 @@ struct TimelinePage: View {
     /// 内容会串组错位（20:26 出现在 12:00 组里）——改单层扁平结构后不可能再错。
     enum TimelineLine: Identifiable {
         case header(hour: Int, count: Int)
-        case row(time: Int, model: String, source: String, token: Int64, cost: Double)
+        case row(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)
 
         var id: String {
             switch self {
             case .header(let hour, _): return "h-\(hour)"
-            case .row(let time, _, _, _, _): return "t-\(time)"
+            case .row(let time, _, _, _, _, _): return "t-\(time)"
             }
         }
     }
 
     /// 纯函数：DESC 行序列 → 组头+数据行扁平序列（组头出现在每组最新一行前）
-    static func buildLines(_ rows: [(time: Int, model: String, source: String, token: Int64, cost: Double)]) -> [TimelineLine] {
+    static func buildLines(_ rows: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)]) -> [TimelineLine] {
         let cal = Calendar.current
         let hours = rows.map { cal.component(.hour, from: Date(timeIntervalSince1970: TimeInterval($0.time))) }
         var counts: [Int: Int] = [:]
@@ -1492,13 +1637,13 @@ struct TimelinePage: View {
                 last = h
             }
             out.append(.row(time: row.time, model: row.model, source: row.source,
-                            token: row.token, cost: row.cost))
+                            token: row.token, cost: row.cost, credits: row.credits))
         }
         return out
     }
 
     /// 过滤后的流水（渠道/模型），顺序保持 DESC
-    private var filtered: [(time: Int, model: String, source: String, token: Int64, cost: Double)] {
+    private var filtered: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] {
         vm.timeline.filter { row in
             (sourceFilter == "all" || row.source == sourceFilter) &&
             (modelFilter == "all" || row.model == modelFilter)
@@ -1622,12 +1767,15 @@ struct TimelinePage: View {
     private func exportTimelineCSV() {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        var csv = "\u{FEFF}" + [L("时间"), L("模型"), L("渠道"), L("总 Token"), L("费用")]
+        var csv = "\u{FEFF}" + [L("时间"), L("模型"), L("渠道"), L("总 Token"), L("费用/积分")]
             .joined(separator: ",") + "\n"
         for line in filtered {
             let t = Date(timeIntervalSince1970: TimeInterval(line.time))
-            let cost = line.cost > 0 ? String(format: "%.4f", line.cost) : "0"
-            csv += [fmt.string(from: t), line.model, line.source, "\(line.token)", cost]
+            // 与流水页一致：Trae 行导积分，其他源导美元费用
+            let amount = line.source == "trae"
+                ? (line.credits > 0 ? formatCredits(line.credits) : "0")
+                : (line.cost > 0 ? String(format: "%.4f", line.cost) : "0")
+            csv += [fmt.string(from: t), line.model, line.source, "\(line.token)", amount]
                 .map { $0.contains(",") ? "\"\($0)\"" : $0 }.joined(separator: ",") + "\n"
         }
         let panel = NSSavePanel()
@@ -1666,8 +1814,8 @@ struct TimelinePage: View {
                                         .foregroundColor(Color(nsColor: Design.textMuted))
                                 }
                                 .padding(.vertical, 8)
-                            case .row(let time, let model, let source, let token, let cost):
-                                timelineRow((time, model, source, token, cost))
+                            case .row(let time, let model, let source, let token, let cost, let credits):
+                                timelineRow((time, model, source, token, cost, credits))
                             }
                         }
                     }
@@ -1677,9 +1825,11 @@ struct TimelinePage: View {
         }
     }
 
-    private func timelineRow(_ row: (time: Int, model: String, source: String, token: Int64, cost: Double)) -> some View {
+    private func timelineRow(_ row: (time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)) -> some View {
         let t = Date(timeIntervalSince1970: TimeInterval(row.time))
         let timeText = DateFormatter.localizedString(from: t, dateStyle: .none, timeStyle: .medium)
+        // 钱列：Trae 按积分口径显示（cost 是折算金额，积分才是 Trae 的计费单位），其他源仍显示美元费用
+        let isTrae = row.source == "trae"
         return HStack(spacing: 10) {
             Text(timeText)
                 .font(.system(size: 11).monospacedDigit())
@@ -1699,7 +1849,13 @@ struct TimelinePage: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
-            if row.cost > 0 {
+            if isTrae {
+                if row.credits > 0 {
+                    Text("\(formatCredits(row.credits)) " + L("积分"))
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundColor(Color(nsColor: Design.textSecondary))
+                }
+            } else if row.cost > 0 {
                 Text(money(row.cost))
                     .font(.system(size: 10).monospacedDigit())
                     .foregroundColor(Color(nsColor: Design.textSecondary))

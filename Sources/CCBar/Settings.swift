@@ -8,6 +8,15 @@ struct SourceConfig: Codable {
     var id: String
     var enabled: Bool
     var dbPath: String
+    /// HTTP 型数据源的登录凭据（Trae：passport sessionid cookie 值）。SQLite 源不使用
+    var credential: String?
+
+    init(id: String, enabled: Bool, dbPath: String, credential: String? = nil) {
+        self.id = id
+        self.enabled = enabled
+        self.dbPath = dbPath
+        self.credential = credential
+    }
 
     static func defaults() -> [SourceConfig] {
         return [
@@ -15,7 +24,14 @@ struct SourceConfig: Codable {
                          dbPath: "\(NSHomeDirectory())/.cc-switch/cc-switch.db"),
             SourceConfig(id: "zcode", enabled: false,
                          dbPath: "\(NSHomeDirectory())/.zcode/cli/db/db.sqlite"),
+            SourceConfig(id: "trae", enabled: false, dbPath: ""),
         ]
+    }
+
+    /// 从旧版本数据迁移：缺 trae 配置就补上默认项（老用户升级后设置页可见）
+    static func migrated(_ configs: [SourceConfig]) -> [SourceConfig] {
+        guard !configs.contains(where: { $0.id == "trae" }) else { return configs }
+        return configs + [SourceConfig(id: "trae", enabled: false, dbPath: "")]
     }
 }
 
@@ -31,12 +47,13 @@ class Settings {
         set { defaults.set(newValue, forKey: "refreshInterval") }
     }
 
-    /// 数据源列表。首次读取时迁移旧的单路径设置 dbPath 到 cc-switch 源。
+    /// 数据源列表。首次读取时迁移旧的单路径设置 dbPath 到 cc-switch 源；
+    /// 老版本缺 trae 配置也会补上（升级可见）
     var sourceConfigs: [SourceConfig] {
         get {
             if let data = defaults.data(forKey: "sourceConfigs"),
                let arr = try? JSONDecoder().decode([SourceConfig].self, from: data) {
-                return arr
+                return SourceConfig.migrated(arr)
             }
             var configs = SourceConfig.defaults()
             if let legacy = defaults.string(forKey: "dbPath"), !legacy.isEmpty,

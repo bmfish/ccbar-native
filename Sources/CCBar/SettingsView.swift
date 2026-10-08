@@ -17,6 +17,9 @@ struct SourceRowDraft: Identifiable {
     let defaultPath: String
     var enabled: Bool
     var path: String
+    /// HTTP 型源（Trae）的登录凭据；SQLite 源不使用
+    var credential: String = ""
+    var isHTTP: Bool = false
     var statusText: String = ""
     var statusKind: StatusKind = .muted
 }
@@ -93,20 +96,33 @@ final class SettingsViewModel: ObservableObject {
                 path: config?.dbPath ?? adapter.defaultPath
             )
         }
+        // Trae 是 HTTP 源（不在 SourceRegistry 里），凭据代替路径
+        if let trae = configs.first(where: { $0.id == "trae" }) {
+            sources.append(SourceRowDraft(
+                id: "trae", name: "Trae", defaultPath: "",
+                enabled: trae.enabled, path: "",
+                credential: trae.credential ?? "", isHTTP: true))
+        }
         refreshSourceStatus()
     }
 
     // MARK: 数据源状态与路径校验
 
-    /// 数据源连接状态（来自 StatsStore.attach 的诊断信息）
+    /// 数据源连接状态（来自 StatsStore 的诊断信息）
     func refreshSourceStatus() {
         let statuses = AppDelegate.shared?.store.sourceStatus ?? [:]
         for i in sources.indices {
-            let s = statuses[sources[i].id] ?? ""
-            sources[i].statusText = L(s)
-            if s.contains("已连接") {
+            let raw = statuses[sources[i].id] ?? ""
+            var s = L(raw)
+            // Trae 附加官方积分账单（已连接时）
+            if sources[i].isHTTP, raw.contains("已连接"),
+               let ent = AppDelegate.shared?.store.traeEntSummary() {
+                s += String(format: L(" · 积分 %@/%@"), Self.fmtCredits(ent.consumed), Self.fmtCredits(ent.total))
+            }
+            sources[i].statusText = s
+            if raw.contains("已连接") {
                 sources[i].statusKind = .ok
-            } else if s == "未启用" {
+            } else if raw == "未启用" || raw == "未配置登录" || raw.isEmpty {
                 sources[i].statusKind = .muted
             } else {
                 sources[i].statusKind = .warn
@@ -114,9 +130,22 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
-    /// 只读试开一次源库并检查必需表，结果就地显示在状态行（不重建连接，保存时才生效）
+    /// 积分显示：整数不带小数点，小数保留两位
+    static func fmtCredits(_ v: Double) -> String {
+        v == v.rounded() && abs(v) < 100_000 ? String(Int(v)) : String(format: "%.2f", v)
+    }
+
+    /// Trae 源无库路径可校验；SQLite 源只读试开一次检查必需表，结果就地显示（保存时才生效）
     func validateSource(id: String) {
         guard let i = sources.firstIndex(where: { $0.id == id }) else { return }
+        if sources[i].isHTTP {
+            // 粘贴了凭据就试拉一次会话（不打扰用户，失败静默）
+            sources[i].statusText = sources[i].credential.isEmpty
+                ? L("粘贴后将在保存后生效")
+                : L("已填写（保存后生效）")
+            sources[i].statusKind = sources[i].credential.isEmpty ? .muted : .ok
+            return
+        }
         let path = sources[i].path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty, let adapter = SourceRegistry.adapter(for: id) else { return }
 
@@ -192,11 +221,14 @@ final class SettingsViewModel: ObservableObject {
         }
 
         settings.refreshInterval = interval!
-        // 数据源：勾选状态 + 路径（留空回落默认路径）
+        // 数据源：勾选状态 + 路径（留空回落默认路径）+ HTTP 源凭据
         settings.sourceConfigs = sources.map { row in
             let path = row.path.trimmingCharacters(in: .whitespacesAndNewlines)
             return SourceConfig(id: row.id, enabled: row.enabled,
-                                dbPath: path.isEmpty ? row.defaultPath : path)
+                                dbPath: path.isEmpty ? row.defaultPath : path,
+                                credential: row.isHTTP
+                                    ? row.credential.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    : nil)
         }
         settings.warningThreshold = threshold!
         settings.warningEnabled = warningEnabled
@@ -595,18 +627,9 @@ struct SettingsRootView: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(Color(nsColor: Design.textPrimary))
                     .frame(width: 70, alignment: .leading)
-                ZStack(alignment: .leading) {
-                    if row.wrappedValue.path.isEmpty {
-                        // 占位符 = 默认路径（prompt 变体不带 onEditingChanged，自绘）
-                        Text(row.wrappedValue.defaultPath)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundColor(Color(nsColor: Design.textMuted))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .padding(.horizontal, 6)
-                            .allowsHitTesting(false)
-                    }
-                    TextField("", text: row.path,
+                if row.wrappedValue.isHTTP {
+                    // Trae：登录凭据代替库路径（passport sessionid，粘贴后保存生效）
+                    TextField("", text: row.credential,
                               onEditingChanged: { editing in
                                   if !editing { vm.validateSource(id: row.wrappedValue.id) }
                               }, onCommit: {})
@@ -616,19 +639,60 @@ struct SettingsRootView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .padding(.horizontal, 6)
+                        .overlay(alignment: .leading) {
+                            if row.credential.wrappedValue.isEmpty {
+                                Text(L("粘贴 trae.cn 登录后的 sessionid cookie 值"))
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundColor(Color(nsColor: Design.textMuted))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .padding(.horizontal, 6)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 22)
+                        .background(RoundedRectangle(cornerRadius: 4)
+                            .fill(Color(nsColor: Design.backgroundDark).opacity(0.6)))
+                        .overlay(RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color(nsColor: Design.separatorColor).opacity(0.6)))
+                        .help(L("在浏览器登录 trae.cn 后，从 DevTools 的 Cookie 里复制 sessionid 的值"))
+                } else {
+                    ZStack(alignment: .leading) {
+                        if row.wrappedValue.path.isEmpty {
+                            // 占位符 = 默认路径（prompt 变体不带 onEditingChanged，自绘）
+                            Text(row.wrappedValue.defaultPath)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(Color(nsColor: Design.textMuted))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .padding(.horizontal, 6)
+                                .allowsHitTesting(false)
+                        }
+                        TextField("", text: row.path,
+                                  onEditingChanged: { editing in
+                                      if !editing { vm.validateSource(id: row.wrappedValue.id) }
+                                  }, onCommit: {})
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(Color(nsColor: Design.textPrimary))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .padding(.horizontal, 6)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 22)
+                    .background(RoundedRectangle(cornerRadius: 4)
+                        .fill(Color(nsColor: Design.backgroundDark).opacity(0.6)))
+                    .overlay(RoundedRectangle(cornerRadius: 4)
+                        .stroke(Color(nsColor: Design.separatorColor).opacity(0.6)))
+                    .help(row.wrappedValue.path)
+                    Button(L("浏览")) {
+                        vm.browseSource(id: row.wrappedValue.id)
+                    }
+                    .font(.system(size: 12))
+                    .frame(width: 60)
                 }
-                .frame(maxWidth: .infinity)
-                .frame(height: 22)
-                .background(RoundedRectangle(cornerRadius: 4)
-                    .fill(Color(nsColor: Design.backgroundDark).opacity(0.6)))
-                .overlay(RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color(nsColor: Design.separatorColor).opacity(0.6)))
-                .help(row.wrappedValue.path)
-                Button(L("浏览")) {
-                    vm.browseSource(id: row.wrappedValue.id)
-                }
-                .font(.system(size: 12))
-                .frame(width: 60)
             }
             .frame(height: 24)
             Text(row.wrappedValue.statusText)
