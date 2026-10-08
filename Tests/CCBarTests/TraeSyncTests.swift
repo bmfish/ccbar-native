@@ -32,7 +32,8 @@ final class TraeSyncTests: XCTestCase {
         XCTAssertNotNil(row)
         XCTAssertEqual(row?.sessionID, "abc123")
         XCTAssertEqual(row?.model, "GLM-5.3-Flash")
-        XCTAssertEqual(row?.input, 142064)
+        // Trae 的 input_token 是总量口径（含缓存），入库折算为净输入：142064 - 137536
+        XCTAssertEqual(row?.input, 142064 - 137536)
         XCTAssertEqual(row?.output, 3710)
         XCTAssertEqual(row?.cacheRead, 137536)
         XCTAssertEqual(row?.cacheWrite, 0)

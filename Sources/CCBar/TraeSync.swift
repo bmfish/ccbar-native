@@ -126,7 +126,7 @@ enum TraeSync {
         guard !passportCookie.isEmpty else { return (.notConfigured, auth) }
 
         // ---- 1. 确保 JWT 可用（无效就换签）----
-        let jwt: String
+        var jwt: String
         switch ensureJWT(passportCookie: passportCookie, auth: &auth) {
         case .success(let token): jwt = token
         case .notConfigured: return (.notConfigured, auth)
@@ -135,21 +135,70 @@ enum TraeSync {
         }
 
         // ---- 2. 拉取会话明细（分页）----
+        // 缓存的 JWT 可能被服务端提前作废（如用户在别处重新登录，exp 未到但 1001），
+        // 此时强制清掉换一张再试一次，而不是把 cookie 误判成过期
+        var jwt2 = jwt
+        let rows: [TraeRow]
+        switch fetchSessions(jwt: jwt, fromEpoch: fromEpoch, toEpoch: toEpoch) {
+        case .success(let r):
+            rows = r
+        case .failed(let msg):
+            return (.failed(msg), auth)
+        case .authExpired:
+            // 强制换签（清 JWT；Session 也不行时 ensureJWT 内部会走 Login 重造）
+            auth.jwt = ""
+            auth.jwtExp = 0
+            switch ensureJWT(passportCookie: passportCookie, auth: &auth) {
+            case .success(let fresh):
+                jwt2 = fresh
+            case .notConfigured, .authExpired: return (.authExpired, auth)
+            case .failed(let msg): return (.failed(msg), auth)
+            }
+            switch fetchSessions(jwt: jwt2, fromEpoch: fromEpoch, toEpoch: toEpoch) {
+            case .success(let r): rows = r
+            case .authExpired: return (.authExpired, auth)
+            case .failed(let msg): return (.failed(msg), auth)
+            }
+        }
+
+        // ---- 3. 积分汇总（官方账单口径；失败不致命，按小时节流由调用方控制）----
+        var consumed: Double?
+        var total: Double?
+        if fetchEnt {
+            let entBody = "{\"require_usage\":true}"
+            let ent = post(url: TraeAPI.base + TraeAPI.entUsagePath, auth: "Cloud-IDE-JWT \(jwt2)", body: entBody)
+            if let data = ent.data,
+               let resp = try? JSONDecoder().decode(TraeEntUsageResponse.self, from: data),
+               let s = resp.usage_summary {
+                consumed = s.consumed_amount
+                total = s.total_amount
+            }
+        }
+
+        return (.success(rows: rows, consumed: consumed, total: total), auth)
+    }
+
+    private enum SessionsOutcome {
+        case success([TraeRow])
+        case authExpired
+        case failed(String)
+    }
+
+    /// 分页拉取会话明细。错误码：1001 = JWT/会话失效；9004 = 参数不合法；成功响应没有 code 字段。
+    private static func fetchSessions(jwt: String, fromEpoch: Int64, toEpoch: Int64) -> SessionsOutcome {
         var rows: [TraeRow] = []
         var page = 1
         while page <= TraeAPI.maxPages {
             let body = "{\"start_time\":\(fromEpoch),\"end_time\":\(toEpoch)," +
                        "\"page_size\":\(TraeAPI.pageSize),\"page_num\":\(page),\"usage_type\":[7]}"
             let r = post(url: TraeAPI.base + TraeAPI.usagePath, auth: "Cloud-IDE-JWT \(jwt)", body: body)
-            guard let data = r.data else { return (.failed(r.error ?? "无响应"), auth) }
+            guard let data = r.data else { return .failed(r.error ?? "无响应") }
             guard let resp = try? JSONDecoder().decode(TraeUsageResponse.self, from: data) else {
-                return (.failed("响应解析失败"), auth)
+                return .failed("响应解析失败")
             }
-            // 错误码：1001 = 会话失效；9004 = 参数不合法（如 page_size 超限）；其余按服务端错误处理。
-            // 成功响应没有 code 字段，不能把非 1001 的错误静默当成"空结果"
             if let code = resp.code {
-                if code == 1001 { return (.authExpired, auth) }
-                return (.failed("API code \(code)"), auth)
+                if code == 1001 { return .authExpired }
+                return .failed("API code \(code)")
             }
             let sessions = resp.user_usage_group_by_sessions ?? []
             rows.append(contentsOf: sessions.compactMap(normalize))
@@ -160,22 +209,7 @@ enum TraeSync {
         if page > TraeAPI.maxPages {
             print("[ccBar] Trae 分页达到上限 \(TraeAPI.maxPages)，本窗口可能不完整")
         }
-
-        // ---- 3. 积分汇总（官方账单口径；失败不致命，按小时节流由调用方控制）----
-        var consumed: Double?
-        var total: Double?
-        if fetchEnt {
-            let entBody = "{\"require_usage\":true}"
-            let ent = post(url: TraeAPI.base + TraeAPI.entUsagePath, auth: "Cloud-IDE-JWT \(jwt)", body: entBody)
-            if let data = ent.data,
-               let resp = try? JSONDecoder().decode(TraeEntUsageResponse.self, from: data),
-               let s = resp.usage_summary {
-                consumed = s.consumed_amount
-                total = s.total_amount
-            }
-        }
-
-        return (.success(rows: rows, consumed: consumed, total: total), auth)
+        return .success(rows)
     }
 
     // MARK: 换签链
@@ -264,10 +298,14 @@ enum TraeSync {
         guard let sid = s.session_id, !sid.isEmpty,
               let epoch = s.usage_time, epoch > 0 else { return nil }
         let extra = s.extra_info
+        // Trae 的 input_token 是 OpenAI/智谱口径：总量，已包含 cache_read。
+        // 库内统一 Anthropic 口径（input=净输入，三项相加=总 prompt），否则合计会重复计算缓存。
+        let gross = extra?.input_token ?? 0
+        let cached = extra?.cache_read_token ?? 0
         return TraeRow(
             sessionID: sid,
             model: s.model_name ?? "unknown",
-            input: extra?.input_token ?? 0,
+            input: max(0, gross - cached),
             output: extra?.output_token ?? 0,
             cacheRead: extra?.cache_read_token ?? 0,
             cacheWrite: extra?.cache_write_token ?? 0,

@@ -103,7 +103,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("ccbar/backups", isDirectory: true)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let target = dir.appendingPathComponent("ccbar-auto-\(today).db").path
+            // 日期格式含 "/"（如 2026/10/8），直接拼进文件名会变成多级路径导致 VACUUM INTO 失败
+            let stamp = today.replacingOccurrences(of: "/", with: "-")
+            let target = dir.appendingPathComponent("ccbar-auto-\(stamp).db").path
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 guard let self, self.store.backup(to: target) else { return }
                 defaults.set(today, forKey: "lastAutoBackupDate")

@@ -387,12 +387,15 @@ final class StatsStore {
         )
         """)
         if metaGet("daily_agg_full") == "" {
+            // daily_agg 只结算完整日（≤昨天）；今天由查询侧实时补，否则热力图等按日去重会撞 key
             exec("""
             INSERT OR REPLACE INTO daily_agg (date, source, reqs, input, output, cache_create, cache_read)
             SELECT date(created_at, 'unixepoch', 'localtime'), source,
                    SUM(request_count), SUM(input_tokens), SUM(output_tokens),
                    SUM(cache_creation_tokens), SUM(cache_read_tokens)
-            FROM usage_log GROUP BY 1, 2
+            FROM usage_log
+            WHERE date(created_at, 'unixepoch', 'localtime') < date('now', 'localtime')
+            GROUP BY 1, 2
             """)
             metaSet("daily_agg_full", value: "1")
         }

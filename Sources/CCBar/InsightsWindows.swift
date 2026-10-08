@@ -319,7 +319,8 @@ final class InsightsViewModel: ObservableObject {
         let pad = (Calendar.current.component(.weekday, from: start90) + 5) % 7
         var cells: [HeatCell] = []
         for _ in 0..<pad { cells.append(HeatCell(date: "", token: -1)) }
-        let tokensByDate = Dictionary(uniqueKeysWithValues: tokens91.map { ($0.date, $0.token) })
+        // 防御：数据异常出现重复日期时不能 trap，取后者
+        let tokensByDate = Dictionary(tokens91.map { ($0.date, $0.token) }, uniquingKeysWith: { _, new in new })
         for d in 0..<91 {
             guard let date = cal.date(byAdding: .day, value: d - 90, to: cal.startOfDay(for: Date())) else { continue }
             let key = fmt.string(from: date)
