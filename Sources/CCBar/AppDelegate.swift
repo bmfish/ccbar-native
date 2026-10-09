@@ -825,8 +825,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     }
 
     /// 洞察中心（费用 / 洞察 / 分享 / 渠道 / 流水）
-    /// 弹窗唯一不收起的入口：保持弹窗挂着，方便对照菜单数据
+    /// 点击后同样收起菜单栏弹窗，与其他入口保持一致
     @objc func openInsights() {
+        showInsights(page: nil)
+    }
+
+    /// 底部「流水」入口：打开洞察中心并直接定位到流水页
+    @objc func openTimeline() {
+        showInsights(page: .timeline)
+    }
+
+    /// page 非空时写入页签记忆键，SwiftUI 侧的 @AppStorage 会自动切页
+    func showInsights(page: InsightsPage?) {
+        if let page {
+            UserDefaults.standard.set(page.rawValue, forKey: "insightsLastPage")
+        }
+        closePopover()
         if insightsWindow == nil {
             insightsWindow = InsightsWindowController()
         }

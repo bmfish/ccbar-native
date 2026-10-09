@@ -11,7 +11,7 @@ struct PopoverActions {
     let openMonth: () -> Void
     let openModelToday: () -> Void
     let copy: () -> Void
-    let refresh: () -> Void
+    let timeline: () -> Void
     let insights: () -> Void
     let settings: () -> Void
     let quit: () -> Void
@@ -23,7 +23,7 @@ struct PopoverActions {
         openMonth: { AppDelegate.shared?.openMonthDetail() },
         openModelToday: { AppDelegate.shared?.openModelDetailToday() },
         copy: { AppDelegate.shared?.copyStats() },
-        refresh: { AppDelegate.shared?.refreshData() },
+        timeline: { AppDelegate.shared?.openTimeline() },
         insights: { AppDelegate.shared?.openInsights() },
         settings: { AppDelegate.shared?.openSettingsAndClose() },
         quit: { AppDelegate.shared?.quit() }
@@ -438,7 +438,7 @@ struct PopoverRootView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 6) {
-            BarActionButton(icon: "arrow.clockwise", label: L("刷新"), action: PopoverActions.shared.refresh)
+            BarActionButton(icon: "list.bullet.rectangle", label: L("流水"), action: PopoverActions.shared.timeline)
             BarActionButton(icon: "chart.xyaxis.line", label: L("洞察"), action: PopoverActions.shared.insights)
             BarActionButton(icon: "gearshape", label: L("设置"), action: PopoverActions.shared.settings)
             BarActionButton(icon: "xmark", label: L("退出"), action: PopoverActions.shared.quit)
