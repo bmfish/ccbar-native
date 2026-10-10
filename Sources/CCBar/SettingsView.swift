@@ -43,6 +43,8 @@ final class SettingsViewModel: ObservableObject {
     @Published var sources: [SourceRowDraft] = []
     @Published var language: AppLanguage = .system
     @Published var lastBackupDate = ""
+    /// Trae "立即同步"进行中（按钮禁用防连点）
+    @Published var traeSyncing = false
 
     let settings: Settings
     let onSaved: () -> Void
@@ -133,6 +135,37 @@ final class SettingsViewModel: ObservableObject {
     /// 积分显示：整数不带小数点，小数保留两位
     static func fmtCredits(_ v: Double) -> String {
         v == v.rounded() && abs(v) < 100_000 ? String(Int(v)) : String(format: "%.2f", v)
+    }
+
+    /// Trae "立即同步"：把草稿凭据落库（只动 trae 一条）→ rebuild → 强制同步一次。
+    /// 跳过节流与夜间静默——用户明确操作，粘贴新 cookie 后点一下立刻验证，不用等窗口。
+    func syncTraeNow() {
+        guard let i = sources.firstIndex(where: { $0.id == "trae" }) else { return }
+        let credential = sources[i].credential.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !credential.isEmpty, !traeSyncing else { return }
+
+        var configs = settings.sourceConfigs
+        if let ci = configs.firstIndex(where: { $0.id == "trae" }) {
+            configs[ci].enabled = sources[i].enabled
+            configs[ci].credential = credential
+        } else {
+            configs.append(SourceConfig(id: "trae", enabled: sources[i].enabled,
+                                        dbPath: "", credential: credential))
+        }
+        settings.sourceConfigs = configs
+        traeSyncing = true
+        sources[i].statusText = L("同步中…")
+        sources[i].statusKind = .muted
+        let snapshot = configs   // 主线程快照，避免后台队列读设置
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self, let store = AppDelegate.shared?.store else { return }
+            store.rebuild(configs: snapshot)
+            store.syncTraeIfNeeded(force: true)
+            DispatchQueue.main.async {
+                self.traeSyncing = false
+                self.refreshSourceStatus()
+            }
+        }
     }
 
     /// Trae 源无库路径可校验；SQLite 源只读试开一次检查必需表，结果就地显示（保存时才生效）
@@ -657,6 +690,13 @@ struct SettingsRootView: View {
                         .overlay(RoundedRectangle(cornerRadius: 4)
                             .stroke(Color(nsColor: Design.separatorColor).opacity(0.6)))
                         .help(L("在浏览器登录 trae.cn 后，从 DevTools 的 Cookie 里复制 sessionid 的值"))
+                    Button(vm.traeSyncing ? L("同步中…") : L("立即同步")) {
+                        vm.syncTraeNow()
+                    }
+                    .font(.system(size: 12))
+                    .frame(width: 64)
+                    .disabled(vm.traeSyncing || row.credential.wrappedValue.isEmpty)
+                    .help(L("保存凭据并立即拉取一次 Trae 用量（跳过节流与夜间静默）"))
                 } else {
                     ZStack(alignment: .leading) {
                         if row.wrappedValue.path.isEmpty {

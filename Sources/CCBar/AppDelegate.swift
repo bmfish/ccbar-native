@@ -19,6 +19,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     /// 统计库查询/同步都走这条后台串行队列，结果回主线程更新 UI
     private let queryQueue = DispatchQueue(label: "ccbar.query", qos: .utility)
 
+    /// Trae 是 HTTP 源：网络同步单独一条串行队列，避免慢网络（最长 15s×3 次重试）
+    /// 堵在 queryQueue 上，把本地查询与弹窗刷新一起拖住
+    private let traeQueue = DispatchQueue(label: "ccbar.trae", qos: .utility)
+
     /// 菜单栏动画伴侣
     let petController = MenuPetController()
     /// 上次刷新的今日总量（闪电 LED 变色依据）
@@ -97,7 +101,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     /// - 每 3 天静默检查一次更新，有新版才弹提示
     func runDailyHousekeeping() {
         let defaults = UserDefaults.standard
-        let today = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none)
+        let today = StatsStore.shortDateFormatter.string(from: Date())
 
         if defaults.string(forKey: "lastAutoBackupDate") != today {
             let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -325,8 +329,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             // 懒惰补账：历史（昨天及更早）落后就同步进自建库，今日走实时查询。
             // Trae 是 HTTP 源，另走自己的节流同步（内部锁外网络）。
             self.store.syncIfNeeded()
-            self.store.syncTraeIfNeeded()
-            self.notifyCheckin(self.store.traeCheckinIfNeeded())
+            // Trae 网络同步丢到独立队列，本地查询不等它（节流在 store 内，重复调用不重复发请求）
+            self.syncTraeInBackground(interactive: false)
 
             let todayStats = self.store.queryDayStats(days: 0)
             let workHours = self.store.queryWorkHours()
@@ -406,8 +410,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             guard let self = self else { return }
             // 点开弹窗 = 主动查看：走更短的交互节流，保证看到的数据尽量新鲜
             // （夜间点弹窗同样会查：静默只限定时器，不拦主动查看）
-            self.store.syncTraeIfNeeded(interactive: true)
-            self.notifyCheckin(self.store.traeCheckinIfNeeded(interactive: true))
+            // Trae 走独立队列，网络完成后会补一次今日刷新，先查到的本地数据不阻塞
+            self.syncTraeInBackground(interactive: true)
             let todayStats = self.store.queryDayStats(days: 0)
             let modelBreakdown = self.store.queryModelBreakdown()
             let workHours = self.store.queryWorkHours()
@@ -432,6 +436,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         if let popover = popover, popover.isShown,
            let vc = popover.contentViewController as? PopoverViewController {
             vc.refresh()
+        }
+    }
+
+    // MARK: - Trae 后台同步（独立队列）
+
+    /// Trae 用量同步 + 签到统一走 traeQueue，网络不占用 queryQueue。
+    /// 节流（定时 15 分钟 / 交互 1 分钟）在 store 内判断，重复调用不会重复发请求。
+    /// 交互式调用在同步完成后补查一次今日，让刚打开的弹窗拿到最新数据。
+    private func syncTraeInBackground(interactive: Bool) {
+        traeQueue.async { [weak self] in
+            guard let self else { return }
+            self.store.syncTraeIfNeeded(interactive: interactive)
+            self.notifyCheckin(self.store.traeCheckinIfNeeded(interactive: interactive))
+            guard interactive else { return }
+            self.queryQueue.async { [weak self] in
+                guard let self else { return }
+                let todayStats = self.store.queryDayStats(days: 0)
+                DispatchQueue.main.async {
+                    DataCache.shared.update(today: todayStats, yesterday: nil, week: nil,
+                                            month: nil, total: nil, models: nil, workHours: nil)
+                    self.applyTitle(todayStats)
+                    self.updateMenu()
+                }
+            }
         }
     }
 
@@ -629,7 +657,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     func checkWarning(stats: DayStats) {
         guard settings.warningEnabled else { return }
 
-        let todayKey = "warningNotified_\(DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none))"
+        let todayKey = "warningNotified_\(StatsStore.shortDateFormatter.string(from: Date()))"
         if UserDefaults.standard.bool(forKey: todayKey) {
             return
         }
@@ -653,7 +681,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         guard tier > 0 else { return }
 
         // 每个档位每天只通知一次（持久化记录）
-        let today = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none)
+        let today = StatsStore.shortDateFormatter.string(from: Date())
         let key = "milestone_\(today)_\(tier)"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
 
@@ -673,7 +701,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
 
     /// 清理"每天一个 key"的历史标记（预警/里程碑），只保留今天的
     private func pruneDailyUserDefaults() {
-        let today = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none)
+        let today = StatsStore.shortDateFormatter.string(from: Date())
         for key in UserDefaults.standard.dictionaryRepresentation().keys
         where key.hasPrefix("milestone_") || key.hasPrefix("warningNotified_") {
             if !key.contains(today) {

@@ -258,7 +258,7 @@ final class InsightsViewModel: ObservableObject {
         s.cost30 = store.queryCost(days: 30)
         let raw = store.queryCostDaily(days: 30)
         // 补齐日期空洞，图表时间轴连续（X 轴用时间标度，轴刻度按需稀疏）
-        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        let fmt = StatsStore.dayFormatter
         let cal = Calendar.current
         var byDate: [String: Double] = [:]
         for r in raw { byDate[r.date] = r.cost }

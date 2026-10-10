@@ -251,6 +251,21 @@ final class TraeSyncTests: XCTestCase {
         XCTAssertEqual((r.credits ?? 0) + (r.extra_credits ?? 0), 200)
     }
 
+    // MARK: 凭据变更（换账号）：旧账号态必须整体重置
+
+    func testCredentialChangeResetsAccountState() {
+        store.rebuild(configs: [SourceConfig(id: "trae", enabled: true, dbPath: "", credential: "sessionid=old")])
+        store.upsertTraeRows([TraeRow(sessionID: "s1", model: "m", input: 10, output: 5,
+                                      cacheRead: 0, cacheWrite: 0, costUsd: 0.1, credits: 2.5,
+                                      epoch: StatsStore.localMidnight(0) + 60)])
+        XCTAssertEqual(store.queryTodayCredits(), 2.5, "旧账号数据应先入库")
+
+        // 换新账号 cookie → 旧明细/日聚合清空，等新账号 90 天全量首拉
+        store.rebuild(configs: [SourceConfig(id: "trae", enabled: true, dbPath: "", credential: "sessionid=new")])
+        XCTAssertEqual(store.queryTodayCredits(), 0, "换凭据后旧账号明细应被清空")
+        XCTAssertEqual(store.queryDayStats(days: 0)?.total ?? -1, 0, "旧账号数据不应残留")
+    }
+
     // MARK: 真实 API 端到端（CI 无凭据自动跳过；本地 TRAE_TEST_COOKIE="sessionid=…" 时跑通全链路）
 
     func testLiveSyncEndToEnd() throws {

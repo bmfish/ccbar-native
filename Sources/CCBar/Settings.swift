@@ -218,7 +218,7 @@ final class DataCache {
     /// 历史区间（昨日/周/月/总量）每天重查一次
     func needsDailyCache() -> Bool {
         lock.lock(); defer { lock.unlock() }
-        let today = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none)
+        let today = StatsStore.shortDateFormatter.string(from: Date())
         return lastDailyCacheDate != today
     }
 
@@ -249,7 +249,7 @@ final class DataCache {
 
     func markDailyCacheDone() {
         lock.lock(); defer { lock.unlock() }
-        lastDailyCacheDate = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none)
+        lastDailyCacheDate = StatsStore.shortDateFormatter.string(from: Date())
     }
 
     func markModelCacheDone() {

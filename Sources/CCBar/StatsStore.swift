@@ -237,9 +237,19 @@ final class StatsStore {
     /// 跨零点后要靠 refreshViewForNewDay 重建
     private var viewDay: String = ""
 
-    private static let dayFormatter: DateFormatter = {
+    /// 日期键统一格式化器（yyyy-MM-dd，与 SQLite date(...,'localtime') 对齐）。
+    /// 热路径（每 30s 刷新、同步、各查询）复用同一实例，避免反复构造 DateFormatter。
+    static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    /// 本地化短日期（如 2026/10/9），用于"今天"的 UserDefaults 键；缓存复用
+    static let shortDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .none
         return f
     }()
 
@@ -412,7 +422,20 @@ final class StatsStore {
                 // Trae 是 HTTP 源，不走 ATTACH；凭据与启用状态在同步时使用
                 if config.id == "trae" {
                     traeEnabled = config.enabled
-                    traeCredential = (config.credential ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    let newCredential = (config.credential ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    // 凭据变更（换 cookie / 切账号）必须重置账号态，否则：
+                    // 1. 缓存的 JWT（约 8h 有效，与 cookie 无关）未过期前仍拉旧账号数据
+                    // 2. 旧水位把新账号首拉压成 3 天窗口（应为 90 天全量）
+                    // 3. 旧账号明细/日聚合/积分账单混进新账号统计
+                    if !newCredential.isEmpty, !traeCredential.isEmpty, newCredential != traeCredential {
+                        metaSet("trae_auth", value: "")
+                        metaSet("trae_synced_day", value: "")
+                        metaSet("trae_ent", value: "")
+                        metaSet("trae_ent_at", value: "")
+                        exec("DELETE FROM usage_log WHERE source = 'trae'")
+                        exec("DELETE FROM daily_agg WHERE source = 'trae'")
+                    }
+                    traeCredential = newCredential
                     sourceStatus["trae"] = config.enabled
                         ? (traeCredential.isEmpty ? "未配置登录" : "连接中…")
                         : "未启用"
@@ -512,8 +535,7 @@ final class StatsStore {
         refreshViewForNewDayIfNeeded()
         guard !attachedAdapters.isEmpty else { return }
 
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd"
+        let fmt = Self.dayFormatter
         guard let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date()) else { return }
         let yesterdayStr = fmt.string(from: yesterday)
         let todayEpoch = Self.localMidnight(0)
@@ -570,8 +592,9 @@ final class StatsStore {
     /// 夜间静默（0:00–9:00 本地时间）只限定时器驱动：定时器不同步、签到也不跑，
     /// 凌晨会话由 9 点后第一次同步的"水位-2 天"窗口覆盖，不会丢数；
     /// 点弹窗（interactive）不受静默限制，随时可查。
-    func syncTraeIfNeeded(now: Date = Date(), interactive: Bool = false) {
-        guard interactive || !Self.inNightSilence(now) else { return }
+    /// force=true（设置页"立即同步"）：跳过静默与节流，用户明确操作即时生效。
+    func syncTraeIfNeeded(now: Date = Date(), interactive: Bool = false, force: Bool = false) {
+        guard force || interactive || !Self.inNightSilence(now) else { return }
 
         // 凭据快照（锁内）
         lock.lock()
@@ -580,12 +603,11 @@ final class StatsStore {
         let minInterval = interactive ? Self.traeInteractiveMinInterval : Self.traeSyncMinInterval
         let delta = now.timeIntervalSince1970 - lastTraeSyncAt
         lock.unlock()
-        guard delta >= minInterval else { return }
+        guard force || delta >= minInterval else { return }
 
         // 拉取窗口：水位 -2 天回看（跨零点迟到会话 + 会话跨天推进），首次 90 天全量。
         // 积分账单按小时节流（ent_usage 只喂设置页展示，没必要跟着每次同步拉）
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd"
+        let fmt = Self.dayFormatter
         lock.lock()
         let waterline = metaGet("trae_synced_day")
         let auth = Self.traeAuthFromMeta(metaGet("trae_auth"))
@@ -640,8 +662,7 @@ final class StatsStore {
     func traeCheckinIfNeeded(now: Date = Date(), interactive: Bool = false) -> TraeSync.TraeCheckinOutcome? {
         guard interactive || !Self.inNightSilence(now) else { return nil }
 
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd"
+        let fmt = Self.dayFormatter
         let today = fmt.string(from: now)
 
         lock.lock()
@@ -1240,7 +1261,7 @@ final class StatsStore {
         """) { stmt in
             dates.append(String(cString: sqlite3_column_text(stmt, 0)))
         }
-        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        let fmt = Self.dayFormatter
         var expected = Calendar.current.startOfDay(for: Date())
         if dates.first != fmt.string(from: expected) {
             expected = Calendar.current.date(byAdding: .day, value: -1, to: expected)!
@@ -1263,7 +1284,7 @@ final class StatsStore {
     func queryWeeklyDelta() -> (thisWeek: Int64, lastWeek: Int64) {
         lock.lock(); defer { lock.unlock() }
         guard handle != nil else { return (0, 0) }
-        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        let fmt = Self.dayFormatter
         let this = dailyAggSum(fromDay: fmt.string(from: Date(timeIntervalSince1970: TimeInterval(Self.localMidnight(6)))),
                                toDay: fmt.string(from: Date(timeIntervalSince1970: TimeInterval(Self.localMidnight(1))))) ?? Self.zeroStats
         let last = dailyAggSum(fromDay: fmt.string(from: Date(timeIntervalSince1970: TimeInterval(Self.localMidnight(13)))),
@@ -1276,7 +1297,7 @@ final class StatsStore {
     func queryPeakDay(days: Int) -> (date: String, token: Int64)? {
         lock.lock(); defer { lock.unlock() }
         guard handle != nil else { return nil }
-        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        let fmt = Self.dayFormatter
         var peak: (date: String, token: Int64)?
         var stmt: OpaquePointer?
         let sql = """
@@ -1321,7 +1342,7 @@ final class StatsStore {
         """, binds: [Self.localMidnight(0), Self.localMidnight(-1)]) { stmt in
             let token = sqlite3_column_int64(stmt, 1)
             guard token > 0 else { return }
-            let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+            let fmt = Self.dayFormatter
             result.append((fmt.string(from: Date()),
                            String(cString: sqlite3_column_text(stmt, 0)), token))
         }
@@ -1344,7 +1365,7 @@ final class StatsStore {
                            sqlite3_column_int64(stmt, 3), sqlite3_column_int64(stmt, 4)))
         }
         if let t = todayLive(now: Date()), t.total > 0 {
-            let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+            let fmt = Self.dayFormatter
             result.append((fmt.string(from: Date()), t.input, t.output, t.cacheRead, t.cacheCreate))
         }
         return result
@@ -1360,7 +1381,7 @@ final class StatsStore {
         let first = cal.date(from: comps)!
         guard let nextMonth = cal.date(byAdding: .month, value: 1, to: first),
               let lastDay = cal.date(byAdding: .day, value: -1, to: nextMonth) else { return (0, 0, 30) }
-        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        let fmt = Self.dayFormatter
         let monthStats = dailyAggSum(fromDay: fmt.string(from: first),
                                      toDay: fmt.string(from: lastDay)) ?? Self.zeroStats
         let today = todayLive(now: now) ?? Self.zeroStats
@@ -1527,7 +1548,7 @@ final class StatsStore {
     func queryWindowStats(daysAgoFrom: Int, daysAgoTo: Int) -> DayStats? {
         lock.lock(); defer { lock.unlock() }
         guard handle != nil else { return nil }
-        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        let fmt = Self.dayFormatter
         let from = fmt.string(from: Date(timeIntervalSince1970: TimeInterval(Self.localMidnight(daysAgoFrom))))
         let to = fmt.string(from: Date(timeIntervalSince1970: TimeInterval(Self.localMidnight(daysAgoTo))))
         return dailyAggSum(fromDay: from, toDay: to)
@@ -1580,7 +1601,7 @@ final class StatsStore {
             result.append((String(cString: sqlite3_column_text(stmt, 0)), sqlite3_column_int64(stmt, 1)))
         }
         if let today = todayLive(now: Date()), today.total > 0 {
-            let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+            let fmt = Self.dayFormatter
             result.append((fmt.string(from: Date()), today.total))
         }
         return result
@@ -1601,7 +1622,7 @@ final class StatsStore {
                            String(cString: sqlite3_column_text(stmt, 1)),
                            sqlite3_column_int64(stmt, 2)))
         }
-        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        let fmt = Self.dayFormatter
         let today = fmt.string(from: Date())
         let todaySources = sourceBreakdownUnlocked()
         for s in todaySources where s.total > 0 {
