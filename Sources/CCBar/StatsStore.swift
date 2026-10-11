@@ -677,12 +677,26 @@ final class StatsStore {
         lock.lock()
         lastCheckinAttemptAt = now.timeIntervalSince1970
         let auth = Self.traeAuthFromMeta(metaGet("trae_auth"))
+        // 签到接口需要稳定的设备 ID（服务端 2026-10 起校验 x-device-id 等设备头）
+        var deviceId = metaGet("trae_device_id") ?? ""
+        if deviceId.isEmpty {
+            deviceId = UUID().uuidString
+            metaSet("trae_device_id", value: deviceId)
+        }
         lock.unlock()
 
-        let (outcome, newAuth) = TraeSync.checkin(passportCookie: credential, auth: auth)
+        let (outcome, newAuth) = TraeSync.checkin(passportCookie: credential, auth: auth, deviceId: deviceId)
 
         lock.lock(); defer { lock.unlock() }
         metaSet("trae_auth", value: Self.traeAuthToMeta(newAuth))
+        switch outcome {
+        case .claimed(let c): NSLog("[trae-checkin] claimed: \(c) credits")
+        case .already: NSLog("[trae-checkin] already checked in")
+        case .notConfigured: NSLog("[trae-checkin] notConfigured")
+        case .authExpired: NSLog("[trae-checkin] authExpired")
+        case .disabled: NSLog("[trae-checkin] disabled by server")
+        case .failed(let m): NSLog("[trae-checkin] failed: \(m)")
+        }
         switch outcome {
         case .claimed, .already:
             metaSet("trae_checkin_day", value: today)

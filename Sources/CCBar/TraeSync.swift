@@ -25,6 +25,8 @@ enum TraeAPI {
     static let entUsagePath = "/trae/api/v2/pay/ide_user_ent_usage"
     static let checkinStatusPath = "/trae/api/v2/ug/checkin_credits/status"
     static let checkinClaimPath = "/trae/api/v2/ug/checkin_credits/claim"
+    /// 签到接口设备头 x-app-version 对齐的客户端版本（Trae CN 3.4.2，2026-10 抓取）
+    static let clientAppVersion = "3.4.2"
 
     /// 拉取窗口：首次 90 天全量回填，之后水位 - 2 天回看
     static let firstFetchDays = 90
@@ -221,7 +223,9 @@ enum TraeSync {
     }
 
     /// 每日签到：先查状态，未签则领取。JWT 失效自动强制换签重试一次（与 run 同套路）。
-    static func checkin(passportCookie: String, auth: TraeAuth) -> (outcome: TraeCheckinOutcome, auth: TraeAuth) {
+    /// 2026-10 起服务端对签到接口校验客户端设备头（从 Trae 客户端 main.js 的 fb() 复刻），
+    /// 缺失会被 1001 拒绝——deviceId 由调用方持久化（meta trae_device_id）保证稳定。
+    static func checkin(passportCookie: String, auth: TraeAuth, deviceId: String = "") -> (outcome: TraeCheckinOutcome, auth: TraeAuth) {
         var auth = auth
         guard !passportCookie.isEmpty else { return (.notConfigured, auth) }
 
@@ -233,10 +237,11 @@ enum TraeSync {
         case .failed(let msg): return (.failed(msg), auth)
         }
 
-        // 1. 查签到状态（1001 → 强制换签重试一次）
+        // 1. 查签到状态（客户端对 status 也带 req_source；1001 → 强制换签重试一次）
         let status: TraeCheckinResponse
-        switch checkinWithRetry(path: TraeAPI.checkinStatusPath, body: "{}",
-                                passportCookie: passportCookie, auth: &auth, jwt: &jwt) {
+        switch checkinWithRetry(path: TraeAPI.checkinStatusPath, body: "{\"req_source\":1}",
+                                passportCookie: passportCookie, auth: &auth, jwt: &jwt,
+                                deviceId: deviceId) {
         case .success(let r): status = r
         case .failure(let o): return (o, auth)
         }
@@ -248,7 +253,8 @@ enum TraeSync {
 
         // 2. 领取（官方客户端同样带 req_source）
         switch checkinWithRetry(path: TraeAPI.checkinClaimPath, body: "{\"req_source\":1}",
-                                passportCookie: passportCookie, auth: &auth, jwt: &jwt) {
+                                passportCookie: passportCookie, auth: &auth, jwt: &jwt,
+                                deviceId: deviceId) {
         case .success(let r):
             if let code = r.code, code != 0 {
                 return (.failed("签到失败 code \(code)\(r.message.map { "：\($0)" } ?? "")"), auth)
@@ -261,9 +267,10 @@ enum TraeSync {
     /// 带一次强制换签重试的签到请求（status 与 claim 共用）
     private static func checkinWithRetry(path: String, body: String,
                                          passportCookie: String, auth: inout TraeAuth,
-                                         jwt: inout String) -> Result<TraeCheckinResponse, TraeCheckinOutcome> {
+                                         jwt: inout String,
+                                         deviceId: String = "") -> Result<TraeCheckinResponse, TraeCheckinOutcome> {
         func call(_ token: String) -> Result<TraeCheckinResponse, TraeCheckinOutcome> {
-            switch checkinCall(path: path, jwt: token, body: body) {
+            switch checkinCall(path: path, jwt: token, body: body, deviceId: deviceId) {
             case .success(let r): return .success(r)
             case .authExpired: return .failure(.authExpired)
             case .failed(let m): return .failure(.failed(m))
@@ -293,8 +300,31 @@ enum TraeSync {
         case failed(String)
     }
 
-    private static func checkinCall(path: String, jwt: String, body: String) -> CheckinHTTPOutcome {
-        let r = post(url: TraeAPI.base + path, auth: "Cloud-IDE-JWT \(jwt)", body: body)
+    /// 签到接口设备头，逐项对齐 Trae 客户端 main.js 的 fb()：
+    /// x-device-id / x-device-brand / x-device-type / x-os-version / x-app-version。
+    /// 2026-10 起服务端校验这些头，缺失返回 1001 + enable:false。
+    static func checkinExtraHeaders(deviceId: String) -> [String: String] {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        var model = "Mac"
+        var name: [CChar] = Array(repeating: 0, count: 128)
+        var size = name.count
+        var mib: [Int32] = [CTL_HW, HW_MODEL]
+        if sysctl(&mib, 2, &name, &size, nil, 0) == 0 {
+            let s = String(cString: name)
+            if !s.isEmpty { model = s }
+        }
+        return [
+            "x-device-id": deviceId,
+            "x-device-brand": model,
+            "x-device-type": "macos",
+            "x-os-version": "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)",
+            "x-app-version": TraeAPI.clientAppVersion,
+        ]
+    }
+
+    private static func checkinCall(path: String, jwt: String, body: String, deviceId: String = "") -> CheckinHTTPOutcome {
+        let r = post(url: TraeAPI.base + path, auth: "Cloud-IDE-JWT \(jwt)", body: body,
+                     extraHeaders: checkinExtraHeaders(deviceId: deviceId))
         guard let data = r.data else { return .failed(r.error ?? "无响应") }
         guard let resp = try? JSONDecoder().decode(TraeCheckinResponse.self, from: data) else {
             return .failed("签到响应解析失败")
@@ -473,7 +503,8 @@ enum TraeSync {
 
     /// 同步 POST（信号量等待，调用方在后台串行队列）
     static func post(url: String, cookie: String? = nil, auth: String? = nil,
-                     body: String, timeout: TimeInterval = 15) -> (data: Data?, http: Int?, headers: [AnyHashable: Any]?, error: String?) {
+                     body: String, timeout: TimeInterval = 15,
+                     extraHeaders: [String: String]? = nil) -> (data: Data?, http: Int?, headers: [AnyHashable: Any]?, error: String?) {
         guard let u = URL(string: url) else { return (nil, nil, nil, "URL 无效") }
         var req = URLRequest(url: u)
         req.httpMethod = "POST"
@@ -481,6 +512,7 @@ enum TraeSync {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let cookie = cookie { req.setValue(cookie, forHTTPHeaderField: "Cookie") }
         if let auth = auth { req.setValue(auth, forHTTPHeaderField: "Authorization") }
+        for (k, v) in extraHeaders ?? [:] { req.setValue(v, forHTTPHeaderField: k) }
         req.httpBody = body.data(using: .utf8)
 
         let semaphore = DispatchSemaphore(value: 0)
