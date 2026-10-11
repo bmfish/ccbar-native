@@ -23,11 +23,6 @@ final class InsightsRenderTests: XCTestCase {
         XCTAssertGreaterThan(png?.count ?? 0, 5000, "渲染出的 PNG 太小，疑似黑图/空白")
         try png?.write(to: URL(fileURLWithPath: "/tmp/insights-page-weekly.png"))   // 本地目检用
 
-        // 空库：任何一天都没有可写的数据 → nil
-        let store = StatsStore(storePath: NSTemporaryDirectory() + "ccbar-weekly-\(UUID().uuidString).db")
-        defer { store.close() }
-        store.rebuild(configs: [])   // init 只记路径，rebuild 才开库
-
         // 窗口口径：周一生成上周一~周日（7..1），周二预览上一个完整周（8..2）
         let monWindow = WeeklyReport.lastWeekWindow(now: Date(timeIntervalSince1970: 1_791_187_200))
         XCTAssertEqual(monWindow.from, 7)
@@ -35,45 +30,6 @@ final class InsightsRenderTests: XCTestCase {
         let tueWindow = WeeklyReport.lastWeekWindow(now: Date(timeIntervalSince1970: 1_791_273_600))   // 2026-10-06（周二）
         XCTAssertEqual(tueWindow.from, 8)
         XCTAssertEqual(tueWindow.to, 2)
-        // 无数据不产文件（有数据时改天会重试补账，空库永远 nil）
-        let wednesday = Date(timeIntervalSince1970: 1_791_360_000)   // 2026-10-07（周三）
-        XCTAssertNil(WeeklyReport.generateIfNeeded(store: store, now: wednesday))
-
-        // 周一 + 空库：同样无可写数据
-        let monday = Date(timeIntervalSince1970: 1_791_187_200)      // 2026-10-05（周一）
-        XCTAssertNil(WeeklyReport.generateIfNeeded(store: store, now: monday))
-    }
-
-    func testWeeklyBackfillIdempotent() throws {
-        let dbPath = "/tmp/ccbar-recheck/ccbar.db"
-        guard FileManager.default.fileExists(atPath: dbPath) else {
-            throw XCTSkip("无真实库副本，本地验证用")
-        }
-        let out = URL(fileURLWithPath: NSTemporaryDirectory() + "weekly-out-\(UUID().uuidString)")
-        WeeklyReport.directoryOverride = out
-        defer {
-            WeeklyReport.directoryOverride = nil
-            try? FileManager.default.removeItem(at: out)
-        }
-        let store = StatsStore(storePath: dbPath)
-        defer { store.close() }
-        let cc = CCSwitchAdapter(), zc = ZCodeAdapter()
-        store.rebuild(configs: [
-            SourceConfig(id: cc.id, enabled: true, dbPath: cc.defaultPath),
-            SourceConfig(id: zc.id, enabled: true, dbPath: zc.defaultPath),
-        ])
-        store.syncIfNeeded()
-
-        // 周二也能补生成上周周报（周一错过不丢）
-        let tuesday = Date(timeIntervalSince1970: 1_791_273_600)   // 2026-10-06（周二）
-        let path1 = WeeklyReport.generateIfNeeded(store: store, now: tuesday)
-        XCTAssertNotNil(path1)
-        XCTAssertEqual(path1, out.appendingPathComponent("ccbar-weekly-2026-10-05.png").path)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: path1!))
-
-        // 同一个报告周内换一天触发（周四）：文件已存在 → 幂等跳过
-        let thursday = tuesday.addingTimeInterval(2 * 86_400)
-        XCTAssertNil(WeeklyReport.generateIfNeeded(store: store, now: thursday))
     }
 
     func testPopoverHourlyAndRender() throws {

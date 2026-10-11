@@ -211,8 +211,7 @@ final class TraeSyncTests: XCTestCase {
         // 若静默被移除，假凭据会走真实 API 并把状态置为过期——测试即失败，守护有效
         let night = cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 3, minute: 0))!
         store.syncTraeIfNeeded(now: night)
-        store.traeCheckinIfNeeded(now: night)
-        XCTAssertEqual(store.sourceStatus["trae"], "连接中…", "静默期定时器不应发起同步/签到")
+        XCTAssertEqual(store.sourceStatus["trae"], "连接中…", "静默期定时器不应发起同步")
     }
 
     func testInteractiveBypassesNightSilence() {
@@ -226,29 +225,6 @@ final class TraeSyncTests: XCTestCase {
         // 白天 interactive：会真实发起（假凭据 → 状态被改写），证明 interactive 未被静默误伤
         store.syncTraeIfNeeded(now: day, interactive: true)
         XCTAssertNotEqual(store.sourceStatus["trae"], "连接中…", "interactive 同步不应被拦截")
-    }
-
-    // MARK: 每日签到
-
-    func testCheckinPlanDecision() {
-        // 常规：未签 → 领取
-        XCTAssertEqual(TraeSync.checkinPlan(enable: true, checkedIn: false), .claim)
-        // 已签 → 跳过（幂等水位由调用方写）
-        XCTAssertEqual(TraeSync.checkinPlan(enable: true, checkedIn: true), .already)
-        // 功能未开启 → 不参与
-        XCTAssertEqual(TraeSync.checkinPlan(enable: false, checkedIn: false), .disabled)
-        // 字段缺失（协议宽松）：默认尝试领取，失败由 claim 的 code 兜底
-        XCTAssertEqual(TraeSync.checkinPlan(enable: nil, checkedIn: nil), .claim)
-    }
-
-    func testCheckinResponseDecoding() throws {
-        // 与官方 status 响应字段一致（实测采样）
-        let json = #"{"checked_in":true,"code":0,"credits":100,"did_checked_in":false,"enable":true,"extra_credits":100,"message":"success"}"#
-        let r = try JSONDecoder().decode(TraeCheckinResponse.self, from: Data(json.utf8))
-        XCTAssertEqual(r.code, 0)
-        XCTAssertEqual(r.checked_in, true)
-        XCTAssertEqual(r.enable, true)
-        XCTAssertEqual((r.credits ?? 0) + (r.extra_credits ?? 0), 200)
     }
 
     // MARK: 凭据变更（换账号）：旧账号态必须整体重置

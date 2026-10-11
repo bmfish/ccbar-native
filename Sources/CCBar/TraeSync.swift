@@ -23,10 +23,6 @@ enum TraeAPI {
     static let tokenPath = "/cloudide/api/v3/common/GetUserToken"
     static let usagePath = "/trae/api/v1/pay/query_user_usage_group_by_session"
     static let entUsagePath = "/trae/api/v2/pay/ide_user_ent_usage"
-    static let checkinStatusPath = "/trae/api/v2/ug/checkin_credits/status"
-    static let checkinClaimPath = "/trae/api/v2/ug/checkin_credits/claim"
-    /// 签到接口设备头 x-app-version 对齐的客户端版本（Trae CN 3.4.2，2026-10 抓取）
-    static let clientAppVersion = "3.4.2"
 
     /// 拉取窗口：首次 90 天全量回填，之后水位 - 2 天回看
     static let firstFetchDays = 90
@@ -118,18 +114,6 @@ struct TraeUsageSummary: Decodable {
     let total_amount: Double?
 }
 
-/// 签到 status/claim 共用的响应结构（官方 JSON 字段名）
-struct TraeCheckinResponse: Decodable {
-    let code: Int?
-    let message: String?
-    let enable: Bool?
-    let checked_in: Bool?
-    let credits: Double?
-    let extra_credits: Double?
-}
-
-// MARK: - 每日签到（100 积分 + 会员加成）
-
 // MARK: - 同步引擎（纯函数式：网络 + 解析，不碰存储）
 
 enum TraeSync {
@@ -198,139 +182,6 @@ enum TraeSync {
         case success([TraeRow])
         case authExpired
         case failed(String)
-    }
-
-    // MARK: 每日签到
-
-    enum TraeCheckinOutcome: Equatable, Error {
-        case claimed(credits: Double)   // 签到成功（本次到账积分 = 基础 + 会员加成）
-        case already                    // 今天已签过
-        case disabled                   // 账号未开启签到
-        case notConfigured
-        case authExpired
-        case failed(String)
-    }
-
-    enum CheckinPlan: Equatable {
-        case claim, already, disabled
-    }
-
-    /// 纯决策：enable=false 不参与；checked_in=true 已签；其余尝试领取
-    static func checkinPlan(enable: Bool?, checkedIn: Bool?) -> CheckinPlan {
-        if enable == false { return .disabled }
-        if checkedIn == true { return .already }
-        return .claim
-    }
-
-    /// 每日签到：先查状态，未签则领取。JWT 失效自动强制换签重试一次（与 run 同套路）。
-    /// 2026-10 起服务端对签到接口校验客户端设备头（从 Trae 客户端 main.js 的 fb() 复刻），
-    /// 缺失会被 1001 拒绝——deviceId 由调用方持久化（meta trae_device_id）保证稳定。
-    static func checkin(passportCookie: String, auth: TraeAuth, deviceId: String = "") -> (outcome: TraeCheckinOutcome, auth: TraeAuth) {
-        var auth = auth
-        guard !passportCookie.isEmpty else { return (.notConfigured, auth) }
-
-        var jwt = ""
-        switch ensureJWT(passportCookie: passportCookie, auth: &auth) {
-        case .success(let token): jwt = token
-        case .notConfigured: return (.notConfigured, auth)
-        case .authExpired: return (.authExpired, auth)
-        case .failed(let msg): return (.failed(msg), auth)
-        }
-
-        // 1. 查签到状态（客户端对 status 也带 req_source；1001 → 强制换签重试一次）
-        let status: TraeCheckinResponse
-        switch checkinWithRetry(path: TraeAPI.checkinStatusPath, body: "{\"req_source\":1}",
-                                passportCookie: passportCookie, auth: &auth, jwt: &jwt,
-                                deviceId: deviceId) {
-        case .success(let r): status = r
-        case .failure(let o): return (o, auth)
-        }
-        switch checkinPlan(enable: status.enable, checkedIn: status.checked_in) {
-        case .already: return (.already, auth)
-        case .disabled: return (.disabled, auth)
-        case .claim: break
-        }
-
-        // 2. 领取（官方客户端同样带 req_source）
-        switch checkinWithRetry(path: TraeAPI.checkinClaimPath, body: "{\"req_source\":1}",
-                                passportCookie: passportCookie, auth: &auth, jwt: &jwt,
-                                deviceId: deviceId) {
-        case .success(let r):
-            if let code = r.code, code != 0 {
-                return (.failed("签到失败 code \(code)\(r.message.map { "：\($0)" } ?? "")"), auth)
-            }
-            return (.claimed(credits: (r.credits ?? 0) + (r.extra_credits ?? 0)), auth)
-        case .failure(let o): return (o, auth)
-        }
-    }
-
-    /// 带一次强制换签重试的签到请求（status 与 claim 共用）
-    private static func checkinWithRetry(path: String, body: String,
-                                         passportCookie: String, auth: inout TraeAuth,
-                                         jwt: inout String,
-                                         deviceId: String = "") -> Result<TraeCheckinResponse, TraeCheckinOutcome> {
-        func call(_ token: String) -> Result<TraeCheckinResponse, TraeCheckinOutcome> {
-            switch checkinCall(path: path, jwt: token, body: body, deviceId: deviceId) {
-            case .success(let r): return .success(r)
-            case .authExpired: return .failure(.authExpired)
-            case .failed(let m): return .failure(.failed(m))
-            }
-        }
-        switch call(jwt) {
-        case .success(let r):
-            return .success(r)
-        case .failure(.authExpired):
-            auth.jwt = ""
-            auth.jwtExp = 0
-            switch ensureJWT(passportCookie: passportCookie, auth: &auth) {
-            case .success(let fresh):
-                jwt = fresh
-                return call(fresh)
-            case .notConfigured, .authExpired: return .failure(.authExpired)
-            case .failed(let m): return .failure(.failed(m))
-            }
-        case .failure(let other):
-            return .failure(other)
-        }
-    }
-
-    private enum CheckinHTTPOutcome {
-        case success(TraeCheckinResponse)
-        case authExpired
-        case failed(String)
-    }
-
-    /// 签到接口设备头，逐项对齐 Trae 客户端 main.js 的 fb()：
-    /// x-device-id / x-device-brand / x-device-type / x-os-version / x-app-version。
-    /// 2026-10 起服务端校验这些头，缺失返回 1001 + enable:false。
-    static func checkinExtraHeaders(deviceId: String) -> [String: String] {
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        var model = "Mac"
-        var name: [CChar] = Array(repeating: 0, count: 128)
-        var size = name.count
-        var mib: [Int32] = [CTL_HW, HW_MODEL]
-        if sysctl(&mib, 2, &name, &size, nil, 0) == 0 {
-            let s = String(cString: name)
-            if !s.isEmpty { model = s }
-        }
-        return [
-            "x-device-id": deviceId,
-            "x-device-brand": model,
-            "x-device-type": "macos",
-            "x-os-version": "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)",
-            "x-app-version": TraeAPI.clientAppVersion,
-        ]
-    }
-
-    private static func checkinCall(path: String, jwt: String, body: String, deviceId: String = "") -> CheckinHTTPOutcome {
-        let r = post(url: TraeAPI.base + path, auth: "Cloud-IDE-JWT \(jwt)", body: body,
-                     extraHeaders: checkinExtraHeaders(deviceId: deviceId))
-        guard let data = r.data else { return .failed(r.error ?? "无响应") }
-        guard let resp = try? JSONDecoder().decode(TraeCheckinResponse.self, from: data) else {
-            return .failed("签到响应解析失败")
-        }
-        if let code = resp.code, code == 1001 { return .authExpired }
-        return .success(resp)
     }
 
     /// 分页拉取会话明细。错误码：1001 = JWT/会话失效；9004 = 参数不合法；成功响应没有 code 字段。

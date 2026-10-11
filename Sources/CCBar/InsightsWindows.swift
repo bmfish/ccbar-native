@@ -1189,9 +1189,6 @@ struct SharePage: View {
                     Button(weeklyCopied ? L("已复制到剪贴板") : L("复制到剪贴板")) {
                         copyPNG(ShareCardRenderer.image(weekly, width: 460)) { weeklyCopied = $0 }
                     }
-                    Text(L("每周一自动生成到周报目录 🗓"))
-                        .font(.system(size: 11))
-                        .foregroundColor(Color(nsColor: Design.textMuted))
                 }
             }
             .frame(maxWidth: .infinity)
@@ -1281,10 +1278,7 @@ func weeklyShareCard(dateRange: String, total: Int64, reqs: Int, peak: Int64, tr
         ])
 }
 
-/// 周报自动生成
-
-/// 每周一自动生成上周（周一 ~ 周日）用量周报 PNG，存到 ~/Documents/CCBar 周报/。
-/// 幂等键 = 报告周的周一日期（lastWeeklyReportWeek），同周重复触发不重复生成。
+/// 周报窗口与目录（洞察页周报卡取数、历史 PNG 目录用；自动生成已移除）
 enum WeeklyReport {
     /// 最近一个完整周（上周一 ~ 上周日）的 daysAgo 窗口（均含，不含今日实时）
     static func lastWeekWindow(now: Date = Date()) -> (from: Int, to: Int) {
@@ -1299,58 +1293,6 @@ enum WeeklyReport {
             .appendingPathComponent("CCBar 周报", isDirectory: true)
     }
 
-    /// 报告标识 = 上一个完整周后面的那个周一（也是文件名日期），一周内任何一天补生成同一个文件
-    static func reportKey(now: Date = Date()) -> String {
-        let w = lastWeekWindow(now: now)
-        return StatsStore.dayString(fromEpoch: StatsStore.localMidnight(w.to - 1, now: now))
-    }
-
-    /// 生成"上一个完整周"的周报。周一例行出报；其余日子用来补账——周一没开机也不会错过。
-    /// 幂等：周报文件已存在即跳过，删掉文件可在下次启动重新生成。
-    @MainActor
-    @discardableResult
-    static func generateIfNeeded(store: StatsStore, now: Date = Date()) -> String? {
-        if let app = AppDelegate.shared, !app.settings.autoWeeklyReport { return nil }
-
-        let w = lastWeekWindow(now: now)
-        let dir = directoryURL()
-        let url = dir.appendingPathComponent("ccbar-weekly-\(reportKey(now: now)).png")
-        guard !FileManager.default.fileExists(atPath: url.path) else { return nil }
-
-        guard let stats = store.queryWindowStats(daysAgoFrom: w.from, daysAgoTo: w.to),
-              stats.total > 0 else { return nil }   // 该周无数据；查询很便宜，不记账下次再试
-        let daily = store.queryDailyTokensBetween(daysAgoFrom: w.from, daysAgoTo: w.to)
-        let peakToken = daily.map(\.token).max() ?? 0
-
-        let dateFmt = DateFormatter(); dateFmt.dateStyle = .medium; dateFmt.timeStyle = .none
-        let from = Calendar.current.date(byAdding: .day, value: -w.from, to: Calendar.current.startOfDay(for: now))!
-        let to = Calendar.current.date(byAdding: .day, value: -w.to, to: Calendar.current.startOfDay(for: now))!
-
-        let card = weeklyShareCard(
-            dateRange: "\(dateFmt.string(from: from)) ~ \(dateFmt.string(from: to))",
-            total: stats.total, reqs: stats.reqs, peak: peakToken,
-            trend: daily.map { ChartEntry(label: String($0.date.suffix(5)), value: $0.token) })
-
-        guard let png = ShareCardRenderer.pngData(card, width: 460) else {
-            NSLog("[weekly] 周报渲染失败")
-            return nil
-        }
-
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        do {
-            try png.write(to: url)
-            NSLog("[weekly] 周报已生成 \(url.path)")
-            AppDelegate.shared?.sendNotification(
-                title: L("上周周报已生成"),
-                body: L("已存到 CCBar 周报目录，点击打开洞察中心查看"),
-                identifier: "ccbar.weekly",
-                category: "CCBAR_WEEKLY")
-            return url.path
-        } catch {
-            NSLog("[weekly] 周报写入失败 \(error)")
-            return nil
-        }
-    }
 }
 
 // MARK: - 渠道页

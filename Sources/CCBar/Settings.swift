@@ -107,12 +107,6 @@ class Settings {
         set { defaults.set(newValue, forKey: "popoverWide") }
     }
 
-    /// 自动生成用量周报（每周出到 ~/Documents/CCBar 周报/）
-    var autoWeeklyReport: Bool {
-        get { defaults.object(forKey: "autoWeeklyReport") as? Bool ?? true }
-        set { defaults.set(newValue, forKey: "autoWeeklyReport") }
-    }
-
     /// 月度费用预算（美元），0 = 关闭预算显示
     var monthlyBudgetUsd: Double {
         get { defaults.double(forKey: "monthlyBudgetUsd") }

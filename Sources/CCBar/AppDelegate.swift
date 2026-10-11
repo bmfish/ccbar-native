@@ -122,9 +122,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             }
         }
 
-        // 每周一生成上周用量周报（幂等键 = 周一日期，静默）；卡片渲染需回主线程
-        Task { @MainActor in WeeklyReport.generateIfNeeded(store: store) }
-
         if let last = defaults.object(forKey: "lastUpdateCheckDate") as? Date,
            Date().timeIntervalSince(last) < 3 * 24 * 3600 {
             return
@@ -448,7 +445,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         traeQueue.async { [weak self] in
             guard let self else { return }
             self.store.syncTraeIfNeeded(interactive: interactive)
-            self.notifyCheckin(self.store.traeCheckinIfNeeded(interactive: interactive))
             guard interactive else { return }
             self.queryQueue.async { [weak self] in
                 guard let self else { return }
@@ -592,11 +588,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                 print("[ccBar] 用户未授权通知，用量预警/里程碑将不弹系统通知")
             }
         }
-        // 周报通知的「打开周报目录」按钮
-        let openFolder = UNNotificationAction(identifier: "OPEN_WEEKLY_FOLDER", title: L("打开周报目录"))
-        center.setNotificationCategories([
-            UNNotificationCategory(identifier: "CCBAR_WEEKLY", actions: [openFolder], intentIdentifiers: [])
-        ])
     }
 
     func sendNotification(title: String, body: String, identifier: String = "ccbar.notice", category: String? = nil) {
@@ -612,32 +603,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
     }
 
-    /// Trae 每日签到结果 → 系统通知（只有"签到成功"才打扰，已签/失败静默）
-    func notifyCheckin(_ outcome: TraeSync.TraeCheckinOutcome?) {
-        guard case .claimed(let credits)? = outcome else { return }
-        let amount = credits > 0 ? "今日 +\(Int(credits)) 积分" : "今日积分已到账"
-        sendNotification(title: "Trae 签到成功", body: amount, identifier: "ccbar.checkin")
-    }
-
     /// 点击通知：预警 → 打开设置调阈值；里程碑 → 打开面板
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let id = response.notification.request.identifier
-        let action = response.actionIdentifier
         DispatchQueue.main.async { [weak self] in
-            // 周报通知上的「打开周报目录」按钮
-            if action == "OPEN_WEEKLY_FOLDER" {
-                let dir = WeeklyReport.directoryURL()
-                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                NSWorkspace.shared.open(dir)
-                completionHandler()
-                return
-            }
             if id.hasPrefix("ccbar.warning") {
                 self?.openSettings()
-            } else if id.hasPrefix("ccbar.weekly") {
-                self?.openInsights()
             } else {
                 self?.showPopover()
             }
