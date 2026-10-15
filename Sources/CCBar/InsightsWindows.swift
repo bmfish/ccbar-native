@@ -176,14 +176,37 @@ final class InsightsViewModel: ObservableObject {
     @Published var weeklyReqs: Int = 0
     @Published var weeklyPeak: Int64 = 0
     @Published var weeklyTrend: [ChartEntry] = []
+    // 今日用量 HUD（Touch Bar 切页 / 窗口打开时弹出）
+    @Published var hudVisible = false
+    @Published var hudTokens: Int64 = 0
+    @Published var hudReqs: Int = 0
+    @Published var hudCredits: Double = 0
 
     private var loaded = false
+    private var hudTask: Task<Void, Never>?
 
     /// 全量加载（查询都是索引区间扫描，实测 < 20ms，一次全查省得各页互相清数据）。
     /// 曾按页懒加载 + apply 全量覆盖，后加载的页面会把先加载的清零——勿改回。
     func load(force: Bool = false) {
         guard let store = AppDelegate.shared?.store else { return }
+        if let t = store.queryDayStats(days: 0) {
+            hudTokens = t.total
+            hudReqs = t.reqs
+        }
+        hudCredits = store.queryTodayCredits()
         load(store: store, force: force)
+        showHud()
+    }
+
+    /// 弹出今日用量 HUD：弹簧入场，2 秒后淡出（重复触发会重置计时）
+    func showHud() {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.72)) { hudVisible = true }
+        hudTask?.cancel()
+        hudTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_400_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.4)) { self?.hudVisible = false }
+        }
     }
 
     /// 测试/预览注入 store 的版本
@@ -487,6 +510,15 @@ struct InsightsRootView: View {
         }
         .frame(minWidth: 720, minHeight: 480)
         .onAppear { vm.load() }
+        // Touch Bar 切页（写 insightsLastPage）时也弹今日用量
+        .onChange(of: pageRaw) { _ in vm.showHud() }
+        .overlay(alignment: .top) {
+            if vm.hudVisible {
+                TodayUsageHud(tokens: vm.hudTokens, reqs: vm.hudReqs, credits: vm.hudCredits)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .padding(.top, 14)
+            }
+        }
     }
 
     @ViewBuilder
@@ -1915,5 +1947,45 @@ private struct InsightsTouchBarNav: View {
             }
         }
         .frame(width: 380, height: 30)
+    }
+}
+
+// MARK: - 今日用量 HUD（切页 / 窗口打开时从顶部弹出，停留约 2 秒淡出）
+
+private struct TodayUsageHud: View {
+    let tokens: Int64
+    let reqs: Int
+    let credits: Double
+
+    var body: some View {
+        HStack(spacing: 18) {
+            Image(systemName: "bolt.horizontal.fill")
+                .font(.system(size: 15))
+                .foregroundColor(Color(nsColor: Theme.current.accent))
+            hudItem(L("今日用量"), Design.formatTokens(tokens))
+            hudItem(L("请求数"), "\(reqs)")
+            if credits > 0 {
+                hudItem(L("积分"), String(format: "%.1f", credits))
+            }
+        }
+        .padding(.vertical, 9)
+        .padding(.horizontal, 18)
+        .background(
+            RoundedRectangle(cornerRadius: 11)
+                .fill(.ultraThinMaterial)
+                .overlay(RoundedRectangle(cornerRadius: 11)
+                    .fill(Color(nsColor: Design.backgroundDark).opacity(0.72)))
+                .overlay(RoundedRectangle(cornerRadius: 11)
+                    .strokeBorder(Color(nsColor: Design.cardBorderDark), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+        )
+    }
+
+    private func hudItem(_ title: String, _ value: String) -> some View {
+        HStack(spacing: 6) {
+            Text(title).font(.system(size: 11)).foregroundColor(Color(nsColor: Design.textMuted))
+            Text(value).font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundColor(Color(nsColor: Design.textPrimary))
+        }
     }
 }
