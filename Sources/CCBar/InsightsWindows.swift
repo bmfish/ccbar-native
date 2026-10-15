@@ -1871,3 +1871,49 @@ class InsightsWindowController: NSWindowController {
         vm.load(force: true)
     }
 }
+
+// MARK: - Touch Bar：洞察中心六页导航器（普通 NSWindow 上渲染，popover 窗口不支持）
+
+extension InsightsWindowController: NSTouchBarDelegate {
+    static let navID = NSTouchBarItem.Identifier("ccbar.touchbar.nav")
+
+    override open func makeTouchBar() -> NSTouchBar? {
+        let bar = NSTouchBar()
+        bar.delegate = self
+        bar.defaultItemIdentifiers = [Self.navID]
+        return bar
+    }
+
+    func touchBar(_ touchBar: NSTouchBar, makeItemForIdentifier identifier: NSTouchBarItem.Identifier) -> NSTouchBarItem? {
+        guard identifier == Self.navID else { return nil }
+        let item = NSCustomTouchBarItem(identifier: identifier)
+        let host = NSHostingView(rootView: InsightsTouchBarNav())
+        host.frame = NSRect(x: 0, y: 0, width: 380, height: 30)   // 固定尺寸：intrinsic 提案在 Touch Bar 环境可能为 0
+        item.view = host
+        return item
+    }
+}
+
+/// 六页一键切换：写入 insightsLastPage，洞察窗口的 @AppStorage 即时响应切页
+private struct InsightsTouchBarNav: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(InsightsPage.allCases) { page in
+                Button {
+                    UserDefaults.standard.set(page.rawValue, forKey: "insightsLastPage")
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: page.icon).font(.system(size: 14))
+                        Text(page.rawValue).font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundColor(Color(nsColor: Design.textPrimary))
+                    .frame(width: 52, height: 26)
+                    .background(RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(nsColor: Design.cardFillDark)))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(width: 380, height: 30)
+    }
+}
