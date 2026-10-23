@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 import SQLite3
 @testable import CCBar
 
@@ -11,7 +12,7 @@ import SQLite3
 final class SettingsViewModelTests: XCTestCase {
     private var suiteName: String!
     private var defaults: UserDefaults!
-    private var settings: Settings!
+    private var settings: CCBar.Settings!
     private var savedCount = 0
     private var alerts: [(String, String)] = []
     private var launchChanges: [Bool] = []
@@ -23,7 +24,7 @@ final class SettingsViewModelTests: XCTestCase {
         UserDefaults.standard.set("zh", forKey: "appLanguage")
         suiteName = "ccbar.settings.tests.\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
-        settings = Settings(defaults: defaults)
+        settings = CCBar.Settings(defaults: defaults)
         savedCount = 0
         alerts = []
         launchChanges = []
@@ -159,5 +160,32 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertEqual(SettingsViewModel.validateDB(path: dir + "/missing.db",
                                                     requiredTables: CCSwitchAdapter().requiredTables),
                        "打不开（被占用或损坏）")
+    }
+
+    /// 设置页离屏渲染：分区卡片布局目检（输出 /tmp/settings-render.png）
+    func testSettingsRender() throws {
+        let vm = makeViewModel()
+        vm.sources = [
+            SourceRowDraft(id: "cc-switch", name: "cc-switch",
+                           defaultPath: "/Users/me/.cc-switch/cc-switch.db", enabled: true, path: ""),
+            SourceRowDraft(id: "zcode", name: "ZCode",
+                           defaultPath: "/Users/me/.zcode/zcode.db", enabled: true, path: ""),
+            SourceRowDraft(id: "trae", name: "Trae", defaultPath: "", enabled: true,
+                           path: "", credential: "", isHTTP: true),
+        ]
+        vm.lastBackupDate = "2026/10/23 21:30"
+        vm.traeCredits = (6508.16, 9600)
+        let v = NSHostingView(rootView: SettingsRootView(vm: vm).frame(width: 640, height: 760))
+        v.frame = NSRect(x: 0, y: 0, width: 640, height: 760)
+        v.layoutSubtreeIfNeeded()
+        guard let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds),
+              let data = {
+                  v.cacheDisplay(in: v.bounds, to: rep)
+                  return rep.representation(using: .png, properties: [:])
+              }() else {
+            return XCTFail("设置页渲染失败")
+        }
+        XCTAssertGreaterThan(data.count, 5000, "渲染出的 PNG 太小，疑似空白")
+        try data.write(to: URL(fileURLWithPath: "/tmp/settings-render.png"))
     }
 }

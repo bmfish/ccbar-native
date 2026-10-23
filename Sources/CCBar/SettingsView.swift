@@ -44,6 +44,8 @@ final class SettingsViewModel: ObservableObject {
     @Published var lastBackupDate = ""
     /// Trae "立即同步"进行中（按钮禁用防连点）
     @Published var traeSyncing = false
+    /// Trae 官方积分账单（已用 / 总额），数据源卡片底部展示
+    @Published var traeCredits: (consumed: Double, total: Double)?
 
     let settings: Settings
     let onSaved: () -> Void
@@ -111,12 +113,14 @@ final class SettingsViewModel: ObservableObject {
     /// 数据源连接状态（来自 StatsStore 的诊断信息）
     func refreshSourceStatus() {
         let statuses = AppDelegate.shared?.store.sourceStatus ?? [:]
+        var credits: (consumed: Double, total: Double)?
         for i in sources.indices {
             let raw = statuses[sources[i].id] ?? ""
             var s = L(raw)
             // Trae 附加官方积分账单（已连接时）
             if sources[i].isHTTP, raw.contains("已连接"),
                let ent = AppDelegate.shared?.store.traeEntSummary() {
+                credits = (ent.consumed, ent.total)
                 s += String(format: L(" · 积分 %@/%@"), Self.fmtCredits(ent.consumed), Self.fmtCredits(ent.total))
             }
             sources[i].statusText = s
@@ -128,6 +132,7 @@ final class SettingsViewModel: ObservableObject {
                 sources[i].statusKind = .warn
             }
         }
+        traeCredits = credits
     }
 
     /// 积分显示：整数不带小数点，小数保留两位
@@ -444,6 +449,7 @@ final class SettingsViewModel: ObservableObject {
 
 struct SettingsRootView: View {
     @ObservedObject var vm: SettingsViewModel
+    @State private var dirty = false
 
     var body: some View {
         ZStack {
@@ -451,10 +457,17 @@ struct SettingsRootView: View {
             Rectangle().fill(Color(nsColor: Design.backgroundDark).opacity(0.8))
             VStack(spacing: 0) {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) { content }
-                        .padding(.horizontal, 20)
-                        .padding(.top, 16)
-                        .padding(.bottom, 12)
+                    VStack(alignment: .leading, spacing: 12) {
+                        header
+                        appearanceCard
+                        sourcesCard
+                        refreshCard
+                        behaviorCard
+                        dataCard
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.top, 14)
+                    .padding(.bottom, 14)
                 }
                 Rectangle().fill(Color(nsColor: Design.separatorColor)).frame(height: 1)
                 buttonBar
@@ -463,301 +476,445 @@ struct SettingsRootView: View {
                 ScanlineShape().allowsHitTesting(false)
             }
         }
-        .frame(minWidth: 440, minHeight: 420)
+        .frame(minWidth: 560, minHeight: 520)
+        .onReceive(vm.objectWillChange) { _ in
+            if !dirty { DispatchQueue.main.async { dirty = true } }
+        }
     }
 
-    @ViewBuilder
-    private var content: some View {
-        // 标题
-        HStack(spacing: 8) {
-            Image(systemName: "gearshape.fill")
-                .foregroundColor(Color(nsColor: Design.brandColor))
-                .frame(width: 20, height: 20)
-            Text(L("设置"))
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundColor(Color(nsColor: Design.textPrimary))
-        }
-        .frame(height: 24)
+    // MARK: 页头
 
-        sep
-
-        // 主题选择（+ JSON 主题包导入/导出，方便分享）
-        HStack(spacing: 6) {
-            Image(systemName: "paintpalette")
-                .foregroundColor(Color(nsColor: Design.brandColor))
-                .frame(width: 16, height: 16)
-            labelText(L("主题风格"))
-            Circle()
-                .fill(Color(nsColor: vm.theme.accent))
-                .frame(width: 8, height: 8)
-            Picker("", selection: $vm.theme) {
-                ForEach(Theme.allThemes) { theme in
-                    Text(theme.displayName).tag(theme)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 140)
-            Button(L("导入")) { vm.importTheme() }
-                .font(.system(size: 11))
-            Button(L("导出")) { vm.exportTheme() }
-                .font(.system(size: 11))
-            if vm.themeIsCustom {
-                Button(L("重命名")) { vm.renameTheme() }
-                    .font(.system(size: 11))
-                Button(L("删除")) { vm.deleteTheme() }
-                    .font(.system(size: 11))
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L("设置"))
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(Color(nsColor: Design.textPrimary))
+                Text(L("改动需点击保存后生效"))
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(nsColor: Design.textMuted))
             }
             Spacer()
         }
-        .frame(height: 24)
-
-        settingRow(icon: "arrow.clockwise", label: L("刷新间隔"),
-                   text: $vm.refreshIntervalText, unit: L("秒"), hint: "5 ~ 3000")
-
-        // 数据源（每源一行：启用勾选 + 路径 + 浏览）
-        Text(L("数据源"))
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundColor(Color(nsColor: Design.textMuted))
-        ForEach($vm.sources) { $row in
-            sourceRow($row)
-        }
-
-        settingRow(icon: "exclamationmark.triangle", label: L("预警阈值"),
-                   text: $vm.warningThresholdText, unit: L("万"), hint: L("超出时通知"))
-        settingRow(icon: "bell.badge", label: L("通知间隔"),
-                   text: $vm.notifyIntervalText, unit: L("万"), hint: L("每累计N万通知，0=关闭"))
-
-        // 界面语言（重启后生效）
-        HStack(spacing: 6) {
-            Image(systemName: "globe")
-                .foregroundColor(Color(nsColor: Design.textSecondary))
-                .frame(width: 16, height: 16)
-            labelText(L("界面语言"))
-            Picker("", selection: $vm.language) {
-                ForEach(AppLanguage.allCases, id: \.self) { lang in
-                    Text(lang.displayName).tag(lang)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 120)
-            Text(L("重启后生效"))
-                .font(.system(size: 11))
-                .foregroundColor(Color(nsColor: Design.textMuted))
-            Spacer()
-        }
-        .frame(height: 24)
-        settingRow(icon: "bolt.badge.automatic", label: L("红色门槛"),
-                   text: $vm.ledThresholdText, unit: L("万"), hint: L("单次刷新增量达到变红，0=不变红"))
-
-        settingRow(icon: "dollarsign.circle", label: L("月度预算"),
-                   text: $vm.budgetText, unit: "$", hint: L("月费用预算，0=关闭；费用页显示进度与预算线"))
-
-        settingRow(icon: "banknote", label: L("默认单价"),
-                   text: $vm.priceText, unit: "$/M", hint: L("未计费渠道（ZCode 等）按此单价折算，0=关闭"))
-
-        sep
-
-        Toggle(L("启用用量预警"), isOn: $vm.warningEnabled)
-        Toggle(L("开机自动启动"), isOn: $vm.launchAtLogin)
-        Toggle(L("菜单栏动画伴侣（小猫随用量跑动）"), isOn: $vm.menuPetEnabled)
-        Toggle(L("菜单栏表情分级（🙂→🥵）"), isOn: $vm.menuEmojiEnabled)
-        Toggle(L("宽版弹窗（380pt）"), isOn: $vm.popoverWide)
-
-        // 自动备份状态（每天首次启动静默备份，滚动保留 7 份）
-        HStack(spacing: 6) {
-            Text(String(format: L("上次自动备份：%@"), vm.lastBackupDate))
-                .font(.system(size: 11))
-                .foregroundColor(Color(nsColor: Design.textMuted))
-            Spacer()
-            Button(L("打开备份目录")) { vm.openBackupFolder() }
-                .font(.system(size: 11))
-        }
-
-        // 数据迁移（明细 CSV，导入幂等：主键去重，重复导零新增）
-        HStack(spacing: 6) {
-            Text(L("数据迁移（明细 CSV）"))
-                .font(.system(size: 11))
-                .foregroundColor(Color(nsColor: Design.textMuted))
-            Spacer()
-            Button(L("导入 CSV")) { vm.importData() }
-                .font(.system(size: 11))
-            Button(L("导出 CSV")) { vm.exportData() }
-                .font(.system(size: 11))
-        }
-
-        // 多机合并（另一台机器的 ccbar.db 整库导入，主键去重）
-        HStack(spacing: 6) {
-            Text(L("多机合并（导入另一台机器的统计库）"))
-                .font(.system(size: 11))
-                .foregroundColor(Color(nsColor: Design.textMuted))
-            Spacer()
-            Button(L("合并数据库…")) { vm.mergeDatabase() }
-                .font(.system(size: 11))
-        }
-
-        sep
     }
 
-    private var sep: some View {
+    // MARK: 外观
+
+    private var appearanceCard: some View {
+        section(L("外观")) {
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    rowLabel(L("主题风格"))
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(Theme.allThemes) { themeChip($0) }
+                        }
+                    }
+                    .frame(height: 26)
+                    Menu {
+                        Button(L("导入")) { vm.importTheme() }
+                        Button(L("导出")) { vm.exportTheme() }
+                        if vm.themeIsCustom {
+                            Button(L("重命名")) { vm.renameTheme() }
+                            Button(L("删除")) { vm.deleteTheme() }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.system(size: 13))
+                            .foregroundColor(Color(nsColor: Design.textSecondary))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                }
+                .frame(height: 32)
+                rowDivider
+                HStack(spacing: 8) {
+                    rowLabel(L("界面语言"))
+                    Picker("", selection: $vm.language) {
+                        ForEach(AppLanguage.allCases, id: \.self) { lang in
+                            Text(lang.displayName).tag(lang)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 110)
+                    Text(L("重启后生效"))
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                    Spacer(minLength: 0)
+                }
+                .frame(height: 32)
+                rowDivider
+                HStack(spacing: 8) {
+                    rowLabel(L("宽版弹窗"))
+                    Toggle("", isOn: $vm.popoverWide)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .tint(Color(nsColor: Design.successColor))
+                    Text(L("380pt · 菜单栏弹窗展开宽度"))
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                    Spacer(minLength: 0)
+                }
+                .frame(height: 32)
+            }
+        }
+    }
+
+    // MARK: 数据源
+
+    private var sourcesCard: some View {
+        let connected = vm.sources.filter { $0.statusKind == .ok }.count
+        return section(L("数据源"), trailing: String(format: L("%d 个已连接"), connected)) {
+            VStack(spacing: 0) {
+                ForEach($vm.sources) { $row in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(statusColor(row.statusKind))
+                                .frame(width: 6, height: 6)
+                            Toggle("", isOn: $row.enabled)
+                                .toggleStyle(.checkbox)
+                                .labelsHidden()
+                                .controlSize(.mini)
+                            Text(row.name)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(Color(nsColor: Design.textPrimary))
+                                .frame(width: 74, alignment: .leading)
+                            if row.isHTTP {
+                                pathField($row.credential,
+                                          placeholder: L("粘贴 trae.cn 登录后的 sessionid cookie 值")) {
+                                    vm.validateSource(id: row.id)
+                                }
+                                .help(L("在浏览器登录 trae.cn 后，从 DevTools 的 Cookie 里复制 sessionid 的值"))
+                                pillButton(vm.traeSyncing ? L("同步中…") : L("立即同步"),
+                                            disabled: vm.traeSyncing || row.credential.isEmpty) {
+                                    vm.syncTraeNow()
+                                }
+                            } else {
+                                pathField($row.path, placeholder: row.defaultPath) {
+                                    vm.validateSource(id: row.id)
+                                }
+                                .help(row.path.isEmpty ? row.defaultPath : row.path)
+                                pillButton(L("浏览")) { vm.browseSource(id: row.id) }
+                            }
+                        }
+                        if !row.statusText.isEmpty {
+                            Text(row.statusText)
+                                .font(.system(size: 9))
+                                .foregroundColor(statusColor(row.statusKind))
+                                .lineLimit(1)
+                                .padding(.leading, 14)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                    if row.id != vm.sources.last?.id {
+                        rowDivider
+                    }
+                }
+                if let cr = vm.traeCredits {
+                    creditsFooter(cr)
+                }
+            }
+        }
+    }
+
+    private func creditsFooter(_ cr: (consumed: Double, total: Double)) -> some View {
+        let pct = cr.total > 0 ? min(cr.consumed / cr.total, 1) : 0
+        return VStack(spacing: 6) {
+            rowDivider
+            HStack(spacing: 8) {
+                Text(L("积分"))
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+                    .frame(width: 24, alignment: .leading)
+                Text("\(SettingsViewModel.fmtCredits(cr.consumed)) / \(SettingsViewModel.fmtCredits(cr.total))")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(Color(nsColor: Design.textSecondary))
+                    .fixedSize()
+                progressBar(pct)
+                Text(String(format: "%.0f%%", pct * 100))
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(Color(nsColor: Design.successColor))
+                    .fixedSize()
+            }
+        }
+        .padding(.top, 6)
+    }
+
+    // MARK: 刷新与预警
+
+    private var refreshCard: some View {
+        section(L("刷新与预警")) {
+            VStack(spacing: 0) {
+                kvRow(L("刷新间隔"), $vm.refreshIntervalText, L("秒"), "5 ~ 3000")
+                rowDivider
+                kvRow(L("预警阈值"), $vm.warningThresholdText, L("万"), L("超出时通知"))
+                rowDivider
+                kvRow(L("通知间隔"), $vm.notifyIntervalText, L("万"), L("每累计N万通知，0=关闭"))
+                rowDivider
+                kvRow(L("红色门槛"), $vm.ledThresholdText, L("万"), L("单次刷新增量达到变红，0=不变红"))
+                rowDivider
+                kvRow(L("月度预算"), $vm.budgetText, "$", L("月费用预算，0=关闭；费用页显示进度与预算线"))
+                rowDivider
+                kvRow(L("默认单价"), $vm.priceText, "$/M", L("未计费渠道（ZCode 等）按此单价折算，0=关闭"))
+            }
+        }
+    }
+
+    // MARK: 行为
+
+    private var behaviorCard: some View {
+        section(L("行为")) {
+            LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading),
+                                GridItem(.flexible(), alignment: .leading)], spacing: 12) {
+                toggleCell(L("启用用量预警"), $vm.warningEnabled)
+                toggleCell(L("开机自动启动"), $vm.launchAtLogin)
+                toggleCell(L("菜单栏动画伴侣（小猫随用量跑动）"), $vm.menuPetEnabled)
+                toggleCell(L("菜单栏表情分级（🙂→🥵）"), $vm.menuEmojiEnabled)
+            }
+        }
+    }
+
+    // MARK: 数据与备份
+
+    private var dataCard: some View {
+        section(L("数据与备份")) {
+            VStack(spacing: 0) {
+                infoRow(L("自动备份"),
+                        detail: String(format: L("上次备份 %@"), vm.lastBackupDate.isEmpty ? "-" : vm.lastBackupDate)
+                            + " · " + L("每日自动")) {
+                    pillButton(L("打开目录")) { vm.openBackupFolder() }
+                }
+                rowDivider
+                infoRow(L("明细迁移"), detail: L("以 CSV 导入 / 导出逐条记录")) {
+                    pillButton(L("导入 CSV")) { vm.importData() }
+                    pillButton(L("导出 CSV")) { vm.exportData() }
+                }
+                rowDivider
+                infoRow(L("多机合并"), detail: L("导入另一台机器的统计库并去重")) {
+                    pillButton(L("选择数据库")) { vm.mergeDatabase() }
+                }
+            }
+        }
+    }
+
+    // MARK: 小组件
+
+    private func section<Content: View>(_ title: String, trailing: String? = nil,
+                                        @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Color(nsColor: Design.textSecondary))
+                Spacer()
+                if let trailing {
+                    Text(trailing)
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(nsColor: Design.successColor))
+                }
+            }
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10)
+            .fill(Color(nsColor: Design.cardFillDark)))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .stroke(Color(nsColor: Design.cardBorderDark)))
+    }
+
+    private var rowDivider: some View {
         Rectangle()
-            .fill(Color(nsColor: Design.separatorColor))
+            .fill(Color(nsColor: Design.separatorColor).opacity(0.5))
             .frame(height: 1)
     }
 
-    private func labelText(_ s: String) -> some View {
+    private func rowLabel(_ s: String) -> some View {
         Text(s)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundColor(Color(nsColor: Design.textPrimary))
-            .frame(width: 70, alignment: .leading)
+            .font(.system(size: 11))
+            .foregroundColor(Color(nsColor: Design.textSecondary))
+            .frame(width: 84, alignment: .leading)
     }
 
-    private func settingRow(icon: String, label: String, text: Binding<String>,
-                            unit: String, hint: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .foregroundColor(Color(nsColor: Design.textSecondary))
-                .frame(width: 16, height: 16)
-            labelText(label)
-            numberField(text)
+    private func themeChip(_ t: Theme) -> some View {
+        let selected = vm.theme.id == t.id
+        return Button { vm.theme = t } label: {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(Color(nsColor: t.accent))
+                    .frame(width: 8, height: 8)
+                Text(t.displayName)
+                    .font(.system(size: 10, weight: selected ? .semibold : .regular))
+                    .foregroundColor(Color(nsColor: selected ? Design.textPrimary : Design.textSecondary))
+                    .fixedSize()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 6)
+                .fill(Color.white.opacity(selected ? 0.14 : 0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 6)
+                .stroke(selected ? Color(nsColor: t.accent).opacity(0.85) : Color.clear, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func kvRow(_ label: String, _ text: Binding<String>, _ unit: String,
+                       _ hint: String) -> some View {
+        HStack(spacing: 8) {
+            rowLabel(label)
+            compactField(text)
             Text(unit)
-                .font(.system(size: 12))
+                .font(.system(size: 10))
                 .foregroundColor(Color(nsColor: Design.textMuted))
+                .frame(width: 26, alignment: .leading)
             Text(hint)
-                .font(.system(size: 11))
+                .font(.system(size: 10))
                 .foregroundColor(Color(nsColor: Design.textMuted))
                 .lineLimit(1)
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .frame(height: 24)
+        .frame(height: 34)
     }
 
-    private func numberField(_ text: Binding<String>) -> some View {
+    private func compactField(_ text: Binding<String>) -> some View {
         TextField("", text: text)
             .textFieldStyle(.plain)
-            .font(.system(size: 13, design: .monospaced))
+            .font(.system(size: 11, design: .monospaced))
             .foregroundColor(Color(nsColor: Design.textPrimary))
             .padding(.horizontal, 6)
-            .frame(width: 120)
-            .frame(height: 22)
-            .background(RoundedRectangle(cornerRadius: 4)
-                .fill(Color(nsColor: Design.backgroundDark).opacity(0.6)))
-            .overlay(RoundedRectangle(cornerRadius: 4)
-                .stroke(Color(nsColor: Design.separatorColor).opacity(0.6)))
+            .frame(width: 96, height: 24)
+            .background(RoundedRectangle(cornerRadius: 5)
+                .fill(Color.black.opacity(0.28)))
+            .overlay(RoundedRectangle(cornerRadius: 5)
+                .stroke(Color(nsColor: Design.cardBorderDark)))
     }
 
-    private func sourceRow(_ row: Binding<SourceRowDraft>) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                Toggle("", isOn: row.enabled)
-                    .toggleStyle(.checkbox)
-                    .labelsHidden()
-                Text(row.wrappedValue.name)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(Color(nsColor: Design.textPrimary))
-                    .frame(width: 70, alignment: .leading)
-                if row.wrappedValue.isHTTP {
-                    // Trae：登录凭据代替库路径（passport sessionid，粘贴后保存生效）
-                    TextField("", text: row.credential,
-                              onEditingChanged: { editing in
-                                  if !editing { vm.validateSource(id: row.wrappedValue.id) }
-                              }, onCommit: {})
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundColor(Color(nsColor: Design.textPrimary))
+    private func pathField(_ text: Binding<String>, placeholder: String,
+                           onEnd: @escaping () -> Void) -> some View {
+        TextField("", text: text,
+                  onEditingChanged: { editing in
+                      if !editing { onEnd() }
+                  }, onCommit: {})
+            .textFieldStyle(.plain)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundColor(Color(nsColor: Design.textSecondary))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity)
+            .frame(height: 24)
+            .background(RoundedRectangle(cornerRadius: 5).fill(Color.black.opacity(0.28)))
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color(nsColor: Design.cardBorderDark)))
+            .overlay(alignment: .leading) {
+                if text.wrappedValue.isEmpty {
+                    Text(placeholder)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .padding(.horizontal, 6)
-                        .overlay(alignment: .leading) {
-                            if row.credential.wrappedValue.isEmpty {
-                                Text(L("粘贴 trae.cn 登录后的 sessionid cookie 值"))
-                                    .font(.system(size: 12, design: .monospaced))
-                                    .foregroundColor(Color(nsColor: Design.textMuted))
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                    .padding(.horizontal, 6)
-                                    .allowsHitTesting(false)
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 22)
-                        .background(RoundedRectangle(cornerRadius: 4)
-                            .fill(Color(nsColor: Design.backgroundDark).opacity(0.6)))
-                        .overlay(RoundedRectangle(cornerRadius: 4)
-                            .stroke(Color(nsColor: Design.separatorColor).opacity(0.6)))
-                        .help(L("在浏览器登录 trae.cn 后，从 DevTools 的 Cookie 里复制 sessionid 的值"))
-                    Button(vm.traeSyncing ? L("同步中…") : L("立即同步")) {
-                        vm.syncTraeNow()
-                    }
-                    .font(.system(size: 12))
-                    .frame(width: 64)
-                    .disabled(vm.traeSyncing || row.credential.wrappedValue.isEmpty)
-                    .help(L("保存凭据并立即拉取一次 Trae 用量（跳过节流与夜间静默）"))
-                } else {
-                    ZStack(alignment: .leading) {
-                        if row.wrappedValue.path.isEmpty {
-                            // 占位符 = 默认路径（prompt 变体不带 onEditingChanged，自绘）
-                            Text(row.wrappedValue.defaultPath)
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundColor(Color(nsColor: Design.textMuted))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .padding(.horizontal, 6)
-                                .allowsHitTesting(false)
-                        }
-                        TextField("", text: row.path,
-                                  onEditingChanged: { editing in
-                                      if !editing { vm.validateSource(id: row.wrappedValue.id) }
-                                  }, onCommit: {})
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundColor(Color(nsColor: Design.textPrimary))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .padding(.horizontal, 6)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 22)
-                    .background(RoundedRectangle(cornerRadius: 4)
-                        .fill(Color(nsColor: Design.backgroundDark).opacity(0.6)))
-                    .overlay(RoundedRectangle(cornerRadius: 4)
-                        .stroke(Color(nsColor: Design.separatorColor).opacity(0.6)))
-                    .help(row.wrappedValue.path)
-                    Button(L("浏览")) {
-                        vm.browseSource(id: row.wrappedValue.id)
-                    }
-                    .font(.system(size: 12))
-                    .frame(width: 60)
+                        .allowsHitTesting(false)
                 }
             }
-            .frame(height: 24)
-            Text(row.wrappedValue.statusText)
+    }
+
+    private func pillButton(_ title: String, disabled: Bool = false,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
                 .font(.system(size: 10))
-                .foregroundColor(statusColor(row.wrappedValue.statusKind))
+                .foregroundColor(Color(nsColor: disabled ? Design.textMuted : Design.textSecondary))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.06)))
+                .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color(nsColor: Design.cardBorderDark)))
         }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .fixedSize()
+    }
+
+    private func toggleCell(_ title: String, _ isOn: Binding<Bool>) -> some View {
+        HStack(spacing: 8) {
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(Color(nsColor: Design.successColor))
+            Text(title)
+                .font(.system(size: 11))
+                .foregroundColor(Color(nsColor: Design.textPrimary))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func progressBar(_ pct: Double) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.08))
+                Capsule()
+                    .fill(Color(nsColor: Design.successColor))
+                    .frame(width: max(0, min(geo.size.width * pct, geo.size.width)))
+            }
+        }
+        .frame(height: 4)
+    }
+
+    private func infoRow<Actions: View>(_ label: String, detail: String,
+                                        @ViewBuilder actions: () -> Actions) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(Color(nsColor: Design.textSecondary))
+                .frame(width: 74, alignment: .leading)
+            Text(detail)
+                .font(.system(size: 10))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+                .lineLimit(1)
+            Spacer(minLength: 6)
+            HStack(spacing: 6) { actions() }
+        }
+        .frame(height: 34)
     }
 
     private func statusColor(_ kind: SourceRowDraft.StatusKind) -> Color {
         switch kind {
-        case .ok: return .green
+        case .ok: return Color(nsColor: Design.successColor)
         case .muted: return Color(nsColor: Design.textMuted)
-        case .warn: return .orange
+        case .warn: return Color(nsColor: Design.warningColor)
         }
     }
 
     private var buttonBar: some View {
         HStack(spacing: 10) {
-            Button(L("重置")) { vm.reset() }
-            Button(L("检查更新")) { vm.checkForUpdates() }
-            Button(L("备份数据")) { vm.backupData() }
-            Button(L("保存")) { vm.save() }
-                .font(.system(size: 13, weight: .semibold))
-                .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
+            pillButton(L("重置")) { vm.reset() }
+            pillButton(L("检查更新")) { vm.checkForUpdates() }
+            if dirty {
+                Text(L("配置已修改"))
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(nsColor: Design.warningColor))
+                    .fixedSize()
+            }
             Spacer()
+            pillButton(L("备份数据")) { vm.backupData() }
+            Button { vm.save() } label: {
+                Text(L("保存"))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Color(nsColor: Design.backgroundDark))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(nsColor: Design.successColor)))
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.defaultAction)
         }
-        .font(.system(size: 13))
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
     }
 }
 
@@ -772,13 +929,13 @@ class SettingsWindowController: NSWindowController {
         self.onSave = onSave
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 440, height: 580),
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 760),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = L("ccBar 设置")
-        window.minSize = NSSize(width: 440, height: 420)
+        window.minSize = NSSize(width: 560, height: 520)
         window.center()
         window.setFrameAutosaveName("CCBarSettings")
         window.backgroundColor = Design.backgroundDark
