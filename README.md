@@ -12,11 +12,16 @@ macOS 菜单栏 AI CLI 用量统计工具。实时显示今日 token 消耗，�
   <img src="docs/images/settings.png" width="280" alt="数据源设置"/>
   <br/>
   <img src="docs/images/hourly.png" width="440" alt="每小时用量"/>
+  <br/>
+  <img src="docs/images/insights.png" width="440" alt="洞察中心"/>
+  <img src="docs/images/credits.png" width="440" alt="积分与余额"/>
+  <br/>
+  <img src="docs/images/timeline.png" width="440" alt="积分流水"/>
 </p>
 
 ## English
 
-CCBar is a native macOS menu bar app that tracks your AI CLI token usage in real time — today, this week, and all-time — with **pluggable data sources**: [cc-switch](https://github.com/farion1231/cc-switch) (Claude Code / Codex / OpenCode via proxy) and ZCode (GLM). History is synced daily into a local SQLite store (source databases are opened read-only and never modified), while today's numbers are queried live. A five-page insights center (cost / insights / share / channels / timeline) with a model chronicle, a shareable usage card with QR code, and an auto-generated weekly report (saved every Monday, backfilled if the Mac was off) are built in, along with milestone notifications, quota warnings, per-channel breakdowns, idempotent CSV export/import, a running pixel cat in the menu bar, six built-in themes plus importable JSON theme packs, bilingual UI (中文 / English), daily auto-backups with 7-copy rotation, and a drag-to-install DMG. A Windows system tray version lives in [ccbar-win](https://github.com/bmfish/ccbar-win).
+CCBar is a native macOS menu bar app that tracks your AI CLI token usage in real time — today, this week, and all-time — with **pluggable data sources**: [cc-switch](https://github.com/farion1231/cc-switch) (Claude Code / Codex / OpenCode via proxy) and ZCode (GLM). History is synced daily into a local SQLite store (source databases are opened read-only and never modified), while today's numbers are queried live. A seven-page insights center (insights / credits / timeline / channels / cost / share / settings) with a model chronicle, a shareable usage card with QR code, and an auto-generated weekly report (saved every Monday, backfilled if the Mac was off) are built in, along with milestone notifications, quota warnings, per-channel breakdowns, idempotent CSV export/import, a running pixel cat in the menu bar, six built-in themes plus importable JSON theme packs, bilingual UI (中文 / English), daily auto-backups with 7-copy rotation, and a drag-to-install DMG. A Windows system tray version lives in [ccbar-win](https://github.com/bmfish/ccbar-win).
 
 ## 功能
 
@@ -25,7 +30,7 @@ CCBar is a native macOS menu bar app that tracks your AI CLI token usage in real
 - **用量预警 / 里程碑**：超过阈值或每累计 N 万 token 弹出系统通知，陪你刷量 🫧
 - **弹窗面板**：今日卡片（请求数 / 缓存命中率 / 工时）、模型分布、趋势（昨日 / 近7天 / 近30天 / 历史总量）、速率预测
 - **详情窗口**：近 7 天、近 30 天（柱状图拖选读数）、模型分布（环形图 + 按渠道分组明细）、每小时分布，全部支持 CSV 导出
-- **洞察中心**：费用（走势 / 模型费用排行 / 性价比榜 / **月度预算进度与预算线**）、洞察（连续天数 / 周环比 / 90 天热力图 / **模型编年史** / 月度预测）、渠道（堆叠趋势 / 应用分布 / Token 构成 / 缓存命中率）、流水（任意日期逐笔回看，可按渠道 / 模型筛选）等板块
+- **洞察中心**：洞察（连续天数 / 周环比 / 90 天热力图 / **模型编年史** / 月度预测）、积分（今日积分 / 余额与可用天数 / 7·30·90 天趋势）、流水（任意日期逐笔回看，可按渠道 / 模型筛选）、渠道（堆叠趋势 / 应用分布 / Token 构成 / 缓存命中率）、费用（走势 / 模型费用排行 / 性价比榜 / **月度预算进度与预算线**）、分享与设置（设置页内嵌，保存即生效）等板块
 - **周报 + 战报分享**：每周一自动生成上周用量周报 PNG 到 `~/Documents/CCBar 周报/`（周一没开机，下次启动自动补），分享页实时预览周报卡和带二维码的今日战报卡，保存 / 复制一键分享
 - **多数据源**：每个源可独立启用 / 停用、自定义数据库路径、保存前即时校验
 - **主题 + 主题包**：6 套内置配色（含 CRT 终端），JSON 主题包一键导入 / 导出，方便社区分享
