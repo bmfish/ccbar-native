@@ -6,12 +6,7 @@ macOS 菜单栏 AI CLI 用量统计工具。实时显示今日 token 消耗，�
 ![ui](https://img.shields.io/badge/UI-SwiftUI-00A0E9) ![windows](https://img.shields.io/badge/Windows-tray-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
 <p align="center">
-  <img src="docs/images/menubar.png" width="420" alt="菜单栏用量"/>
-  <br/>
   <img src="docs/images/popover.png" width="280" alt="弹窗面板"/>
-  <img src="docs/images/settings.png" width="280" alt="数据源设置"/>
-  <br/>
-  <img src="docs/images/hourly.png" width="440" alt="每小时用量"/>
   <br/>
   <img src="docs/images/insights.png" width="440" alt="洞察中心"/>
   <img src="docs/images/credits.png" width="440" alt="积分与余额"/>
