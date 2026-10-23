@@ -611,6 +611,7 @@ func showInfoAlert(_ title: String, _ msg: String) {
 }
 
 private func pageCard<Content: View>(_ title: String, trailing: String? = nil,
+                                    minHeight: CGFloat? = nil,
                                     @ViewBuilder content: () -> Content) -> some View {
     VStack(alignment: .leading, spacing: 10) {
         HStack(spacing: 6) {
@@ -627,8 +628,9 @@ private func pageCard<Content: View>(_ title: String, trailing: String? = nil,
         }
         content()
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
+    .frame(maxWidth: .infinity, alignment: .topLeading)
     .padding(14)
+    .frame(minHeight: minHeight, alignment: .topLeading)
     .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
         .fill(Color(nsColor: Design.cardFillDark)))
     .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
@@ -740,7 +742,7 @@ struct CostPage: View {
     // MARK: 今日费用（左卡）
 
     private var todayCard: some View {
-        pageCard(L("今日费用")) {
+        pageCard(L("今日费用"), minHeight: 210) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(money(vm.costToday + vm.estToday))
@@ -814,7 +816,7 @@ struct CostPage: View {
         let ratio = budget > 0 ? min(monthCost / budget, 1) : 0
         let projected = vm.monthDaysElapsed > 0
             ? monthCost / Double(vm.monthDaysElapsed) * Double(vm.monthDaysTotal) : 0
-        return pageCard(L("本月")) {
+        return pageCard(L("本月"), minHeight: 210) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(money(monthCost))
@@ -2209,12 +2211,12 @@ struct ChannelsPage: View {
         case .channel:
             return vm.channelPoints.filter { $0.day >= cutoff }.map {
                 FlowPoint(day: Calendar.current.startOfDay(for: $0.day),
-                          key: $0.source, name: $0.name, token: $0.token)
+                          key: $0.name, name: $0.name, token: $0.token)
             }
         case .app:
             return vm.appPoints.filter { $0.day >= cutoff }.map {
                 FlowPoint(day: Calendar.current.startOfDay(for: $0.day),
-                          key: $0.app, name: $0.name, token: $0.token)
+                          key: $0.name, name: $0.name, token: $0.token)
             }
         }
     }
@@ -2226,6 +2228,7 @@ struct ChannelsPage: View {
             map[p.key] = (p.name, prev + p.token)
         }
         return map.map { (key: $0.key, name: $0.value.name, token: $0.value.token) }
+            .filter { $0.token > 0 }
             .sorted { $0.token > $1.token }
     }
 
@@ -2273,7 +2276,8 @@ struct ChannelsPage: View {
             (L("缓存创建"), s.cacheCreate, shade(3)),
         ]
         return pageCard(L("Token 构成"),
-                        trailing: L("近 30 天") + " · " + Design.formatTokens(total)) {
+                        trailing: L("近 30 天") + " · " + Design.formatTokens(total),
+                        minHeight: 190) {
             if total == 0 {
                 mutedHint(L("暂无数据"))
             } else {
@@ -2302,7 +2306,7 @@ struct ChannelsPage: View {
         let saved = base * 0.9 * cacheShare
         let without = base + saved
         let pct = without > 0 ? saved / without : 0
-        return pageCard(L("缓存收益")) {
+        return pageCard(L("缓存收益"), minHeight: 190) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text("$" + String(Int(saved.rounded())))
@@ -2334,9 +2338,10 @@ struct ChannelsPage: View {
 
     // MARK: 小组件
 
-    /// 绿系色阶（0 = 最亮）
+    /// 渠道/应用配色：高对比固定色（蓝/橙/绿/紫/红/青），保证相邻序号也能区分
     private func shade(_ i: Int) -> Color {
-        Color(nsColor: Design.successColor).opacity([1.0, 0.58, 0.38, 0.26, 0.18][min(i, 4)])
+        let palette = ["#4A90D9", "#E67E22", "#2ECC71", "#9B59B6", "#E74C3C", "#1ABC9C"]
+        return Color(nsColor: NSColor(hex: palette[i % palette.count]))
     }
 
     private func mixLegend(_ item: (name: String, token: Int64, color: Color),
