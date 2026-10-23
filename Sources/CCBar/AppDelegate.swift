@@ -246,6 +246,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         if let button = statusItem.button {
             popover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }
+        // 让弹窗窗口直接成为 key window：否则第一次点击只用于激活窗口，
+        // 卡片 / 按钮需要点两次才响应
+        NSApp.activate(ignoringOtherApps: true)
+        popover?.contentViewController?.view.window?.makeKey()
 
         // 打开弹窗时做一次实时查询，并把结果同步到菜单栏标题，
         // 消除"标题 30 秒快照 vs 弹窗实时查"的数字时差
@@ -333,6 +337,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
 
             let todayStats = self.store.queryDayStats(days: 0)
             let workHours = self.store.queryWorkHours()
+            // 弹窗今日区（逐时/积分/会话脚注）全部在后台队列算好，主线程只读缓存
+            let todayExtras = Self.makeTodayExtras(store: self.store)
 
             var modelBreakdown: [ModelStat]?
             if DataCache.shared.needsModelCache() {
@@ -390,7 +396,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                     models: modelBreakdown,
                     workHours: workHours,
                     trendCredits: trendCredits,
-                    trendExtras: trendExtras
+                    trendExtras: trendExtras,
+                    todayExtras: todayExtras
                 )
                 self.applyTitle(todayStats)
 
@@ -444,6 +451,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             let todayStats = self.store.queryDayStats(days: 0)
             let modelBreakdown = self.store.queryModelBreakdown()
             let workHours = self.store.queryWorkHours()
+            let todayExtras = Self.makeTodayExtras(store: self.store)
 
             DispatchQueue.main.async {
                 DataCache.shared.update(
@@ -453,7 +461,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                     month: nil,
                     total: nil,
                     models: modelBreakdown,
-                    workHours: workHours
+                    workHours: workHours,
+                    todayExtras: todayExtras
                 )
                 self.applyTitle(todayStats)
                 self.updateMenu()
@@ -466,6 +475,32 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
            let vc = popover.contentViewController as? PopoverViewController {
             vc.refresh()
         }
+    }
+
+    /// 弹窗今日区数据（逐时 / 积分 / 会话脚注）；含 SQLite 查询，必须在后台队列调用
+    static func makeTodayExtras(store: StatsStore) -> TodayExtras {
+        let times = store.queryTodayTimeline().map(\.time).sorted()
+        var summary: String?
+        if !times.isEmpty {
+            // 相邻请求间隔 > 30 分钟切新会话
+            var durations: [Int] = []
+            var start = times[0], last = times[0]
+            for t in times.dropFirst() {
+                if t - last > 30 * 60 {
+                    durations.append(last - start)
+                    start = t
+                }
+                last = t
+            }
+            durations.append(last - start)
+            let avgMin = durations.reduce(0, +) / max(durations.count, 1) / 60
+            let longestMin = (durations.max() ?? 0) / 60
+            summary = L("今日会话") + " \(durations.count) " + L("个") + " · "
+                + String(format: L("平均 %d 分钟 · 最长 %d 分钟"), avgMin, longestMin)
+        }
+        return TodayExtras(hourly: store.queryHourHistogram(days: 0),
+                           credits: store.queryTodayCredits(),
+                           sessionSummary: summary)
     }
 
     // MARK: - Trae 后台同步（独立队列）
@@ -481,9 +516,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             self.queryQueue.async { [weak self] in
                 guard let self else { return }
                 let todayStats = self.store.queryDayStats(days: 0)
+                let todayExtras = Self.makeTodayExtras(store: self.store)
                 DispatchQueue.main.async {
                     DataCache.shared.update(today: todayStats, yesterday: nil, week: nil,
-                                            month: nil, total: nil, models: nil, workHours: nil)
+                                            month: nil, total: nil, models: nil, workHours: nil,
+                                            todayExtras: todayExtras)
                     self.applyTitle(todayStats)
                     self.updateMenu()
                 }

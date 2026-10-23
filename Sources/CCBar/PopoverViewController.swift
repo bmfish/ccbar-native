@@ -100,25 +100,22 @@ final class PopoverViewModel: ObservableObject {
         monthCredits = trendCredits.month
         totalCredits = trendCredits.total
         theme = .current
-        if let store = AppDelegate.shared?.store {
-            todayHourly = Self.hourPoints(from: store.queryHourHistogram(days: 0))
-            todayCredits = store.queryTodayCredits()
-            // 昨日/周/月/历史 sparkline、环比、占比全部读每日缓存，弹窗打开不重复计算
-            if let e = c.getCachedTrendExtras() {
-                yesterdayHourly = e.yesterdayHourly
-                weekSeries = e.weekSeries
-                monthSeries = e.monthSeries
-                historySeries = e.historySeries
-                yesterdayDelta = e.yesterdayDelta
-                weekDelta = e.weekDelta
-                monthDelta = e.monthDelta
-                totalShare = e.totalShare
-            }
-            let (cnt, avg, longest) = InsightsViewModel.sessionStats(from: store.queryTodayTimeline())
-            sessionSummary = cnt > 0
-                ? L("今日会话") + " \(cnt) " + L("个") + " · "
-                    + String(format: L("平均 %d 分钟 · 最长 %d 分钟"), avg, longest)
-                : nil
+        // 全部读缓存，主线程零 SQLite 查询，弹窗秒开
+        if let e = c.getCachedTodayExtras() {
+            todayHourly = Self.hourPoints(from: e.hourly)
+            todayCredits = e.credits
+            sessionSummary = e.sessionSummary
+        }
+        // 昨日/周/月/历史 sparkline、环比、占比读每日缓存
+        if let e = c.getCachedTrendExtras() {
+            yesterdayHourly = e.yesterdayHourly
+            weekSeries = e.weekSeries
+            monthSeries = e.monthSeries
+            historySeries = e.historySeries
+            yesterdayDelta = e.yesterdayDelta
+            weekDelta = e.weekDelta
+            monthDelta = e.monthDelta
+            totalShare = e.totalShare
         }
     }
 

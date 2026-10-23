@@ -160,6 +160,13 @@ class Settings {
 //
 // 定时器在后台队列查询、写入缓存；UI 在主线程读缓存。全部访问经锁串行。
 
+/// 弹窗今日区数据：逐时分布 / 当日积分 / 会话脚注，后台队列算好，主线程只读缓存
+struct TodayExtras {
+    var hourly: [Int: Int64] = [:]
+    var credits: Double = 0
+    var sessionSummary: String?
+}
+
 /// 趋势卡的历史类数据：每日只算一次（首个 updateData 或跨天），与 Windows 版一致
 struct TrendExtras {
     var yesterdayHourly: [Int64] = []
@@ -190,6 +197,8 @@ final class DataCache {
     private var totalCredits = 0.0
     /// 趋势卡 sparkline / 环比 / 占比：每日只算一次
     private var trendExtras: TrendExtras?
+    /// 今日区（逐时/积分/会话脚注）：每轮后台刷新更新
+    private var todayExtras: TodayExtras?
     private var lastDailyCacheDate: String?
     private var lastModelCacheHour = -1
 
@@ -240,6 +249,12 @@ final class DataCache {
         return trendExtras
     }
 
+    /// 今日区数据（逐时 / 积分 / 会话脚注），后台每轮刷新更新
+    func getCachedTodayExtras() -> TodayExtras? {
+        lock.lock(); defer { lock.unlock() }
+        return todayExtras
+    }
+
     /// 历史区间（昨日/周/月/总量）每天重查一次
     func needsDailyCache() -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -262,7 +277,8 @@ final class DataCache {
         models: [ModelStat]?,
         workHours: Double?,
         trendCredits: (yesterday: Double, week: Double, month: Double, total: Double)? = nil,
-        trendExtras: TrendExtras? = nil
+        trendExtras: TrendExtras? = nil,
+        todayExtras: TodayExtras? = nil
     ) {
         lock.lock(); defer { lock.unlock() }
         self.todayStats = today
@@ -279,6 +295,7 @@ final class DataCache {
             self.totalCredits = v.total
         }
         if let v = trendExtras { self.trendExtras = v }
+        if let v = todayExtras { self.todayExtras = v }
     }
 
     func markDailyCacheDone() {
@@ -306,6 +323,7 @@ final class DataCache {
         monthCredits = 0
         totalCredits = 0
         trendExtras = nil
+        todayExtras = nil
         lastDailyCacheDate = nil
         lastModelCacheHour = -1
     }
