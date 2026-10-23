@@ -10,6 +10,7 @@ struct PopoverActions {
     let openWeek: () -> Void
     let openMonth: () -> Void
     let openModelToday: () -> Void
+    let topSessions: () -> Void
     let copy: () -> Void
     let timeline: () -> Void
     let insights: () -> Void
@@ -22,6 +23,7 @@ struct PopoverActions {
         openWeek: { AppDelegate.shared?.openDetail() },
         openMonth: { AppDelegate.shared?.openMonthDetail() },
         openModelToday: { AppDelegate.shared?.openModelDetailToday() },
+        topSessions: { AppDelegate.shared?.openTopSessions() },
         copy: { AppDelegate.shared?.copyStats() },
         timeline: { AppDelegate.shared?.openTimeline() },
         insights: { AppDelegate.shared?.openInsights() },
@@ -52,6 +54,24 @@ final class PopoverViewModel: ObservableObject {
     @Published var todayHourly: [HourPoint] = []
     /// 今日积分消耗（Trae 口径；今天没有积分使用时为 0，不显示）
     @Published var todayCredits: Double = 0
+    /// 趋势卡积分小字（trae 口径；0 不显示）
+    @Published var yesterdayCredits: Double = 0
+    @Published var weekCredits: Double = 0
+    @Published var monthCredits: Double = 0
+    @Published var totalCredits: Double = 0
+    /// 趋势卡 sparkline：昨日逐时 / 近7天 / 近30天 / 近90天每日
+    @Published var yesterdayHourly: [Int64] = []
+    @Published var weekSeries: [Int64] = []
+    @Published var monthSeries: [Int64] = []
+    @Published var historySeries: [Int64] = []
+    /// 趋势卡环比（nil = 无上期数据不显示）
+    @Published var yesterdayDelta: Double?
+    @Published var weekDelta: Double?
+    @Published var monthDelta: Double?
+    /// 历史总量卡：近30天占比
+    @Published var totalShare: Double?
+    /// 今日会话摘要（Hero 卡脚注）
+    @Published var sessionSummary: String?
 
     /// 问候语：初始化时随机一次，之后每次打开弹窗重新抽（rollGreeting）
     @Published var greeting: String
@@ -74,10 +94,31 @@ final class PopoverViewModel: ObservableObject {
         total = c.getCachedTotal()
         models = c.getCachedModelBreakdown() ?? []
         workHours = c.getCachedWorkHours()
+        let trendCredits = c.getCachedTrendCredits()
+        yesterdayCredits = trendCredits.yesterday
+        weekCredits = trendCredits.week
+        monthCredits = trendCredits.month
+        totalCredits = trendCredits.total
         theme = .current
         if let store = AppDelegate.shared?.store {
             todayHourly = Self.hourPoints(from: store.queryHourHistogram(days: 0))
             todayCredits = store.queryTodayCredits()
+            // 昨日/周/月/历史 sparkline、环比、占比全部读每日缓存，弹窗打开不重复计算
+            if let e = c.getCachedTrendExtras() {
+                yesterdayHourly = e.yesterdayHourly
+                weekSeries = e.weekSeries
+                monthSeries = e.monthSeries
+                historySeries = e.historySeries
+                yesterdayDelta = e.yesterdayDelta
+                weekDelta = e.weekDelta
+                monthDelta = e.monthDelta
+                totalShare = e.totalShare
+            }
+            let (cnt, avg, longest) = InsightsViewModel.sessionStats(from: store.queryTodayTimeline())
+            sessionSummary = cnt > 0
+                ? L("今日会话") + " \(cnt) " + L("个") + " · "
+                    + String(format: L("平均 %d 分钟 · 最长 %d 分钟"), avg, longest)
+                : nil
         }
     }
 
@@ -99,6 +140,12 @@ final class PopoverViewModel: ObservableObject {
             out.append(HourPoint(hourDate: date, token: hist[h] ?? 0))
         }
         return out
+    }
+
+    /// 环比百分比：(今期 - 上期) / 上期；上期无数据返回 nil
+    static func delta(current: Int64?, prev: Int64?) -> Double? {
+        guard let cur = current, let p = prev, p > 0 else { return nil }
+        return (Double(cur) - Double(p)) / Double(p) * 100
     }
 
     /// 按已跑时长把今日用量折算到 24:00
@@ -184,52 +231,20 @@ struct PopoverRootView: View {
             .padding(.bottom, 10)
         }
 
-        if !vm.models.isEmpty {
-            ModelCard(vm: vm)
-                .padding(.bottom, 8)
-        }
-
         if vm.yesterday != nil || vm.week != nil || vm.month != nil || vm.total != nil {
             trendSection
+        }
+
+        if !vm.models.isEmpty {
+            ModelCard(vm: vm)
+                .padding(.top, 4)
+                .padding(.bottom, 2)
         }
 
         Rectangle()
             .fill(Color(nsColor: Design.separatorColor))
             .frame(height: 1)
             .padding(.vertical, 6)
-    }
-
-    // MARK: 今日每小时 sparkline（垫在趋势列表背后，隐晦版）
-
-    /// 细线 + 极淡渐变、无坐标轴；点它进每小时详情
-    private var hourlySparkline: some View {
-        Chart {
-            ForEach(vm.todayHourly) { p in
-                AreaMark(x: .value(L("时间"), p.hourDate),
-                         y: .value(L("Token"), p.token))
-                    .foregroundStyle(.linearGradient(
-                        colors: [Color.white.opacity(0.05), Color.white.opacity(0.0)],
-                        startPoint: .top, endPoint: .bottom))
-                    .interpolationMethod(.monotone)
-                LineMark(x: .value(L("时间"), p.hourDate),
-                         y: .value(L("Token"), p.token))
-                    .foregroundStyle(Color.white.opacity(0.22))
-                    .lineStyle(StrokeStyle(lineWidth: 1))
-                    .interpolationMethod(.monotone)
-            }
-        }
-        .chartXAxis(.hidden)
-        .chartYAxis(.hidden)
-        .frame(height: 118)
-        // 两端渐隐，收掉面积填充的生硬边缘
-        .mask(LinearGradient(stops: [
-            .init(color: .clear, location: 0),
-            .init(color: .white, location: 0.05),
-            .init(color: .white, location: 0.94),
-            .init(color: .clear, location: 1),
-        ], startPoint: .leading, endPoint: .trailing))
-        .contentShape(Rectangle())
-        .onTapGesture { PopoverActions.shared.openHourlyToday() }
     }
 
     // MARK: 今日卡片
@@ -239,56 +254,78 @@ struct PopoverRootView: View {
         let today: DayStats
 
         var body: some View {
-            popoverCard {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 5) {
-                        Image(systemName: "chart.line.uptrend.xyaxis")
-                            .font(.system(size: 12))
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 5) {
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                        .font(.system(size: 12))
+                        .foregroundColor(Color(nsColor: Design.textSecondary))
+                    Text(L("今日用量"))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Color(nsColor: Design.textPrimary))
+                    Spacer()
+                    Text("›").font(.system(size: 15, weight: .medium))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                }
+
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(Design.formatTokens(today.total))
+                        .font(.system(size: vm.theme.bigNumberFontSize,
+                                      weight: swiftUIFontWeight(vm.theme.bigNumberWeight),
+                                      design: .rounded))
+                        .monospacedDigit()
+                        .foregroundColor(Color(nsColor: Design.bigNumberColor))
+                        .shadow(color: Color(nsColor: Design.bigNumberColor).opacity(vm.theme.glowAlpha),
+                                radius: vm.theme.glowRadius)
+                        .contentTransition(.numericText())
+                        .animation(.easeOut(duration: 0.35), value: today.total)
+                    // 今天有积分使用（Trae）时在大数字后透出当日积分
+                    if vm.todayCredits > 0 {
+                        Text("\(SettingsViewModel.fmtCredits(vm.todayCredits)) " + L("积分"))
+                            .font(.system(size: 11, weight: .medium).monospacedDigit())
                             .foregroundColor(Color(nsColor: Design.textSecondary))
-                        Text(L("今日用量"))
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(Color(nsColor: Design.textPrimary))
-                        Spacer()
-                        Text("›").font(.system(size: 15, weight: .medium))
-                            .foregroundColor(Color(nsColor: Design.textMuted))
-                    }
-
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(Design.formatTokens(today.total))
-                            .font(.system(size: vm.theme.bigNumberFontSize,
-                                          weight: swiftUIFontWeight(vm.theme.bigNumberWeight),
-                                          design: .rounded))
-                            .monospacedDigit()
-                            .foregroundColor(Color(nsColor: Design.bigNumberColor))
-                            .shadow(color: Color(nsColor: Design.bigNumberColor).opacity(vm.theme.glowAlpha),
-                                    radius: vm.theme.glowRadius)
-                            .contentTransition(.numericText())
-                            .animation(.easeOut(duration: 0.35), value: today.total)
-                        // 今天有积分使用（Trae）时在大数字后透出当日积分
-                        if vm.todayCredits > 0 {
-                            Text("\(SettingsViewModel.fmtCredits(vm.todayCredits)) " + L("积分"))
-                                .font(.system(size: 11, weight: .medium).monospacedDigit())
-                                .foregroundColor(Color(nsColor: Design.textSecondary))
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    HStack(alignment: .center, spacing: 0) {
-                        statColumn(L("请求数"), "\(today.reqs)", Design.textPrimary)
-                        statColumn(L("缓存命中"), cacheRateText, cacheRateColor)
-                        if let h = vm.workHours {
-                            statColumn(L("工时"), String(format: "%.1fh", h), Design.textPrimary)
-                        }
-                    }
-
-                    if let prediction = vm.predictionText {
-                        Text(prediction)
-                            .font(.system(size: 10))
-                            .foregroundColor(Color(nsColor: Design.textMuted))
-                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(alignment: .center, spacing: 0) {
+                    statColumn(L("请求数"), "\(today.reqs)", Design.textPrimary)
+                    statColumn(L("缓存命中"), cacheRateText, cacheRateColor)
+                    if let h = vm.workHours {
+                        statColumn(L("时长"), String(format: "%.1fh", h), Design.textPrimary)
+                    }
+                }
+
+                // 今日节奏 sparkline（品牌色，整体收进 Hero 卡）
+                if vm.todayHourly.count > 1 {
+                    MiniSparkline(values: vm.todayHourly.map(\.token),
+                                  color: vm.theme.accent)
+                        .frame(height: 26)
+                        .padding(.top, 2)
+                }
+
+                if let summary = vm.sessionSummary {
+                    Text(summary)
+                        .font(.system(size: 9))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let prediction = vm.predictionText {
+                    Text(prediction)
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
+            .padding(.vertical, 9)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+                .fill(Color(nsColor: Design.cardFillDark)))
+            .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+                .fill(Color(nsColor: vm.theme.accent).opacity(0.08)))
+            .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+                .strokeBorder(Color(nsColor: Design.cardBorderDark), lineWidth: 0.5))
+            .contentShape(Rectangle())
             .onTapGesture { PopoverActions.shared.openHourlyToday() }
         }
 
@@ -312,29 +349,28 @@ struct PopoverRootView: View {
         private let colors = Design.modelColors()
 
         var body: some View {
-            popoverCard {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 5) {
-                        Image(systemName: "cpu")
-                            .font(.system(size: 12))
-                            .foregroundColor(Color(nsColor: Design.textSecondary))
-                        Text(L("模型分布"))
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(Color(nsColor: Design.textPrimary))
-                        Spacer()
-                        Text("›").font(.system(size: 15, weight: .medium))
-                            .foregroundColor(Color(nsColor: Design.textMuted))
-                    }
-                    ForEach(Array(vm.models.prefix(4).enumerated()), id: \.offset) { i, m in
-                        modelRow(index: i, model: m)
-                    }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 5) {
+                    Image(systemName: "cpu")
+                        .font(.system(size: 12))
+                        .foregroundColor(Color(nsColor: Design.textSecondary))
+                    Text(L("模型分布"))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(Color(nsColor: Design.textPrimary))
+                    Spacer()
+                    Text("›").font(.system(size: 15, weight: .medium))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                }
+                ForEach(Array(vm.models.prefix(3).enumerated()), id: \.offset) { i, m in
+                    modelRow(index: i, model: m)
                 }
             }
+            .contentShape(Rectangle())
             .onTapGesture { PopoverActions.shared.openModelToday() }
         }
 
         private func modelRow(index: Int, model: ModelStat) -> some View {
-            let maxTotal = vm.models.prefix(4).map { $0.total }.max() ?? 1
+            let maxTotal = vm.models.prefix(3).map { $0.total }.max() ?? 1
             let progress = maxTotal > 0 ? CGFloat(model.total) / CGFloat(maxTotal) : 0
             return VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
@@ -374,62 +410,110 @@ struct PopoverRootView: View {
         }
     }
 
-    // MARK: 趋势
+    // MARK: 趋势（2×2 迷你卡）
 
     private var trendSection: some View {
         let tc = vm.theme.trendIconColors
-        return VStack(alignment: .leading, spacing: 0) {
+        return VStack(alignment: .leading, spacing: 6) {
             Text(L("趋势"))
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(Color(nsColor: Design.textPrimary))
-                .padding(.bottom, 2)
-            // 今日逐时 sparkline 垫底：隐晦地透出今天的节奏，不抢数据的戏
-            ZStack {
-                if vm.todayHourly.count > 1 {
-                    hourlySparkline
-                        .padding(.leading, -4)
-                        .padding(.trailing, -2)
+
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8),
+                                GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                if let y = vm.yesterday {
+                    trendCard(icon: "calendar", color: tc.yesterday, title: L("昨日"),
+                              value: Design.formatTokens(y.total), credits: vm.yesterdayCredits,
+                              delta: vm.yesterdayDelta, series: vm.yesterdayHourly,
+                              action: PopoverActions.shared.openHourlyYesterday)
                 }
-                VStack(spacing: 0) {
-                    if let y = vm.yesterday {
-                        trendRow(icon: "calendar", color: tc.yesterday, title: L("昨日"),
-                                 value: Design.formatTokens(y.total), action: PopoverActions.shared.openHourlyYesterday)
-                    }
-                    if let w = vm.week {
-                        trendRow(icon: "chart.bar", color: tc.week, title: L("近7天"),
-                                 value: Design.formatTokens(w.total), action: PopoverActions.shared.openWeek)
-                    }
-                    if let m = vm.month {
-                        trendRow(icon: "calendar.badge.clock", color: tc.month, title: L("近30天"),
-                                 value: Design.formatTokens(m.total), action: PopoverActions.shared.openMonth)
-                    }
-                    if let t = vm.total {
-                        trendRow(icon: "sum", color: tc.total, title: L("历史总量"),
-                                 value: Design.formatTokens(t.total), action: PopoverActions.shared.openMonth)
-                    }
+                if let w = vm.week {
+                    trendCard(icon: "chart.bar", color: tc.week, title: L("近7天"),
+                              value: Design.formatTokens(w.total), credits: vm.weekCredits,
+                              delta: vm.weekDelta, series: vm.weekSeries,
+                              action: PopoverActions.shared.openWeek)
+                }
+                if let m = vm.month {
+                    trendCard(icon: "calendar.badge.clock", color: tc.month, title: L("近30天"),
+                              value: Design.formatTokens(m.total), credits: vm.monthCredits,
+                              delta: vm.monthDelta, series: vm.monthSeries,
+                              action: PopoverActions.shared.openMonth)
+                }
+                if let t = vm.total {
+                    trendCard(icon: "sum", color: tc.total, title: L("历史总量"),
+                              value: Design.formatTokens(t.total), credits: vm.totalCredits,
+                              delta: nil, series: vm.historySeries,
+                              progress: vm.totalShare, progressLabel: L("近30天"),
+                              action: PopoverActions.shared.openMonth)
                 }
             }
         }
-        .padding(.top, 6)
-        .padding(.bottom, 4)
+        .padding(.top, 2)
+        .padding(.bottom, 6)
     }
 
-    private func trendRow(icon: String, color: NSColor, title: String, value: String, action: @escaping () -> Void) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.system(size: 12))
-                .foregroundColor(Color(nsColor: color))
-            Text(title)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(Color(nsColor: Design.textPrimary))
-            Spacer()
+    /// 趋势迷你卡：标题 + 环比 badge + 大数值 + 积分小字 + sparkline（历史卡用占比进度条）
+    private func trendCard(icon: String, color: NSColor, title: String, value: String,
+                           credits: Double, delta: Double?, series: [Int64],
+                           progress: Double? = nil, progressLabel: String? = nil,
+                           action: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(nsColor: color))
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Color(nsColor: Design.textSecondary))
+                    .lineLimit(1)
+                Spacer(minLength: 2)
+                if let d = delta {
+                    Text((d >= 0 ? "▲" : "▼") + String(format: "%.0f%%", abs(d)))
+                        .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                        .foregroundColor(Color(nsColor: d >= 0 ? Design.successColor : Design.warningColor))
+                } else if let p = progress, let label = progressLabel {
+                    Text("\(label) \(String(format: "%.0f%%", p))")
+                        .font(.system(size: 9, weight: .medium).monospacedDigit())
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                }
+            }
             Text(value)
-                .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                .foregroundColor(Color(nsColor: Design.dataHighlightColor))
-            Text("›").font(.system(size: 15, weight: .medium))
+                .font(.system(size: 17, weight: .semibold, design: .rounded).monospacedDigit())
+                .foregroundColor(Color(nsColor: Design.bigNumberColor))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(credits > 0 ? SettingsViewModel.fmtCredits(credits) + " " + L("积分") : " ")
+                .font(.system(size: 9).monospacedDigit())
                 .foregroundColor(Color(nsColor: Design.textMuted))
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+
+            // 四卡统一占用同一高度：sparkline / 占比进度条都贴底
+            Group {
+                if let p = progress {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color(nsColor: Design.cardBorderDark).opacity(0.55))
+                            Capsule().fill(Color(nsColor: color))
+                                .frame(width: geo.size.width * min(max(CGFloat(p / 100), 0), 1))
+                        }
+                    }
+                    .frame(height: 3)
+                } else {
+                    MiniSparkline(values: series, color: color)
+                        .frame(height: 22)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 22, alignment: .bottom)
         }
-        .padding(.vertical, 5)
+        .padding(8)
+        .frame(maxWidth: .infinity, minHeight: 96, maxHeight: 96, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .fill(Color(nsColor: Design.cardFillDark)))
+        .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .strokeBorder(Color(nsColor: Design.cardBorderDark), lineWidth: 0.5))
         .contentShape(Rectangle())
         .onTapGesture { action() }
     }
@@ -486,6 +570,43 @@ private func popoverCard<Content: View>(@ViewBuilder content: () -> Content) -> 
             .fill(Color(nsColor: Design.cardFillDark)))
         .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
             .strokeBorder(Color(nsColor: Design.cardBorderDark), lineWidth: 0.5))
+}
+
+/// 迷你面积折线：无坐标轴，底部渐变收尾（弹窗 Hero / 趋势卡用）
+private struct MiniSparkline: View {
+    let values: [Int64]
+    let color: NSColor
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let maxV = max(Double(values.max() ?? 0), 1)
+            let n = max(values.count - 1, 1)
+            let pts = values.enumerated().map { i, v -> CGPoint in
+                CGPoint(x: w * CGFloat(i) / CGFloat(n),
+                        y: h - h * 0.9 * CGFloat(Double(v) / maxV) - h * 0.05)
+            }
+            if pts.count > 1 {
+                Path { p in
+                    p.move(to: CGPoint(x: pts[0].x, y: h))
+                    for pt in pts { p.addLine(to: pt) }
+                    p.addLine(to: CGPoint(x: pts[pts.count - 1].x, y: h))
+                    p.closeSubpath()
+                }
+                .fill(LinearGradient(
+                    colors: [Color(nsColor: color).opacity(0.30),
+                             Color(nsColor: color).opacity(0.02)],
+                    startPoint: .top, endPoint: .bottom))
+                Path { p in
+                    p.move(to: pts[0])
+                    for pt in pts.dropFirst() { p.addLine(to: pt) }
+                }
+                .stroke(Color(nsColor: color).opacity(0.85),
+                        style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round))
+            }
+        }
+    }
 }
 
 /// NSFont.Weight → SwiftUI Font.Weight

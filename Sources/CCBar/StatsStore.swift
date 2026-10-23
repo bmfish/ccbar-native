@@ -89,7 +89,7 @@ struct CCSwitchAdapter: SourceAdapter {
         // 明细：只同步"昨天及更早"，今日走实时视图。
         // created_at 是 epoch 秒，用区间条件让源库索引可用，避免逐行 date() 全表扫描。
         let detail = """
-        INSERT OR IGNORE INTO usage_log
+        INSERT INTO usage_log
             (source, request_id, app_type, model, input_tokens, output_tokens,
              cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_cost_usd, created_at, request_count)
         SELECT
@@ -98,12 +98,20 @@ struct CCSwitchAdapter: SourceAdapter {
             CAST(total_cost_usd AS REAL), created_at, 1
         FROM \(alias).proxy_request_logs
         WHERE created_at >= \(fromEpoch) AND created_at < \(todayEpoch)
+        ON CONFLICT(source, request_id) DO UPDATE SET
+            app_type=excluded.app_type, model=excluded.model,
+            input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
+            cache_read_tokens=excluded.cache_read_tokens,
+            cache_creation_tokens=excluded.cache_creation_tokens,
+            reasoning_tokens=excluded.reasoning_tokens,
+            total_cost_usd=excluded.total_cost_usd, created_at=excluded.created_at,
+            request_count=excluded.request_count
         """
         // 历史聚合（早于本地已有明细最早一天的），展开成"每天每模型一行"的伪明细，
         // 请求侧无需再区分明细/聚合两套口径。created_at 取"该日期的本地正午"：
         // 先按 UTC 零点取 epoch，再补偿本地时区偏移 +12h，任意时区 date() 都落在原日期。
         let rollups = """
-        INSERT OR IGNORE INTO usage_log
+        INSERT INTO usage_log
             (source, request_id, app_type, model, input_tokens, output_tokens,
              cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_cost_usd, created_at, request_count)
         SELECT
@@ -117,6 +125,14 @@ struct CCSwitchAdapter: SourceAdapter {
         FROM \(alias).usage_daily_rollups
         WHERE date < (SELECT date(MIN(created_at), 'unixepoch', 'localtime')
                       FROM usage_log WHERE source = 'cc-switch')
+        ON CONFLICT(source, request_id) DO UPDATE SET
+            app_type=excluded.app_type, model=excluded.model,
+            input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
+            cache_read_tokens=excluded.cache_read_tokens,
+            cache_creation_tokens=excluded.cache_creation_tokens,
+            reasoning_tokens=excluded.reasoning_tokens,
+            total_cost_usd=excluded.total_cost_usd, created_at=excluded.created_at,
+            request_count=excluded.request_count
         """
         return [detail, rollups]
     }
@@ -151,7 +167,7 @@ struct ZCodeAdapter: SourceAdapter {
         // 口径：按 ZCode 官方统计（computed_total_tokens = input+output），
         // 缓存命中部分不计入用量，缓存列记 0（原始值仍在 ZCode 自己的库里）。
         let detail = """
-        INSERT OR IGNORE INTO usage_log
+        INSERT INTO usage_log
             (source, request_id, app_type, model, input_tokens, output_tokens,
              cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_cost_usd, created_at, request_count)
         SELECT
@@ -161,6 +177,14 @@ struct ZCodeAdapter: SourceAdapter {
         FROM \(alias).model_usage
         WHERE status != 'running'
           AND started_at >= \(fromEpoch) * 1000 AND started_at < \(todayEpoch) * 1000
+        ON CONFLICT(source, request_id) DO UPDATE SET
+            app_type=excluded.app_type, model=excluded.model,
+            input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
+            cache_read_tokens=excluded.cache_read_tokens,
+            cache_creation_tokens=excluded.cache_creation_tokens,
+            reasoning_tokens=excluded.reasoning_tokens,
+            total_cost_usd=excluded.total_cost_usd, created_at=excluded.created_at,
+            request_count=excluded.request_count
         """
         return [detail]
     }
@@ -261,6 +285,12 @@ final class StatsStore {
         let cal = Calendar.current
         let day = cal.date(byAdding: .day, value: -daysAgo, to: now) ?? now
         return Int64(cal.startOfDay(for: day).timeIntervalSince1970)
+    }
+
+    /// "近 N 天（含今天）"窗口起点：恰好 N 个自然日 → N-1 天前 0 点。
+    /// 之前直接用 localMidnight(days) 会多算一天（N+1 天）。
+    static func nearWindowStart(_ days: Int, now: Date = Date()) -> Int64 {
+        localMidnight(max(days - 1, 0), now: now)
     }
 
     /// epoch → 本地日期字符串（daily_agg 主键格式 yyyy-MM-dd）
@@ -378,6 +408,8 @@ final class StatsStore {
             return
         }
         exec("CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_log(created_at)")
+        // 按模型聚合（洞察/费用排行）走索引，避免全表扫描后再 GROUP BY
+        exec("CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_log(model, created_at)")
         // v1.8 新增 credits 列（Trae 积分口径，其他源为 0）。老库 ALTER 迁移，列已存在则静默跳过。
         exec("ALTER TABLE usage_log ADD COLUMN credits REAL NOT NULL DEFAULT 0")
         exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
@@ -632,16 +664,22 @@ final class StatsStore {
         lastTraeSyncAt = now.timeIntervalSince1970
         metaSet("trae_auth", value: Self.traeAuthToMeta(newAuth))
         switch outcome {
-        case .success(let rows, let consumed, let total):
+        case .success(let rows, let consumed, let total, let truncated):
             upsertTraeRows(rows)
             // 今日行进 usage_log 由视图实时可见，daily_agg 只结算完整日（≤昨天）
             refreshDailyAgg(fromEpoch: fromEpoch, toEpoch: Self.localMidnight(0, now: now))
-            metaSet("trae_synced_day", value: fmt.string(from: now))
+            // 仅完整成功才推进水位：窗口仍截断（单日超限/拆分深度用尽）时保留原起点，
+            // 下一轮继续补拉，避免"缺口被水位永久越过"
+            if truncated {
+                print("[ccBar] Trae 窗口仍不完整（from \(fromEpoch)），水位保持 \(waterline)")
+            } else {
+                metaSet("trae_synced_day", value: fmt.string(from: now))
+            }
             if let c = consumed, let t = total {
                 metaSet("trae_ent", value: "\(c)|\(t)")
                 metaSet("trae_ent_at", value: String(Int(now.timeIntervalSince1970)))
             }
-            sourceStatus["trae"] = "已连接"
+            sourceStatus["trae"] = truncated ? "同步完成（窗口不完整，将续补）" : "已连接"
         case .notConfigured:
             sourceStatus["trae"] = "未配置登录"
         case .authExpired:
@@ -980,7 +1018,7 @@ final class StatsStore {
             let y = Self.dayString(fromEpoch: Self.localMidnight(1, now: now))
             return dailyAggSum(fromDay: y, toDay: y) ?? Self.zeroStats
         }
-        let from = Self.dayString(fromEpoch: Self.localMidnight(days, now: now))
+        let from = Self.dayString(fromEpoch: Self.nearWindowStart(days, now: now))
         let to = Self.dayString(fromEpoch: Self.localMidnight(1, now: now))
         let history = dailyAggSum(fromDay: from, toDay: to) ?? Self.zeroStats
         return history + (todayLive(now: now) ?? Self.zeroStats)
@@ -1089,7 +1127,7 @@ final class StatsStore {
         forEachRow("""
         SELECT COALESCE(SUM(total_cost_usd), 0) FROM usage_all
         WHERE created_at >= ? AND created_at < ?
-        """, binds: [Self.localMidnight(days), Self.localMidnight(-1)]) { stmt in
+        """, binds: [Self.nearWindowStart(days), Self.localMidnight(-1)]) { stmt in
             total = sqlite3_column_double(stmt, 0)
         }
         return total
@@ -1124,7 +1162,7 @@ final class StatsStore {
         SELECT COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
         FROM usage_all
         WHERE created_at >= ? AND created_at < ? AND COALESCE(total_cost_usd, 0) = 0
-        """, binds: [Self.localMidnight(days), Self.localMidnight(-1)]) { stmt in
+        """, binds: [Self.nearWindowStart(days), Self.localMidnight(-1)]) { stmt in
             total = sqlite3_column_int64(stmt, 0)
         }
         return total
@@ -1140,7 +1178,7 @@ final class StatsStore {
         FROM usage_all
         WHERE created_at >= ? AND created_at < ?
         GROUP BY 1 ORDER BY 1
-        """, binds: [Self.localMidnight(days), Self.localMidnight(-1)]) { stmt in
+        """, binds: [Self.nearWindowStart(days), Self.localMidnight(-1)]) { stmt in
             result.append((String(cString: sqlite3_column_text(stmt, 0)), sqlite3_column_double(stmt, 1)))
         }
         return result
@@ -1157,7 +1195,7 @@ final class StatsStore {
         FROM usage_all
         WHERE created_at >= ? AND created_at < ?
         GROUP BY model ORDER BY 2 DESC LIMIT \(max(1, limit))
-        """, binds: [Self.localMidnight(days), Self.localMidnight(-1)]) { stmt in
+        """, binds: [Self.nearWindowStart(days), Self.localMidnight(-1)]) { stmt in
             result.append((model: String(cString: sqlite3_column_text(stmt, 0)),
                            cost: sqlite3_column_double(stmt, 1),
                            token: sqlite3_column_int64(stmt, 2)))
@@ -1178,13 +1216,36 @@ final class StatsStore {
         return sum
     }
 
+    /// 指定单日积分（daysAgo=0 今日，1 昨日…），供弹窗趋势卡积分小字
+    func queryCreditsDay(daysAgo: Int) -> Double {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return 0 }
+        var sum = 0.0
+        forEachRow("SELECT COALESCE(SUM(credits), 0) FROM usage_all WHERE created_at >= ? AND created_at < ?",
+                   binds: [Self.localMidnight(daysAgo), Self.localMidnight(daysAgo - 1)]) { stmt in
+            sum = sqlite3_column_double(stmt, 0)
+        }
+        return sum
+    }
+
+    /// 历史总积分（全量 SUM）
+    func queryCreditsTotal() -> Double {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return 0 }
+        var sum = 0.0
+        forEachRow("SELECT COALESCE(SUM(credits), 0) FROM usage_all") { stmt in
+            sum = sqlite3_column_double(stmt, 0)
+        }
+        return sum
+    }
+
     /// 近 N 天（含今天）积分消耗，0 天即今日
     func queryCreditsSum(days: Int) -> Double {
         lock.lock(); defer { lock.unlock() }
         guard handle != nil else { return 0 }
         var sum = 0.0
         forEachRow("SELECT COALESCE(SUM(credits), 0) FROM usage_all WHERE created_at >= ?",
-                   binds: [Self.localMidnight(days)]) { stmt in
+                   binds: [Self.nearWindowStart(days)]) { stmt in
             sum = sqlite3_column_double(stmt, 0)
         }
         return sum
@@ -1200,7 +1261,7 @@ final class StatsStore {
         FROM usage_all
         WHERE created_at >= ? AND created_at < ?
         GROUP BY 1 ORDER BY 1
-        """, binds: [Self.localMidnight(days), Self.localMidnight(-1)]) { stmt in
+        """, binds: [Self.nearWindowStart(days), Self.localMidnight(-1)]) { stmt in
             result.append((String(cString: sqlite3_column_text(stmt, 0)), sqlite3_column_double(stmt, 1)))
         }
         return result
@@ -1262,7 +1323,7 @@ final class StatsStore {
         """
         guard sqlite3_prepare_v2(handle, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, fmt.string(from: Date(timeIntervalSince1970: TimeInterval(Self.localMidnight(days)))), -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        sqlite3_bind_text(stmt, 1, fmt.string(from: Date(timeIntervalSince1970: TimeInterval(Self.nearWindowStart(days)))), -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         if sqlite3_step(stmt) == SQLITE_ROW {
             peak = (String(cString: sqlite3_column_text(stmt, 0)), sqlite3_column_int64(stmt, 1))
         }
@@ -1284,7 +1345,7 @@ final class StatsStore {
         FROM usage_log
         WHERE created_at >= ? AND created_at < ?
         GROUP BY 1, 2
-        """, binds: [Self.localMidnight(days), Self.localMidnight(-1)]) { stmt in
+        """, binds: [Self.nearWindowStart(days), Self.localMidnight(-1)]) { stmt in
             result.append((String(cString: sqlite3_column_text(stmt, 0)),
                            String(cString: sqlite3_column_text(stmt, 1)),
                            sqlite3_column_int64(stmt, 2)))
@@ -1310,7 +1371,7 @@ final class StatsStore {
         lock.lock(); defer { lock.unlock() }
         guard handle != nil else { return [] }
         var result: [(date: String, input: Int64, output: Int64, cacheRead: Int64, cacheCreate: Int64)] = []
-        let from = Self.dayString(fromEpoch: Self.localMidnight(days))
+        let from = Self.dayString(fromEpoch: Self.nearWindowStart(days))
         forEachRowText("""
         SELECT date, COALESCE(SUM(input),0), COALESCE(SUM(output),0),
                COALESCE(SUM(cache_read),0), COALESCE(SUM(cache_create),0)
@@ -1520,7 +1581,7 @@ final class StatsStore {
         FROM usage_all
         WHERE created_at >= ? AND created_at < ?
         GROUP BY model ORDER BY t DESC LIMIT 1
-        """, binds: [Self.localMidnight(days), Self.localMidnight(-1)]) { stmt in
+        """, binds: [Self.nearWindowStart(days), Self.localMidnight(-1)]) { stmt in
             top = (String(cString: sqlite3_column_text(stmt, 0)), sqlite3_column_int64(stmt, 1))
         }
         return top
@@ -1538,7 +1599,25 @@ final class StatsStore {
         FROM usage_all
         WHERE created_at >= ? AND created_at < ?
         GROUP BY 1
-        """, binds: [offset, Self.localMidnight(days), Self.localMidnight(-1)]) { stmt in
+        """, binds: [offset, Self.nearWindowStart(days), Self.localMidnight(-1)]) { stmt in
+            out[Int(sqlite3_column_int64(stmt, 0))] = sqlite3_column_int64(stmt, 1)
+        }
+        return out
+    }
+
+    /// 指定单日的时段分布（daysAgo=0 今日、1 昨日…），供弹窗趋势卡 sparkline
+    func queryHourHistogram(daysAgo: Int) -> [Int: Int64] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [:] }
+        let offset = Int64(TimeZone.current.secondsFromGMT())
+        var out: [Int: Int64] = [:]
+        forEachRow("""
+        SELECT ((created_at + ?) % 86400) / 3600,
+               COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
+        FROM usage_all
+        WHERE created_at >= ? AND created_at < ?
+        GROUP BY 1
+        """, binds: [offset, Self.localMidnight(daysAgo), Self.localMidnight(daysAgo - 1)]) { stmt in
             out[Int(sqlite3_column_int64(stmt, 0))] = sqlite3_column_int64(stmt, 1)
         }
         return out
@@ -1549,7 +1628,7 @@ final class StatsStore {
         lock.lock(); defer { lock.unlock() }
         guard handle != nil else { return [] }
         var result: [(date: String, token: Int64)] = []
-        let from = Self.dayString(fromEpoch: Self.localMidnight(days))
+        let from = Self.dayString(fromEpoch: Self.nearWindowStart(days))
         forEachRowText("""
         SELECT date, COALESCE(SUM(input + output + cache_create + cache_read), 0)
         FROM daily_agg WHERE date >= '\(from)' GROUP BY date ORDER BY date
@@ -1568,7 +1647,7 @@ final class StatsStore {
         lock.lock(); defer { lock.unlock() }
         guard handle != nil else { return [] }
         var result: [(date: String, source: String, token: Int64)] = []
-        let from = Self.dayString(fromEpoch: Self.localMidnight(days))
+        let from = Self.dayString(fromEpoch: Self.nearWindowStart(days))
         forEachRowText("""
         SELECT date, source, COALESCE(SUM(input + output + cache_create + cache_read), 0)
         FROM daily_agg WHERE date >= '\(from)'
@@ -1609,6 +1688,45 @@ final class StatsStore {
                            credits: sqlite3_column_double(stmt, 5)))
         }
         return result
+    }
+
+    /// 近 N 天（含今天）净输入最大的会话，按净输入降序。
+    /// Trae 行是会话级快照（今日也在 usage_log），其他源为单请求行，按 request_id 呈现；
+    /// 外部源今日流水未结算进 usage_log 前不参与排名。
+    func queryTopSessions(days: Int, limit: Int = 15) -> [(date: String, session: String, model: String, input: Int64, output: Int64, credits: Double)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var result: [(date: String, session: String, model: String, input: Int64, output: Int64, credits: Double)] = []
+        forEachRow("""
+        SELECT date(created_at, 'unixepoch', 'localtime'), request_id, model,
+               input_tokens, output_tokens, credits
+        FROM usage_log
+        WHERE created_at >= ? AND input_tokens + output_tokens > 0
+        ORDER BY input_tokens DESC LIMIT \(max(1, limit))
+        """, binds: [Self.nearWindowStart(days)]) { stmt in
+            let model = sqlite3_column_type(stmt, 2) == SQLITE_NULL ? "-" : String(cString: sqlite3_column_text(stmt, 2))
+            result.append((String(cString: sqlite3_column_text(stmt, 0)),
+                           String(cString: sqlite3_column_text(stmt, 1)),
+                           model,
+                           sqlite3_column_int64(stmt, 3),
+                           sqlite3_column_int64(stmt, 4),
+                           sqlite3_column_double(stmt, 5)))
+        }
+        return result
+    }
+
+    /// 近 N 天（含今天）净输入/输出合计（usage_log 全量，与 queryTopSessions 同口径）
+    func querySessionWindowTotals(days: Int) -> (input: Int64, output: Int64) {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return (0, 0) }
+        var out = (Int64(0), Int64(0))
+        forEachRow("""
+        SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0)
+        FROM usage_log WHERE created_at >= ?
+        """, binds: [Self.nearWindowStart(days)]) { stmt in
+            out = (sqlite3_column_int64(stmt, 0), sqlite3_column_int64(stmt, 1))
+        }
+        return out
     }
 
     /// 指定日期（本地 0 点起 24 小时）的逐笔流水，时间 DESC。今日走实时视图，历史走已同步的 usage_log

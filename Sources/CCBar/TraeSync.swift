@@ -31,6 +31,9 @@ enum TraeAPI {
     /// 与 trae.cn 网页端的默认值一致
     static let pageSize = 20
     static let maxPages = 50
+    /// 截断补齐：窗口二分递归上限（2^6 = 64 段）与最小粒度（1 天）
+    static let splitMaxDepth = 6
+    static let splitMinSeconds: Int64 = 86_400
 }
 
 // MARK: - 会话凭据状态（持久化在 meta 表，重启不丢）
@@ -61,7 +64,8 @@ struct TraeRow: Equatable {
 // MARK: - 同步结果
 
 enum TraeSyncOutcome: Equatable {
-    case success(rows: [TraeRow], consumed: Double?, total: Double?)
+    /// truncated = 分页/拆分后仍有窗口触达 maxPages 上限，本窗口数据不完整
+    case success(rows: [TraeRow], consumed: Double?, total: Double?, truncated: Bool)
     case notConfigured          // 未填 passport cookie
     case authExpired            // cookie 过期/无效，需要用户重新提供
     case failed(String)         // 网络或其他错误（附原因）
@@ -134,14 +138,21 @@ enum TraeSync {
         case .failed(let msg): return (.failed(msg), auth)
         }
 
-        // ---- 2. 拉取会话明细（分页）----
+        // ---- 2. 拉取会话明细（分页；窗口截断时二分补齐）----
         // 缓存的 JWT 可能被服务端提前作废（如用户在别处重新登录，exp 未到但 1001），
         // 此时强制清掉换一张再试一次，而不是把 cookie 误判成过期
         var jwt2 = jwt
         let rows: [TraeRow]
-        switch fetchSessions(jwt: jwt, fromEpoch: fromEpoch, toEpoch: toEpoch) {
-        case .success(let r):
+        var truncated = false
+        let fetchAll: () -> SessionsOutcome = {
+            Self.fetchWithSplit(fromEpoch: fromEpoch, toEpoch: toEpoch) { f, t in
+                Self.fetchSessions(jwt: jwt2, fromEpoch: f, toEpoch: t)
+            }
+        }
+        switch fetchAll() {
+        case .success(let r, let wasTruncated):
             rows = r
+            truncated = wasTruncated
         case .failed(let msg):
             return (.failed(msg), auth)
         case .authExpired:
@@ -154,8 +165,10 @@ enum TraeSync {
             case .notConfigured, .authExpired: return (.authExpired, auth)
             case .failed(let msg): return (.failed(msg), auth)
             }
-            switch fetchSessions(jwt: jwt2, fromEpoch: fromEpoch, toEpoch: toEpoch) {
-            case .success(let r): rows = r
+            switch fetchAll() {
+            case .success(let r, let wasTruncated):
+                rows = r
+                truncated = wasTruncated
             case .authExpired: return (.authExpired, auth)
             case .failed(let msg): return (.failed(msg), auth)
             }
@@ -175,13 +188,35 @@ enum TraeSync {
             }
         }
 
-        return (.success(rows: rows, consumed: consumed, total: total), auth)
+        return (.success(rows: rows, consumed: consumed, total: total, truncated: truncated), auth)
     }
 
-    private enum SessionsOutcome {
-        case success([TraeRow])
+    enum SessionsOutcome {
+        case success([TraeRow], truncated: Bool)
         case authExpired
         case failed(String)
+    }
+
+    /// 拉一个窗口；分页触达 maxPages 时二分递归重取并合并去重。
+    /// 纯编排（网络由 fetch 闭包注入），可在单测里用假实现验证补齐/水位语义。
+    /// 仍截断（单日超限 / 深度用尽）时原样返回 truncated=true，调用方据此不推进水位。
+    static func fetchWithSplit(fromEpoch: Int64, toEpoch: Int64, depth: Int = 0,
+                               fetch: (Int64, Int64) -> SessionsOutcome) -> SessionsOutcome {
+        let result = fetch(fromEpoch, toEpoch)
+        guard case .success(_, let truncated) = result, truncated else { return result }
+        guard depth < TraeAPI.splitMaxDepth,
+              toEpoch - fromEpoch > TraeAPI.splitMinSeconds else { return result }
+
+        let mid = fromEpoch + (toEpoch - fromEpoch) / 2
+        let older = fetchWithSplit(fromEpoch: fromEpoch, toEpoch: mid, depth: depth + 1, fetch: fetch)
+        guard case .success(let olderRows, let olderTruncated) = older else { return older }
+        let newer = fetchWithSplit(fromEpoch: mid, toEpoch: toEpoch, depth: depth + 1, fetch: fetch)
+        guard case .success(let newerRows, let newerTruncated) = newer else { return newer }
+
+        // 会话是聚合原子：后取（较新窗口）覆盖同 id，避免边界日重复计数
+        var merged: [String: TraeRow] = [:]
+        for row in olderRows + newerRows { merged[row.requestID] = row }
+        return .success(Array(merged.values), truncated: olderTruncated || newerTruncated)
     }
 
     /// 分页拉取会话明细。错误码：1001 = JWT/会话失效；9004 = 参数不合法；成功响应没有 code 字段。
@@ -206,10 +241,7 @@ enum TraeSync {
             if rows.count >= total || sessions.isEmpty { break }
             page += 1
         }
-        if page > TraeAPI.maxPages {
-            print("[ccBar] Trae 分页达到上限 \(TraeAPI.maxPages)，本窗口可能不完整")
-        }
-        return .success(rows)
+        return .success(rows, truncated: page > TraeAPI.maxPages)
     }
 
     // MARK: 换签链
@@ -352,10 +384,37 @@ enum TraeSync {
         return nil
     }
 
-    /// 同步 POST（信号量等待，调用方在后台串行队列）
+    /// 同步 POST（信号量等待，调用方在后台串行队列）。
+    /// 网络错误 / 429 / 5xx 重试 2 次，指数退避（0.6s 起翻倍，上限 5s），尊重 Retry-After。
     static func post(url: String, cookie: String? = nil, auth: String? = nil,
                      body: String, timeout: TimeInterval = 15,
                      extraHeaders: [String: String]? = nil) -> (data: Data?, http: Int?, headers: [AnyHashable: Any]?, error: String?) {
+        var result: (Data?, Int?, [AnyHashable: Any]?, String?) = (nil, nil, nil, nil)
+        for attempt in 0...retryAttempts {
+            result = postOnce(url: url, cookie: cookie, auth: auth, body: body,
+                              timeout: timeout, extraHeaders: extraHeaders)
+            let status = result.1 ?? 0
+            let retryable = result.3 != nil || status == 429 || (500...599).contains(status)
+            if !retryable || attempt == retryAttempts { break }
+            Thread.sleep(forTimeInterval: retryDelay(attempt: attempt, headers: result.2))
+        }
+        return result
+    }
+
+    static let retryAttempts = 2
+
+    private static func retryDelay(attempt: Int, headers: [AnyHashable: Any]?) -> TimeInterval {
+        if let headers = headers {
+            for (k, v) in headers where (k as? String)?.lowercased() == "retry-after" {
+                if let s = v as? String, let n = TimeInterval(s) { return min(max(n, 0.2), 10) }
+            }
+        }
+        return min(0.6 * pow(2, Double(attempt)), 5)
+    }
+
+    private static func postOnce(url: String, cookie: String?, auth: String?,
+                                 body: String, timeout: TimeInterval,
+                                 extraHeaders: [String: String]?) -> (data: Data?, http: Int?, headers: [AnyHashable: Any]?, error: String?) {
         guard let u = URL(string: url) else { return (nil, nil, nil, "URL 无效") }
         var req = URLRequest(url: u)
         req.httpMethod = "POST"

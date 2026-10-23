@@ -16,11 +16,11 @@ final class AdapterSQLTests: XCTestCase {
     func testCCSwitchSyncSQLs() {
         let sqls = cc.syncSQLs(alias: "src_cc", fromEpoch: 1000, todayEpoch: 2000)
         XCTAssertEqual(sqls.count, 2, "明细 + 历史聚合两条")
-        XCTAssertTrue(sqls[0].contains("INSERT OR IGNORE INTO usage_log"), "幂等写入")
+        XCTAssertTrue(sqls[0].contains("ON CONFLICT(source, request_id) DO UPDATE"), "源库修订跟随覆盖")
         XCTAssertTrue(sqls[0].contains("FROM src_cc.proxy_request_logs"))
         XCTAssertTrue(sqls[0].contains("created_at >= 1000 AND created_at < 2000"), "epoch 区间条件")
         XCTAssertTrue(sqls[1].contains("usage_daily_rollups"))
-        XCTAssertTrue(sqls[1].contains("INSERT OR IGNORE INTO usage_log"))
+        XCTAssertTrue(sqls[1].contains("ON CONFLICT(source, request_id) DO UPDATE"))
     }
 
     func testZCodeSyncSQLUsesMilliseconds() {

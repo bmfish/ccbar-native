@@ -35,6 +35,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     var hourlyWindow: HourlyDetailWindowController?
     var modelWindow: ModelDetailWindowController?
     var allTimeWindow: AllTimeDetailWindowController?
+    var topSessionsWindow: TopSessionsDetailWindowController?
 
     // MARK: - 里程碑动画
     var bubbleWindows: [NSWindow] = []
@@ -193,6 +194,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         let items: [(String, Selector)] = [
             (L("洞察中心"), #selector(openInsights)),
             (L("今日详情"), #selector(openHourlyDetailToday)),
+            (L("净输入 Top 会话"), #selector(openTopSessions)),
             (L("近7天用量"), #selector(openDetail)),
             (L("历史总量"), #selector(openAllTimeDetail)),
             (L("复制今日统计"), #selector(copyStats)),
@@ -342,11 +344,39 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             var weekStats: DayStats?
             var monthStats: DayStats?
             var totalStats: TotalStats?
+            var trendCredits: (yesterday: Double, week: Double, month: Double, total: Double)?
+            var trendExtras: TrendExtras?
             if DataCache.shared.needsDailyCache() {
                 yesterdayStats = self.store.queryDayStats(days: 1)
                 weekStats = self.store.queryDayStats(days: 7)
                 monthStats = self.store.queryDayStats(days: 30)
                 totalStats = self.store.queryTotalStats()
+                trendCredits = (
+                    yesterday: self.store.queryCreditsDay(daysAgo: 1),
+                    week: self.store.queryCreditsSum(days: 7),
+                    month: self.store.queryCreditsSum(days: 30),
+                    total: self.store.queryCreditsTotal()
+                )
+                let yh = self.store.queryHourHistogram(daysAgo: 1)
+                let totalTokens = totalStats?.total ?? 0
+                trendExtras = TrendExtras(
+                    yesterdayHourly: (0...23).map { yh[$0] ?? 0 },
+                    weekSeries: self.store.queryDailyTokens(days: 7).map(\.token),
+                    monthSeries: self.store.queryDailyTokens(days: 30).map(\.token),
+                    historySeries: self.store.queryDailyTokens(days: 90).map(\.token),
+                    yesterdayDelta: PopoverViewModel.delta(
+                        current: self.store.queryDayStats(days: 1)?.total,
+                        prev: self.store.queryWindowStats(daysAgoFrom: 2, daysAgoTo: 2)?.total),
+                    weekDelta: PopoverViewModel.delta(
+                        current: weekStats?.total,
+                        prev: self.store.queryWindowStats(daysAgoFrom: 13, daysAgoTo: 7)?.total),
+                    monthDelta: PopoverViewModel.delta(
+                        current: monthStats?.total,
+                        prev: self.store.queryWindowStats(daysAgoFrom: 59, daysAgoTo: 30)?.total),
+                    totalShare: (totalTokens > 0 && monthStats != nil)
+                        ? Double(monthStats!.total) / Double(totalTokens) * 100
+                        : nil
+                )
                 DataCache.shared.markDailyCacheDone()
             }
 
@@ -358,7 +388,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                     month: monthStats,
                     total: totalStats,
                     models: modelBreakdown,
-                    workHours: workHours
+                    workHours: workHours,
+                    trendCredits: trendCredits,
+                    trendExtras: trendExtras
                 )
                 self.applyTitle(todayStats)
 
@@ -947,6 +979,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     @objc func openHourlyDetailYesterday() {
         let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
         openHourlyDetail(for: yesterday)
+    }
+
+    /// 净输入 Top 会话（近 7 天，"钱烧在哪"排行）
+    @objc func openTopSessions() {
+        closePopover()
+        if topSessionsWindow == nil {
+            topSessionsWindow = TopSessionsDetailWindowController()
+        }
+        topSessionsWindow?.reloadData()
+        topSessionsWindow?.showWindow(nil)
+        topSessionsWindow?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc func quit() {

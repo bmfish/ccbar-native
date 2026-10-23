@@ -160,6 +160,18 @@ class Settings {
 //
 // 定时器在后台队列查询、写入缓存；UI 在主线程读缓存。全部访问经锁串行。
 
+/// 趋势卡的历史类数据：每日只算一次（首个 updateData 或跨天），与 Windows 版一致
+struct TrendExtras {
+    var yesterdayHourly: [Int64] = []
+    var weekSeries: [Int64] = []
+    var monthSeries: [Int64] = []
+    var historySeries: [Int64] = []
+    var yesterdayDelta: Double?
+    var weekDelta: Double?
+    var monthDelta: Double?
+    var totalShare: Double?
+}
+
 final class DataCache {
     static let shared = DataCache()
     private let lock = NSLock()
@@ -171,6 +183,13 @@ final class DataCache {
     private var totalStats: TotalStats?
     private var modelBreakdown: [ModelStat]?
     private var workHours: Double?
+    /// 趋势卡积分小字：昨日 / 近7天 / 近30天 / 历史总量
+    private var yesterdayCredits = 0.0
+    private var weekCredits = 0.0
+    private var monthCredits = 0.0
+    private var totalCredits = 0.0
+    /// 趋势卡 sparkline / 环比 / 占比：每日只算一次
+    private var trendExtras: TrendExtras?
     private var lastDailyCacheDate: String?
     private var lastModelCacheHour = -1
 
@@ -209,6 +228,18 @@ final class DataCache {
         return workHours
     }
 
+    /// 四个历史区间的积分合计（与 yesterday/week/month/total 同口径，同批重查）
+    func getCachedTrendCredits() -> (yesterday: Double, week: Double, month: Double, total: Double) {
+        lock.lock(); defer { lock.unlock() }
+        return (yesterdayCredits, weekCredits, monthCredits, totalCredits)
+    }
+
+    /// 趋势卡历史数据（sparkline / 环比 / 占比），每日首次计算后缓存
+    func getCachedTrendExtras() -> TrendExtras? {
+        lock.lock(); defer { lock.unlock() }
+        return trendExtras
+    }
+
     /// 历史区间（昨日/周/月/总量）每天重查一次
     func needsDailyCache() -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -229,7 +260,9 @@ final class DataCache {
         month: DayStats?,
         total: TotalStats?,
         models: [ModelStat]?,
-        workHours: Double?
+        workHours: Double?,
+        trendCredits: (yesterday: Double, week: Double, month: Double, total: Double)? = nil,
+        trendExtras: TrendExtras? = nil
     ) {
         lock.lock(); defer { lock.unlock() }
         self.todayStats = today
@@ -239,6 +272,13 @@ final class DataCache {
         if let v = total { self.totalStats = v }
         if let v = models { self.modelBreakdown = v }
         if let v = workHours { self.workHours = v }
+        if let v = trendCredits {
+            self.yesterdayCredits = v.yesterday
+            self.weekCredits = v.week
+            self.monthCredits = v.month
+            self.totalCredits = v.total
+        }
+        if let v = trendExtras { self.trendExtras = v }
     }
 
     func markDailyCacheDone() {
@@ -261,6 +301,11 @@ final class DataCache {
         totalStats = nil
         modelBreakdown = nil
         workHours = nil
+        yesterdayCredits = 0
+        weekCredits = 0
+        monthCredits = 0
+        totalCredits = 0
+        trendExtras = nil
         lastDailyCacheDate = nil
         lastModelCacheHour = -1
     }

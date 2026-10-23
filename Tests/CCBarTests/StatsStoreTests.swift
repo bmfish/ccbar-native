@@ -96,7 +96,8 @@ final class StatsStoreTests: XCTestCase {
         // 首次同步：全量回填昨天及更早
         store.syncIfNeeded()
         XCTAssertEqual(store.queryDayStats(days: 1)?.total, 3600)
-        XCTAssertEqual(store.queryDayStats(days: 3)?.total, 33600, "近3天含昨天+3天前")
+        XCTAssertEqual(store.queryDayStats(days: 3)?.total, 3600, "近3天=今天+昨天+前天，3天前不计")
+        XCTAssertEqual(store.queryDayStats(days: 4)?.total, 33600, "近4天恰好覆盖 3 天前")
         XCTAssertEqual(store.queryDayStats(days: 7)?.total, 33600)
 
         // 今日还没数据（今日走实时视图，不同步进自建库）

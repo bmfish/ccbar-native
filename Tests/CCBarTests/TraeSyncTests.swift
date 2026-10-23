@@ -68,6 +68,47 @@ final class TraeSyncTests: XCTestCase {
         XCTAssertEqual(resp.user_usage_group_by_sessions?.count, 2)
     }
 
+    // MARK: 分页截断：窗口二分补齐
+
+    private func row(_ id: String, credits: Double = 0, epoch: Int64 = 0) -> TraeRow {
+        TraeRow(sessionID: id, model: "m", input: 1, output: 1, cacheRead: 0, cacheWrite: 0,
+                costUsd: 0, credits: credits, epoch: epoch)
+    }
+
+    /// 顶层窗口触达分页上限 → 恰好二分一次；子窗口完整 → 合并去重、truncated=false
+    func testFetchWithSplitSplitsTruncatedWindow() {
+        let day: Int64 = 86_400
+        let span = 8 * day
+        var windows: [(Int64, Int64)] = []
+        let result = TraeSync.fetchWithSplit(fromEpoch: 0, toEpoch: span) { f, t in
+            windows.append((f, t))
+            if t - f >= span {
+                // 顶层必截断；其行在拆分后应被丢弃（改由两个子窗口重取）
+                return .success([self.row("stale", credits: 9)], truncated: true)
+            }
+            // 两个子窗口都含边界会话 b：后取（较新窗口）覆盖
+            let b = self.row("b", credits: f == 0 ? 1 : 2)
+            return .success([self.row("s\(f / day)"), b], truncated: false)
+        }
+        guard case .success(let rows, let truncated) = result else { return XCTFail("应成功") }
+        XCTAssertFalse(truncated)
+        XCTAssertEqual(windows.count, 3, "截断后只二分一层：顶层 + 两个子窗口")
+        XCTAssertEqual(Set(rows.map(\.sessionID)), ["s0", "s4", "b"], "边界会话去重、顶层旧行丢弃")
+        XCTAssertEqual(rows.first { $0.sessionID == "b" }?.credits, 2, "较新窗口覆盖边界会话")
+    }
+
+    /// 最小粒度（1 天）仍截断：不无限拆分，返回 truncated=true 供调用方保留水位
+    func testFetchWithSplitKeepsTruncatedAtMinGranularity() {
+        var calls = 0
+        let result = TraeSync.fetchWithSplit(fromEpoch: 0, toEpoch: 86_400) { _, _ in
+            calls += 1
+            return .success([self.row("s")], truncated: true)
+        }
+        guard case .success(_, let truncated) = result else { return XCTFail("应成功") }
+        XCTAssertTrue(truncated)
+        XCTAssertEqual(calls, 1, "单日窗口不再拆分")
+    }
+
     // MARK: JWT / Set-Cookie
 
     /// JWT payload exp 解析（base64url，无 padding）
@@ -137,6 +178,9 @@ final class TraeSyncTests: XCTestCase {
                     costUsd: 0, credits: 1.5, epoch: yestEpoch),
         ])
         XCTAssertEqual(store.queryTodayCredits(), 2.5, accuracy: 1e-9)
+        XCTAssertEqual(store.queryCreditsDay(daysAgo: 0), 2.5, accuracy: 1e-9, "今日积分小字")
+        XCTAssertEqual(store.queryCreditsDay(daysAgo: 1), 1.5, accuracy: 1e-9, "昨日积分小字")
+        XCTAssertEqual(store.queryCreditsTotal(), 4.0, accuracy: 1e-9, "历史总积分小字")
         XCTAssertEqual(store.queryCreditsSum(days: 7), 4.0, accuracy: 1e-9)
         let daily = store.queryCreditsDaily(days: 7)
         XCTAssertEqual(daily.reduce(0) { $0 + $1.credits }, 4.0, accuracy: 1e-9, "每日曲线之和应等于总和")
