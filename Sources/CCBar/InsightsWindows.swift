@@ -149,7 +149,18 @@ final class InsightsViewModel: ObservableObject {
     @Published var creditsToday = 0.0
     @Published var credits7 = 0.0
     @Published var credits30 = 0.0
+    /// 上期积分（用于统计卡环比）
+    @Published var creditsPrevDay = 0.0
+    @Published var creditsPrev7 = 0.0
+    @Published var creditsPrev30 = 0.0
     @Published var creditsDaily: [CreditsPoint] = []
+    /// 积分页 Hero / 余额 / 峰值卡
+    @Published var creditsTodayHourly: [Double] = []
+    @Published var todayReqs = 0
+    @Published var todayCacheHit = 0.0
+    @Published var todayActiveMin = 0
+    @Published var creditsPeak = 0.0
+    @Published var creditsPeakLabel = ""
     @Published var creditsEnt: (consumed: Double, total: Double)?
     // 费用页月度预算
     @Published var costMtd = 0.0
@@ -246,7 +257,16 @@ final class InsightsViewModel: ObservableObject {
         var creditsToday = 0.0
         var credits7 = 0.0
         var credits30 = 0.0
+        var creditsPrevDay = 0.0
+        var creditsPrev7 = 0.0
+        var creditsPrev30 = 0.0
         var creditsDaily: [CreditsPoint] = []
+        var creditsTodayHourly: [Double] = []
+        var todayReqs = 0
+        var todayCacheHit = 0.0
+        var todayActiveMin = 0
+        var creditsPeak = 0.0
+        var creditsPeakLabel = ""
         var creditsEnt: (consumed: Double, total: Double)?
     }
 
@@ -370,6 +390,9 @@ final class InsightsViewModel: ObservableObject {
         s.creditsToday = store.queryCreditsSum(days: 0)
         s.credits7 = store.queryCreditsSum(days: 7)
         s.credits30 = store.queryCreditsSum(days: 30)
+        s.creditsPrevDay = store.queryCreditsDay(daysAgo: 1)
+        s.creditsPrev7 = store.queryCreditsRange(daysAgoFrom: 13, daysAgoTo: 7)
+        s.creditsPrev30 = store.queryCreditsRange(daysAgoFrom: 59, daysAgoTo: 30)
         let rawCredits = store.queryCreditsDaily(days: 30)
         var creditsByDate: [String: Double] = [:]
         for r in rawCredits { creditsByDate[r.date] = r.credits }
@@ -379,6 +402,24 @@ final class InsightsViewModel: ObservableObject {
             creditPoints.append(CreditsPoint(day: day, credits: creditsByDate[fmt.string(from: day)] ?? 0))
         }
         s.creditsDaily = creditPoints
+        // 积分页 Hero / 余额 / 峰值
+        s.creditsTodayHourly = store.queryCreditsHourHistogram(days: 0)
+        s.todayReqs = store.queryDayStats(days: 0)?.reqs ?? 0
+        if let last = s.compDaily.last, last.date == fmt.string(from: Date()) {
+            let total = last.input + last.output + last.cacheRead + last.cacheCreate
+            s.todayCacheHit = total > 0 ? Double(last.cacheRead) / Double(total) * 100 : 0
+        }
+        let todayTimes = store.queryTodayTimeline().map(\.time)
+        if let mn = todayTimes.min(), let mx = todayTimes.max(), mx > mn {
+            s.todayActiveMin = (mx - mn) / 60
+        }
+        if let peak = creditPoints.max(by: { $0.credits < $1.credits }) {
+            s.creditsPeak = peak.credits
+            let mf = DateFormatter()
+            mf.locale = Locale(identifier: "zh_CN")
+            mf.dateFormat = "M月d日"
+            s.creditsPeakLabel = mf.string(from: peak.day)
+        }
         s.creditsEnt = store.traeEntSummary()
         return s
     }
@@ -431,7 +472,16 @@ final class InsightsViewModel: ObservableObject {
         creditsToday = s.creditsToday
         credits7 = s.credits7
         credits30 = s.credits30
+        creditsPrevDay = s.creditsPrevDay
+        creditsPrev7 = s.creditsPrev7
+        creditsPrev30 = s.creditsPrev30
         creditsDaily = s.creditsDaily
+        creditsTodayHourly = s.creditsTodayHourly
+        todayReqs = s.todayReqs
+        todayCacheHit = s.todayCacheHit
+        todayActiveMin = s.todayActiveMin
+        creditsPeak = s.creditsPeak
+        creditsPeakLabel = s.creditsPeakLabel
         creditsEnt = s.creditsEnt
     }
 
@@ -1451,71 +1501,29 @@ struct CreditsPage: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 14) {
+                    heroCard
+                    balanceCard.frame(width: 300)
+                }
+
                 HStack(spacing: 14) {
-                    bigCreditsCard(L("今日积分"), vm.creditsToday)
-                    bigCreditsCard(L("近 7 天"), vm.credits7)
-                    bigCreditsCard(L("近 30 天"), vm.credits30)
+                    creditsStatCard(L("近 7 天"), vm.credits7, prev: vm.creditsPrev7,
+                                    series: Array(vm.creditsDaily.suffix(7)),
+                                    color: Design.successColor)
+                    creditsStatCard(L("近 30 天"), vm.credits30, prev: vm.creditsPrev30,
+                                    series: vm.creditsDaily,
+                                    color: Design.successColor)
+                    creditsStatCard(L("日均消耗"), dailyAvg,
+                                    prev: vm.creditsPrev30 > 0 ? vm.creditsPrev30 / 30 : 0,
+                                    series: vm.creditsDaily,
+                                    color: Design.warningColor)
+                    creditsStatCard(L("峰值单日"), vm.creditsPeak, prev: nil,
+                                    series: vm.creditsDaily,
+                                    color: Design.textMuted,
+                                    sub: vm.creditsPeakLabel)
                 }
 
-                if let ent = vm.creditsEnt {
-                    pageCard(L("积分余额（官方账单）")) {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(formatCredits(ent.consumed))
-                                .font(.system(size: 22, weight: .bold).monospacedDigit())
-                                .foregroundColor(Color(nsColor: Design.dataHighlightColor))
-                            Text(L("已用 / 共") + " " + formatCredits(ent.total))
-                                .font(.system(size: 12).monospacedDigit())
-                                .foregroundColor(Color(nsColor: Design.textSecondary))
-                            Spacer()
-                            if ent.total > 0 {
-                                Text(String(format: "%.0f%%", ent.consumed / ent.total * 100))
-                                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                                    .foregroundColor(Color(nsColor: Design.brandColor))
-                            }
-                        }
-                        if ent.total > 0 {
-                            GeometryReader { geo in
-                                ZStack(alignment: .leading) {
-                                    Capsule().fill(Color.white.opacity(0.06))
-                                    Capsule().fill(Color(nsColor: Design.brandColor).opacity(0.75))
-                                        .frame(width: geo.size.width * CGFloat(min(max(ent.consumed / ent.total, 0), 1)))
-                                }
-                            }
-                            .frame(height: 5)
-                            .padding(.top, 6)
-                        }
-                    }
-                }
-
-                pageCard(L("近 30 天积分走势")) {
-                    if vm.credits30 <= 0 {
-                        mutedHint(L("接入 Trae 并产生用量后展示积分消耗"))
-                    } else {
-                        Chart {
-                            ForEach(Array(vm.creditsDaily.enumerated()), id: \.element.id) { i, p in
-                                BarMark(
-                                    x: .value(L("日期"), p.day, unit: .day),
-                                    y: .value(L("积分"), p.credits)
-                                )
-                                // 多彩柱色：随小时种子洗牌的调色板逐柱取色（与模型分布卡同一机制）
-                                .foregroundStyle(Color(nsColor: Design.modelColors(count: vm.creditsDaily.count)[i]).opacity(0.85))
-                                .cornerRadius(2)
-                            }
-                        }
-                        .chartYAxis {
-                            AxisMarks { value in
-                                AxisGridLine()
-                                AxisValueLabel {
-                                    if let v = value.as(Double.self) {
-                                        Text(formatCredits(v)).font(.system(size: 9).monospacedDigit())
-                                    }
-                                }
-                            }
-                        }
-                        .chartXAxis { dateXAxis() }
-                        .frame(height: 140)
-                    }
-                }
+                trendCard
 
                 Text(L("积分为 Trae 官方计费口径；历史数据自接入起最多回溯 90 天"))
                     .font(.system(size: 10))
@@ -1524,21 +1532,284 @@ struct CreditsPage: View {
         }
     }
 
-    private func bigCreditsCard(_ title: String, _ value: Double) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+    private var dailyAvg: Double { vm.credits30 / 30 }
+    private var sevenDayRate: Double { vm.credits7 / 7 }
+    private var remaining: Double {
+        guard let e = vm.creditsEnt else { return 0 }
+        return max(e.total - e.consumed, 0)
+    }
+    /// 按近 7 天日均速率估算余额还能用几天
+    private var daysLeft: Int? {
+        guard let e = vm.creditsEnt, e.total > 0, sevenDayRate > 0 else { return nil }
+        return max(Int((remaining / sevenDayRate).rounded()), 0)
+    }
+    private var activeDuration: String {
+        let m = vm.todayActiveMin
+        return m >= 60 ? String(format: "%.1fh", Double(m) / 60) : "\(m)m"
+    }
+
+    /// 今日积分 Hero：环比 + 日内走势 + 请求/命中/时长
+    private var heroCard: some View {
+        cardChrome {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 5) {
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(Color(nsColor: Design.successColor))
+                    Text(L("今日积分"))
+                        .font(.system(size: 12))
+                        .foregroundColor(Color(nsColor: Design.textSecondary))
+                    Spacer()
+                    Button {
+                        UserDefaults.standard.set(InsightsPage.timeline.rawValue,
+                                                  forKey: "insightsLastPage")
+                    } label: {
+                        HStack(spacing: 2) {
+                            Text(L("明细"))
+                            Image(systemName: "chevron.right").font(.system(size: 8))
+                        }
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                    }
+                    .buttonStyle(.plain)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(formatCredits(vm.creditsToday))
+                        .font(.system(size: 30, weight: .bold).monospacedDigit())
+                        .foregroundColor(Color(nsColor: Design.successColor))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.55)
+                        .layoutPriority(1)
+                    Text(L("积分"))
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(nsColor: Design.textSecondary))
+                        .fixedSize()
+                    deltaBadge(delta(vm.creditsToday, vm.creditsPrevDay))
+                        .fixedSize()
+                }
+                MiniSparkline(values: vm.creditsTodayHourly.map { Int64($0.rounded()) },
+                              color: Design.successColor)
+                    .frame(height: 52)
+                Divider().overlay(Color.white.opacity(0.05))
+                HStack(spacing: 0) {
+                    heroStat(L("请求数"), "\(vm.todayReqs)")
+                    heroStat(L("缓存命中"), String(format: "%.0f%%", vm.todayCacheHit))
+                    heroStat(L("时长"), activeDuration)
+                }
+            }
+        }
+    }
+
+    private func heroStat(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
             Text(title)
-                .font(.system(size: 12))
-                .foregroundColor(Color(nsColor: Design.textSecondary))
-            Text(formatCredits(value))
-                .font(.system(size: 26, weight: .bold).monospacedDigit())
+                .font(.system(size: 10))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+            Text(value)
+                .font(.system(size: 14, weight: .semibold).monospacedDigit())
                 .foregroundColor(Color(nsColor: Design.bigNumberColor))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 余额卡：已用大头 + 剩余 + 进度 + 可用天数
+    @ViewBuilder
+    private var balanceCard: some View {
+        cardChrome {
+            if let ent = vm.creditsEnt {
+                let ratio = ent.total > 0 ? min(max(ent.consumed / ent.total, 0), 1) : 0
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text(L("积分余额"))
+                            .font(.system(size: 12))
+                            .foregroundColor(Color(nsColor: Design.textSecondary))
+                        Spacer()
+                        if let d = daysLeft {
+                            Text(L("可用") + " \(d) " + L("天"))
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(Color(nsColor: Design.warningColor))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Color(nsColor: Design.warningColor).opacity(0.14)))
+                        }
+                    }
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(formatCredits(ent.consumed))
+                            .font(.system(size: 34, weight: .bold).monospacedDigit())
+                            .foregroundColor(Color(nsColor: Design.bigNumberColor))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                        Spacer()
+                        if ent.total > 0 {
+                            Text(L("剩余积分") + " " + formatCredits(remaining))
+                                .font(.system(size: 11).monospacedDigit())
+                                .foregroundColor(Color(nsColor: Design.successColor))
+                        }
+                    }
+                    if ent.total > 0 {
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(Color.white.opacity(0.06))
+                                Capsule().fill(Color(nsColor: ratio >= 0.85
+                                                     ? Design.warningColor : Design.successColor).opacity(0.8))
+                                    .frame(width: geo.size.width * CGFloat(ratio))
+                            }
+                        }
+                        .frame(height: 5)
+                        HStack {
+                            Text("0")
+                            Spacer()
+                            Text(L("已用") + " " + String(format: "%.0f%%", ratio * 100))
+                                .foregroundColor(Color(nsColor: ratio >= 0.85
+                                                       ? Design.warningColor : Design.successColor))
+                            Spacer()
+                            Text(formatCredits(ent.total))
+                        }
+                        .font(.system(size: 9).monospacedDigit())
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                    }
+                    Spacer(minLength: 4)
+                    Text(daysLeft.map {
+                        L("按近 7 天日均速率，余额约") + " \($0) " + L("天后耗尽")
+                    } ?? L("暂无消耗速率，无法估算可用天数"))
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                }
+                .frame(maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(L("积分余额"))
+                        .font(.system(size: 12))
+                        .foregroundColor(Color(nsColor: Design.textSecondary))
+                    Text(L("未获取到官方账单，同步后展示"))
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                }
+                .frame(maxHeight: .infinity, alignment: .topLeading)
+            }
+        }
+    }
+
+    /// 近 30 天走势：保留多彩柱，新增均值虚线
+    private var trendCard: some View {
+        pageCard(L("近 30 天积分走势")) {
+            if vm.credits30 <= 0 {
+                mutedHint(L("接入 Trae 并产生用量后展示积分消耗"))
+            } else {
+                HStack(spacing: 12) {
+                    Spacer()
+                    HStack(spacing: 4) {
+                        Circle().fill(Color(nsColor: Design.successColor)).frame(width: 6, height: 6)
+                        Text(L("每日消耗")).font(.system(size: 10))
+                            .foregroundColor(Color(nsColor: Design.textMuted))
+                    }
+                    HStack(spacing: 4) {
+                        Capsule().fill(Color(nsColor: Design.warningColor))
+                            .frame(width: 12, height: 1.5)
+                        Text(L("均值") + " " + formatCredits(dailyAvg))
+                            .font(.system(size: 10).monospacedDigit())
+                            .foregroundColor(Color(nsColor: Design.textMuted))
+                    }
+                }
+                Chart {
+                    ForEach(Array(vm.creditsDaily.enumerated()), id: \.element.id) { i, p in
+                        BarMark(
+                            x: .value(L("日期"), p.day, unit: .day),
+                            y: .value(L("积分"), p.credits)
+                        )
+                        // 多彩柱色：随小时种子洗牌的调色板逐柱取色（与模型分布卡同一机制）
+                        .foregroundStyle(Color(nsColor: Design.modelColors(count: vm.creditsDaily.count)[i]).opacity(0.85))
+                        .cornerRadius(2)
+                    }
+                    RuleMark(y: .value(L("均值"), dailyAvg))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                        .foregroundStyle(Color(nsColor: Design.warningColor).opacity(0.75))
+                }
+                .chartYAxis {
+                    AxisMarks { value in
+                        AxisGridLine()
+                        AxisValueLabel {
+                            if let v = value.as(Double.self) {
+                                Text(formatCredits(v)).font(.system(size: 9).monospacedDigit())
+                            }
+                        }
+                    }
+                }
+                .chartXAxis { dateXAxis() }
+                .frame(height: 150)
+            }
+        }
+    }
+
+    /// 卡片统一底色/描边；固定最小高度保证 Hero 与余额卡上下对齐
+    private func cardChrome<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .padding(16)
+            .frame(maxWidth: .infinity, minHeight: 210, maxHeight: 210, alignment: .topLeading)
+            .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+                .fill(Color(nsColor: Design.cardFillDark)))
+            .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+                .stroke(Color(nsColor: Design.cardBorderDark)))
+    }
+
+    /// 积分统计卡：数值 + 环比 badge（或副标题）+ 迷你走势
+    private func creditsStatCard(_ title: String, _ value: Double, prev: Double?,
+                                 series: [CreditsPoint], color: NSColor,
+                                 sub: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(.system(size: 12))
+                    .foregroundColor(Color(nsColor: Design.textSecondary))
+                    .lineLimit(1)
+                Spacer(minLength: 2)
+                if let sub, !sub.isEmpty {
+                    Text(sub)
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .fixedSize()
+                } else {
+                    deltaBadge(delta(value, prev))
+                        .fixedSize()
+                }
+            }
+            Text(formatCredits(value))
+                .font(.system(size: 24, weight: .bold).monospacedDigit())
+                .foregroundColor(Color(nsColor: Design.bigNumberColor))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            MiniSparkline(values: series.map { Int64($0.credits.rounded()) }, color: color)
+                .frame(height: 24)
+                .padding(.top, 2)
+        }
         .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 112, maxHeight: 112, alignment: .topLeading)
         .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
             .fill(Color(nsColor: Design.cardFillDark)))
         .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
             .stroke(Color(nsColor: Design.cardBorderDark)))
+    }
+
+    /// 环比 badge：积分消耗上升用提醒色，下降用正常色
+    @ViewBuilder
+    private func deltaBadge(_ d: Double?) -> some View {
+        if let d {
+            let c = d >= 0 ? Design.warningColor : Design.successColor
+            Text((d >= 0 ? "▲" : "▼") + String(format: "%.1f%%", abs(d)))
+                .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                .foregroundColor(Color(nsColor: c))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(Color(nsColor: c).opacity(0.14)))
+        }
+    }
+
+    /// 环比百分比；上期为 0 时不显示
+    private func delta(_ current: Double, _ prev: Double?) -> Double? {
+        guard let prev, prev > 0 else { return nil }
+        return (current - prev) / prev * 100
     }
 }
 

@@ -569,8 +569,8 @@ private func popoverCard<Content: View>(@ViewBuilder content: () -> Content) -> 
             .strokeBorder(Color(nsColor: Design.cardBorderDark), lineWidth: 0.5))
 }
 
-/// 迷你面积折线：无坐标轴，底部渐变收尾（弹窗 Hero / 趋势卡用）
-private struct MiniSparkline: View {
+/// 迷你面积折线：无坐标轴，底部渐变收尾（弹窗 Hero / 趋势卡 / 积分卡共用）
+struct MiniSparkline: View {
     let values: [Int64]
     let color: NSColor
 

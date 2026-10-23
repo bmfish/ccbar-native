@@ -1251,6 +1251,38 @@ final class StatsStore {
         return sum
     }
 
+    /// 近 N 天（含今天）逐小时积分分布，返回 24 个桶
+    func queryCreditsHourHistogram(days: Int) -> [Double] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return Array(repeating: 0, count: 24) }
+        let offset = Int64(TimeZone.current.secondsFromGMT())
+        var out = [Double](repeating: 0, count: 24)
+        forEachRow("""
+        SELECT ((created_at + ?) % 86400) / 3600,
+               COALESCE(SUM(credits), 0)
+        FROM usage_all
+        WHERE created_at >= ? AND created_at < ?
+        GROUP BY 1
+        """, binds: [offset, Self.nearWindowStart(days), Self.localMidnight(-1)]) { stmt in
+            let h = Int(sqlite3_column_int64(stmt, 0))
+            guard h >= 0 && h < 24 else { return }
+            out[h] = sqlite3_column_double(stmt, 1)
+        }
+        return out
+    }
+
+    /// 指定天数区间（daysAgoFrom 更早、daysAgoTo 更近，含端点）内的积分合计
+    func queryCreditsRange(daysAgoFrom: Int, daysAgoTo: Int) -> Double {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return 0 }
+        var sum = 0.0
+        forEachRow("SELECT COALESCE(SUM(credits), 0) FROM usage_all WHERE created_at >= ? AND created_at < ?",
+                   binds: [Self.localMidnight(daysAgoFrom), Self.localMidnight(daysAgoTo - 1)]) { stmt in
+            sum = sqlite3_column_double(stmt, 0)
+        }
+        return sum
+    }
+
     /// 近 N 天（含今天）每日积分曲线，日期升序（可能有空洞，调用方补零）
     func queryCreditsDaily(days: Int) -> [(date: String, credits: Double)] {
         lock.lock(); defer { lock.unlock() }
