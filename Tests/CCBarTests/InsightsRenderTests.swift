@@ -172,11 +172,15 @@ final class InsightsRenderTests: XCTestCase {
 
         // 组头恰好 4 个：20/19/12/11，各在组首行前，计数正确
         let headers = lines.compactMap { line -> (Int, Int)? in
-            if case .header(let h, let c) = line { return (h, c) }
+            if case .header(let h, let c, _) = line { return (h, c) }
             return nil
         }
         XCTAssertEqual(headers.map(\.0), [20, 19, 12, 11])
         XCTAssertEqual(headers.map(\.1), [1, 2, 2, 2])
+        // 组头携带整组积分合计（测试数据全为 0）
+        for line in lines {
+            if case .header(_, _, let credits) = line { XCTAssertEqual(credits, 0) }
+        }
 
         // 数据行顺序保持 DESC、总数一致
         let dataRows = lines.compactMap { line -> Int? in
@@ -189,7 +193,7 @@ final class InsightsRenderTests: XCTestCase {
         for (i, line) in lines.enumerated() {
             if case .row(let time, _, _, _, _, _) = line {
                 let h = cal.component(.hour, from: Date(timeIntervalSince1970: TimeInterval(time)))
-                if case .header(let hh, _)? = i > 0 ? lines[i - 1] : nil {
+                if case .header(let hh, _, _)? = i > 0 ? lines[i - 1] : nil {
                     XCTAssertEqual(hh, h, "行必须紧跟自己的组头")
                 }
             }

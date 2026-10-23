@@ -1655,7 +1655,19 @@ final class StatsStore {
         return out
     }
 
-    /// 近 N 天每日总 token（跨渠道，含今天实时），日期升序
+    /// 最早一条明细的时间戳（“全部”范围与模型编年史起点的兜底）
+    func queryFirstUsageEpoch() -> Int64? {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return nil }
+        var result: Int64?
+        forEachRow("SELECT MIN(created_at) FROM usage_all") { stmt in
+            if sqlite3_column_type(stmt, 0) != SQLITE_NULL {
+                result = sqlite3_column_int64(stmt, 0)
+            }
+        }
+        return result
+    }
+
     func queryDailyTokens(days: Int) -> [(date: String, token: Int64)] {
         lock.lock(); defer { lock.unlock() }
         guard handle != nil else { return [] }

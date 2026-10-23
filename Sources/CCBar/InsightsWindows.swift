@@ -122,6 +122,7 @@ final class InsightsViewModel: ObservableObject {
     @Published var cost7 = 0.0
     @Published var cost30 = 0.0
     @Published var costDaily: [CostPoint] = []        // 近 30 天，cents = 美分
+    @Published var costDaily90: [CostPoint] = []      // 近 90 天（费用页 7/30/90 切换）
     @Published var costModels: [(model: String, cost: Double, token: Int64)] = []
     // 洞察
     @Published var streak = 0
@@ -139,6 +140,9 @@ final class InsightsViewModel: ObservableObject {
     @Published var monthProjected: Int64 = 0
     @Published var monthMtd: Int64 = 0
     @Published var totalAll: Int64 = 0
+    /// 洞察页范围切换：近 180 天与全量按日 token（升序、含今天）
+    @Published var dayTokens: [(date: String, token: Int64)] = []
+    @Published var dayTokensAll: [(date: String, token: Int64)] = []
     // 渠道
     @Published var channelPoints: [ChannelPoint] = []
     @Published var todaySources: [SourceStat] = []
@@ -215,6 +219,7 @@ final class InsightsViewModel: ObservableObject {
     private struct Snapshot {
         var costToday = 0.0, cost7 = 0.0, cost30 = 0.0
         var costDaily: [CostPoint] = []
+        var costDaily90: [CostPoint] = []
         var costModels: [(model: String, cost: Double, token: Int64)] = []
         var streak = 0
         var thisWeek: Int64 = 0, lastWeek: Int64 = 0
@@ -230,6 +235,8 @@ final class InsightsViewModel: ObservableObject {
         var monthProjected: Int64 = 0
         var monthMtd: Int64 = 0
         var totalAll: Int64 = 0
+        var dayTokens: [(date: String, token: Int64)] = []
+        var dayTokensAll: [(date: String, token: Int64)] = []
         var channelPoints: [ChannelPoint] = []
         var todaySources: [SourceStat] = []
         var timeline: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] = []
@@ -276,20 +283,21 @@ final class InsightsViewModel: ObservableObject {
         s.costToday = store.queryCost(days: 0)
         s.cost7 = store.queryCost(days: 7)
         s.cost30 = store.queryCost(days: 30)
-        let raw = store.queryCostDaily(days: 30)
+        let raw = store.queryCostDaily(days: 90)
         // 补齐日期空洞，图表时间轴连续（X 轴用时间标度，轴刻度按需稀疏）
         let fmt = StatsStore.dayFormatter
         let cal = Calendar.current
         var byDate: [String: Double] = [:]
         for r in raw { byDate[r.date] = r.cost }
         var points: [CostPoint] = []
-        for d in 0..<30 {
-            guard let day = cal.date(byAdding: .day, value: -29 + d, to: cal.startOfDay(for: Date())) else { continue }
+        for d in 0..<90 {
+            guard let day = cal.date(byAdding: .day, value: -89 + d, to: cal.startOfDay(for: Date())) else { continue }
             let key = fmt.string(from: day)
             points.append(CostPoint(day: day, cents: Int64((byDate[key] ?? 0) * 100)))
         }
-        s.costDaily = points
-        s.costModels = store.queryCostByModel(days: 30)
+        s.costDaily90 = points
+        s.costDaily = Array(points.suffix(30))
+        s.costModels = store.queryCostByModel(days: 30, limit: 50)
         let mtd = store.queryCostMTD()
         s.costMtd = mtd.mtd
         s.monthDaysElapsed = mtd.daysElapsed
@@ -317,8 +325,29 @@ final class InsightsViewModel: ObservableObject {
                            lastEpoch: $0.lastEpoch, token: $0.token)
         }
         s.totalAll = store.queryTotalStats()?.total ?? 0
+        // 范围切换：180 天按日补齐序列（含今天）+ 全量序列
+        func zeroFilled(_ raw: [(date: String, token: Int64)], days: Int) -> [(date: String, token: Int64)] {
+            var map: [String: Int64] = [:]
+            for r in raw { map[r.date] = r.token }
+            var out: [(date: String, token: Int64)] = []
+            let todayStart = cal.startOfDay(for: Date())
+            for d in 0..<days {
+                guard let day = cal.date(byAdding: .day, value: -(days - 1 - d), to: todayStart) else { continue }
+                let key = fmt.string(from: day)
+                out.append((date: key, token: map[key] ?? 0))
+            }
+            return out
+        }
+        s.dayTokens = zeroFilled(store.queryDailyTokens(days: 180), days: 180)
+        if let first = store.queryFirstUsageEpoch() {
+            let firstDay = cal.startOfDay(for: Date(timeIntervalSince1970: TimeInterval(first)))
+            let span = (cal.dateComponents([.day], from: firstDay,
+                                           to: cal.startOfDay(for: Date())).day ?? 0) + 1
+            let days = min(max(span, 1), 730)
+            s.dayTokensAll = zeroFilled(store.queryDailyTokens(days: days), days: days)
+        }
         // 构成/应用/星期/热力/月度预测
-        s.appPoints = store.queryAppDaily(days: 30).map {
+        s.appPoints = store.queryAppDaily(days: 90).map {
             AppPoint(date: $0.date, day: fmt.date(from: $0.date) ?? Date(),
                      app: $0.app, name: appDisplayName($0.app), token: $0.token)
         }
@@ -371,8 +400,8 @@ final class InsightsViewModel: ObservableObject {
         let dFmt = DateFormatter(); dFmt.dateStyle = .medium; dFmt.timeStyle = .none
         s.weeklyRange = "\(dFmt.string(from: Date(timeIntervalSince1970: TimeInterval(StatsStore.localMidnight(w.from)))))"
             + " ~ \(dFmt.string(from: Date(timeIntervalSince1970: TimeInterval(StatsStore.localMidnight(w.to)))))"
-        // 渠道页
-        s.channelPoints = store.queryChannelDaily(days: 30).map {
+        // 渠道页（90 天，页面内按 7/30/90 切段）
+        s.channelPoints = store.queryChannelDaily(days: 90).map {
             ChannelPoint(date: $0.date, day: fmt.date(from: $0.date) ?? Date(),
                          source: $0.source,
                          name: AppDelegate.shared?.sourceDisplayName($0.source) ?? $0.source,
@@ -429,6 +458,7 @@ final class InsightsViewModel: ObservableObject {
         cost7 = s.cost7
         cost30 = s.cost30
         costDaily = s.costDaily
+        costDaily90 = s.costDaily90
         costModels = s.costModels
         streak = s.streak
         thisWeek = s.thisWeek
@@ -445,6 +475,8 @@ final class InsightsViewModel: ObservableObject {
         monthProjected = s.monthProjected
         monthMtd = s.monthMtd
         totalAll = s.totalAll
+        dayTokens = s.dayTokens
+        dayTokensAll = s.dayTokensAll
         channelPoints = s.channelPoints
         todaySources = s.todaySources
         timeline = s.timeline
@@ -578,11 +610,21 @@ func showInfoAlert(_ title: String, _ msg: String) {
     alert.runModal()
 }
 
-private func pageCard<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+private func pageCard<Content: View>(_ title: String, trailing: String? = nil,
+                                    @ViewBuilder content: () -> Content) -> some View {
     VStack(alignment: .leading, spacing: 10) {
-        Text(title)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundColor(Color(nsColor: Design.textPrimary))
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(Color(nsColor: Design.textPrimary))
+            Spacer()
+            if let trailing {
+                Text(trailing)
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+                    .fixedSize()
+            }
+        }
         content()
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -602,110 +644,75 @@ private func formatCredits(_ v: Double) -> String {
     v == v.rounded() && abs(v) < 100_000 ? String(Int(v)) : String(format: "%.2f", v)
 }
 
+/// 胶囊分段切换器（范围 / 口径切换）
+private struct PillSwitcher<T: Hashable>: View {
+    let options: [(T, String)]
+    @Binding var selection: T
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options.indices, id: \.self) { i in
+                let active = selection == options[i].0
+                Text(options[i].1)
+                    .font(.system(size: 11, weight: active ? .semibold : .regular))
+                    .foregroundColor(Color(nsColor: active ? Design.textPrimary : Design.textSecondary))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(active ? Color.white.opacity(0.1) : Color.clear))
+                    .contentShape(Capsule())
+                    .onTapGesture { selection = options[i].0 }
+            }
+        }
+        .padding(2)
+        .background(Capsule().fill(Color(nsColor: Design.cardFillDark)))
+        .overlay(Capsule().stroke(Color(nsColor: Design.cardBorderDark)))
+    }
+}
+
 // MARK: - 费用页
 
 struct CostPage: View {
     @ObservedObject var vm: InsightsViewModel
 
+    @State private var range: CostRange = .d30
+
+    enum CostRange: String, CaseIterable, Identifiable {
+        case d7, d30, d90
+        var id: String { rawValue }
+        var days: Int {
+            switch self {
+            case .d7: return 7
+            case .d30: return 30
+            case .d90: return 90
+            }
+        }
+        var label: String { String(format: L("%d 天"), days) }
+    }
+
+    private var series: [CostPoint] { Array(vm.costDaily90.suffix(range.days)) }
+    private var seriesTotal: Double { series.reduce(0) { $0 + Double($1.cents) / 100 } }
+    private var dailyAvg: Double { seriesTotal / Double(max(series.count, 1)) }
+    private var yesterdayCost: Double {
+        vm.costDaily90.dropLast().last.map { Double($0.cents) / 100 } ?? 0
+    }
+    private var peakDay: CostPoint? { series.max { $0.cents < $1.cents } }
+    private var monthCost: Double { vm.costMtd > 0 ? vm.costMtd : vm.cost30 }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 14) {
-                    bigCostCard(L("今日费用"), vm.costToday, estimated: vm.estToday)
-                    bigCostCard(L("近 7 天"), vm.cost7, estimated: vm.est7)
-                    bigCostCard(L("近 30 天"), vm.cost30, estimated: vm.est30)
+                header
+
+                HStack(alignment: .top, spacing: 14) {
+                    todayCard
+                    monthCard.frame(width: 290)
                 }
 
-                if vm.monthlyBudget > 0 {
-                    budgetCard
-                }
+                trendCard
 
-                pageCard(L("近 30 天费用走势")) {
-                    Chart {
-                        ForEach(Array(vm.costDaily.enumerated()), id: \.element.id) { i, p in
-                            BarMark(
-                                x: .value(L("日期"), p.day, unit: .day),
-                                y: .value(L("费用"), Double(p.cents) / 100)
-                            )
-                            // 多彩柱色：随小时种子洗牌的调色板逐柱取色（与积分页同一机制）
-                            .foregroundStyle(Color(nsColor: Design.modelColors(count: vm.costDaily.count)[i]).opacity(0.85))
-                            .cornerRadius(2)
-                        }
-                        if vm.monthlyBudget > 0 {
-                            budgetRule
-                        }
-                    }
-                    .chartYAxis {
-                        AxisMarks { value in
-                            AxisGridLine()
-                            AxisValueLabel {
-                                if let v = value.as(Double.self) {
-                                    Text(money(v)).font(.system(size: 9))
-                                }
-                            }
-                        }
-                    }
-                    .chartXAxis { dateXAxis() }
-                    .frame(height: 140)
-                }
-
-                pageCard(L("模型费用排行（近 30 天）")) {
-                    if vm.costModels.isEmpty {
-                        mutedHint(L("暂无数据"))
-                    } else {
-                        let maxCost = vm.costModels.map(\.cost).max() ?? 1
-                        VStack(spacing: 8) {
-                            ForEach(vm.costModels.indices, id: \.self) { i in
-                                let m = vm.costModels[i]
-                                HStack(spacing: 8) {
-                                    Circle()
-                                        .fill(Color(nsColor: Design.modelColors(count: max(vm.costModels.count, 1))[i]))
-                                        .frame(width: 8, height: 8)
-                                    Text(m.model)
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundColor(Color(nsColor: Design.textPrimary))
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text(money(m.cost))
-                                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                                        .foregroundColor(Color(nsColor: Design.dataHighlightColor))
-                                }
-                                GeometryReader { geo in
-                                    ZStack(alignment: .leading) {
-                                        Capsule().fill(Color.white.opacity(0.06))
-                                        Capsule().fill(Color(nsColor: Design.brandColor).opacity(0.75))
-                                            .frame(width: geo.size.width * CGFloat(max(m.cost, 0) / max(maxCost, 0.0001)))
-                                    }
-                                }
-                                .frame(height: 4)
-                            }
-                        }
-                    }
-                }
-
-                pageCard(L("性价比榜（近 30 天）")) {
-                    let ranked = vm.costModels
-                        .filter { $0.cost > 0.005 }
-                        .map { (model: $0.model, perDollar: Double($0.token) / $0.cost) }
-                        .sorted { $0.perDollar > $1.perDollar }
-                    if ranked.isEmpty {
-                        mutedHint(L("暂无数据"))
-                    } else {
-                        VStack(spacing: 8) {
-                            ForEach(ranked.indices, id: \.self) { i in
-                                HStack(spacing: 8) {
-                                    Text("\(i + 1). \(ranked[i].model)")
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundColor(Color(nsColor: Design.textPrimary))
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text(Design.formatTokens(Int64(ranked[i].perDollar)) + " / $1")
-                                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                                        .foregroundColor(Color(nsColor: Design.dataHighlightColor))
-                                }
-                            }
-                        }
-                    }
+                HStack(alignment: .top, spacing: 14) {
+                    modelCostCard
+                    valueCard
                 }
 
                 Text(L("费用按 cc-switch 记录的单价折算；未计费渠道可在设置里配默认单价估算"))
@@ -715,26 +722,300 @@ struct CostPage: View {
         }
     }
 
-    private func bigCostCard(_ title: String, _ value: Double, estimated: Double = 0) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.system(size: 12))
-                .foregroundColor(Color(nsColor: Design.textSecondary))
-            Text(money(value + estimated))
-                .font(.system(size: 26, weight: .bold).monospacedDigit())
-                .foregroundColor(Color(nsColor: Design.bigNumberColor))
-            if estimated > 0 {
-                Text(L("实测 ") + money(value) + L(" · 估算 ") + money(estimated))
-                    .font(.system(size: 9).monospacedDigit())
+    private var header: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L("费用"))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(Color(nsColor: Design.textPrimary))
+                Text(L("按官方计费口径 · 美元"))
+                    .font(.system(size: 10))
                     .foregroundColor(Color(nsColor: Design.textMuted))
             }
+            Spacer()
+            PillSwitcher(options: CostRange.allCases.map { ($0, $0.label) }, selection: $range)
+        }
+    }
+
+    // MARK: 今日费用（左卡）
+
+    private var todayCard: some View {
+        pageCard(L("今日费用")) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(money(vm.costToday + vm.estToday))
+                        .font(.system(size: 30, weight: .bold).monospacedDigit())
+                        .foregroundColor(Color(nsColor: Design.successColor))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    dayDeltaBadge
+                    Spacer(minLength: 0)
+                }
+                costSparkline
+                Divider().overlay(Color.white.opacity(0.05))
+                HStack(spacing: 0) {
+                    footerStat(L("近 7 天"), money(vm.cost7 + vm.est7))
+                    footerStat(L("近 30 天"), money(vm.cost30 + vm.est30))
+                    footerStat(L("日均"), money((vm.cost30 + vm.est30) / 30))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var dayDeltaBadge: some View {
+        if yesterdayCost > 0 {
+            let d = (vm.costToday - yesterdayCost) / yesterdayCost * 100
+            HStack(spacing: 3) {
+                Text(L("较昨日"))
+                Image(systemName: d >= 0 ? "arrow.up" : "arrow.down")
+                    .font(.system(size: 7, weight: .bold))
+                Text(String(format: "%.0f%%", abs(d)))
+            }
+            .font(.system(size: 9, weight: .semibold).monospacedDigit())
+            .foregroundColor(Color(nsColor: Design.warningColor))
+            .fixedSize()
+        }
+    }
+
+    /// 近 30 天费用 sparkline
+    private var costSparkline: some View {
+        Chart {
+            ForEach(vm.costDaily) { p in
+                LineMark(x: .value(L("日期"), p.day, unit: .day),
+                         y: .value(L("费用"), Double(p.cents) / 100))
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(Color(nsColor: Design.successColor))
+                    .lineStyle(StrokeStyle(lineWidth: 1.4))
+            }
+        }
+        .chartXAxis(.hidden)
+        .chartYAxis(.hidden)
+        .frame(height: 62)
+    }
+
+    private func footerStat(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 10))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+            Text(value)
+                .font(.system(size: 15, weight: .semibold).monospacedDigit())
+                .foregroundColor(Color(nsColor: Design.bigNumberColor))
+                .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
-            .fill(Color(nsColor: Design.cardFillDark)))
-        .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
-            .stroke(Color(nsColor: Design.cardBorderDark)))
+    }
+
+    // MARK: 本月（右卡）
+
+    private var monthCard: some View {
+        let budget = vm.monthlyBudget
+        let ratio = budget > 0 ? min(monthCost / budget, 1) : 0
+        let projected = vm.monthDaysElapsed > 0
+            ? monthCost / Double(vm.monthDaysElapsed) * Double(vm.monthDaysTotal) : 0
+        return pageCard(L("本月")) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(money(monthCost))
+                        .font(.system(size: 24, weight: .bold).monospacedDigit())
+                        .foregroundColor(Color(nsColor: Design.bigNumberColor))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    if budget > 0 {
+                        Text(L("已用") + " " + String(format: "%.0f%%", ratio * 100))
+                            .font(.system(size: 10).monospacedDigit())
+                            .foregroundColor(Color(nsColor: Design.textMuted))
+                            .fixedSize()
+                    }
+                    Spacer(minLength: 0)
+                }
+                if budget > 0 {
+                    progressBar(ratio, color: Design.successColor, height: 6)
+                }
+                HStack(spacing: 6) {
+                    Text(L("预计全月") + " " + money(projected))
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                    Spacer(minLength: 0)
+                    Text(budget > 0 ? L("额度") + " " + money(budget) : L("未设预算"))
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                Divider().overlay(Color.white.opacity(0.05))
+                HStack(spacing: 0) {
+                    footerStat(L("单次会话"), money(vm.costToday / Double(max(vm.sessionCount, 1))))
+                    footerStat(L("最贵一天"), peakDay.map { money(Double($0.cents) / 100) } ?? "-")
+                }
+            }
+        }
+    }
+
+    // MARK: 费用走势（随 7/30/90 切换）
+
+    private var trendCard: some View {
+        let month = Calendar.current.component(.month, from: Date())
+        return pageCard(String(format: L("近 %d 天费用走势"), range.days),
+                        trailing: "\(L("日均")) \(money(dailyAvg))   "
+                            + String(format: L("%d 月共"), month) + " " + money(monthCost)) {
+            Chart {
+                ForEach(series) { p in
+                    BarMark(x: .value(L("日期"), p.day, unit: .day),
+                            y: .value(L("费用"), Double(p.cents) / 100))
+                        .foregroundStyle(LinearGradient(
+                            colors: [Color(nsColor: Design.successColor).opacity(0.95),
+                                     Color(nsColor: Design.successColor).opacity(0.45)],
+                            startPoint: .top, endPoint: .bottom))
+                        .cornerRadius(2)
+                }
+                RuleMark(y: .value(L("日均"), dailyAvg))
+                    .foregroundStyle(Color(nsColor: Design.warningColor).opacity(0.85))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    .annotation(position: .top, alignment: .leading) {
+                        Text(L("日均"))
+                            .font(.system(size: 9))
+                            .foregroundColor(Color(nsColor: Design.warningColor))
+                    }
+                if vm.monthlyBudget > 0 {
+                    budgetRule
+                }
+            }
+            .chartYAxis(.hidden)
+            .chartXAxis { dateXAxis() }
+            .frame(height: 180)
+        }
+    }
+
+    // MARK: 模型费用（近 30 天）
+
+    private var modelCostCard: some View {
+        let models = vm.costModels
+        let shown = Array(models.prefix(5))
+        let others = Array(models.dropFirst(5))
+        let total = models.reduce(0.0) { $0 + $1.cost }
+        let maxCost = max(models.map(\.cost).max() ?? 1, 0.0001)
+        return pageCard(L("模型费用"),
+                        trailing: L("近 30 天") + " · " + L("合计") + " " + money(total)) {
+            if models.isEmpty {
+                mutedHint(L("暂无数据"))
+            } else {
+                VStack(alignment: .leading, spacing: 9) {
+                    ForEach(shown.indices, id: \.self) { i in
+                        let m = shown[i]
+                        costRow(m.model, money(m.cost),
+                                pct: total > 0 ? m.cost / total : 0,
+                                ratio: m.cost / maxCost,
+                                opacity: [1.0, 0.8, 0.66, 0.55, 0.45][min(i, 4)])
+                    }
+                    if !others.isEmpty {
+                        HStack(spacing: 8) {
+                            Text(String(format: L("其他 %d 个模型"), others.count))
+                                .font(.system(size: 11))
+                                .foregroundColor(Color(nsColor: Design.textSecondary))
+                            Spacer()
+                            Text(money(others.reduce(0) { $0 + $1.cost }))
+                                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                                .foregroundColor(Color(nsColor: Design.textSecondary))
+                            Text("—")
+                                .font(.system(size: 11).monospacedDigit())
+                                .foregroundColor(Color(nsColor: Design.textMuted))
+                                .frame(width: 40, alignment: .trailing)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func costRow(_ name: String, _ cost: String, pct: Double,
+                         ratio: Double, opacity: Double) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(name)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Color(nsColor: Design.textPrimary))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Text(cost)
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .foregroundColor(Color(nsColor: Design.bigNumberColor))
+                Text(String(format: "%.0f%%", pct * 100))
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+                    .frame(width: 40, alignment: .trailing)
+            }
+            progressBar(ratio, color: Design.successColor, opacity: opacity)
+        }
+    }
+
+    // MARK: 性价比榜（近 30 天）
+
+    private var valueCard: some View {
+        let ranked = vm.costModels
+            .filter { $0.cost > 0.005 }
+            .map { (model: $0.model, perDollar: Double($0.token) / $0.cost) }
+            .sorted { $0.perDollar > $1.perDollar }
+        let top = Array(ranked.prefix(4))
+        let maxRate = max(top.map(\.perDollar).max() ?? 1, 1)
+        return pageCard(L("性价比榜"), trailing: L("每 $1 换多少 token")) {
+            if top.isEmpty {
+                mutedHint(L("暂无数据"))
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(top.indices, id: \.self) { i in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                Text("\(i + 1)")
+                                    .font(.system(size: 9, weight: .bold).monospacedDigit())
+                                    .foregroundColor(Color(nsColor: Design.textSecondary))
+                                    .frame(width: 16, height: 16)
+                                    .background(RoundedRectangle(cornerRadius: 4)
+                                        .fill(Color.white.opacity(i == 0 ? 0.14 : 0.07)))
+                                Text(top[i].model)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(Color(nsColor: Design.textPrimary))
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                                Text(Design.formatTokens(Int64(top[i].perDollar)) + " / $1")
+                                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                                    .foregroundColor(Color(nsColor: Design.bigNumberColor))
+                            }
+                            progressBar(top[i].perDollar / maxRate, color: Design.successColor,
+                                        opacity: [1.0, 0.7, 0.55, 0.4][min(i, 3)])
+                        }
+                    }
+                    if let note = valueNote(ranked) {
+                        Text(note)
+                            .font(.system(size: 10))
+                            .foregroundColor(Color(nsColor: Design.textSecondary))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
+
+    /// 主力模型与第一名的性价比对照（主力本身就是第一时不出文案）
+    private func valueNote(_ ranked: [(model: String, perDollar: Double)]) -> String? {
+        guard ranked.count >= 2, let topModel = vm.topModel?.model,
+              let idx = ranked.firstIndex(where: { $0.model == topModel }), idx > 0 else { return nil }
+        let ratio = ranked[0].perDollar / max(ranked[idx].perDollar, 0.0001)
+        return String(format: L("%@ 性价比排第 %d，第一名每 $1 多换 %.1f 倍 token，日常任务可优先用它"),
+                      ranked[idx].model, idx + 1, ratio)
+    }
+
+    /// 进度条（比例 0...1）
+    private func progressBar(_ ratio: Double, color: NSColor,
+                             opacity: Double = 1, height: CGFloat = 4) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.06))
+                Capsule().fill(Color(nsColor: color).opacity(opacity))
+                    .frame(width: max(geo.size.width * CGFloat(min(max(ratio, 0), 1)), 0))
+            }
+        }
+        .frame(height: height)
     }
 
     // MARK: 月度预算（设置里月度预算 > 0 时出现）
@@ -752,101 +1033,284 @@ struct CostPage: View {
                     .foregroundColor(Color(nsColor: Design.warningColor))
             }
     }
-
-    private var budgetCard: some View {
-        let ratio = vm.costMtd / vm.monthlyBudget
-        let over = vm.costMtd > vm.monthlyBudget
-        let projected = Double(vm.monthDaysElapsed) > 0
-            ? vm.costMtd / Double(vm.monthDaysElapsed) * Double(vm.monthDaysTotal) : 0
-        return pageCard(String(format: L("本月预算 $%.2f"), vm.monthlyBudget)) {
-            VStack(alignment: .leading, spacing: 8) {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.06))
-                        Capsule().fill(Color(nsColor: Design.usageColor(progress: CGFloat(min(ratio, 1)))))
-                            .frame(width: geo.size.width * CGFloat(min(ratio, 1)))
-                    }
-                }
-                .frame(height: 6)
-                HStack(alignment: .firstTextBaseline) {
-                    Text(L("本月已花 ") + money(vm.costMtd))
-                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                        .foregroundColor(Color(nsColor: Design.textPrimary))
-                    Spacer()
-                    Text(over
-                         ? L("已超预算 ") + money(vm.costMtd - vm.monthlyBudget)
-                         : L("剩余 ") + money(vm.monthlyBudget - vm.costMtd))
-                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                        .foregroundColor(Color(nsColor: over ? Design.errorColor : Design.successColor))
-                }
-                Text(L("按当前速率预计 ") + money(projected)
-                     + L(" · 已用预算 ") + String(format: "%.0f%%", ratio * 100))
-                    .font(.system(size: 10))
-                    .foregroundColor(Color(nsColor: Design.textMuted))
-            }
-        }
-    }
 }
 
 // MARK: - 洞察页
 
 struct InsightsPageView: View {
     @ObservedObject var vm: InsightsViewModel
+    @State private var range: TrendRange = .d30
     @State private var chronicleExpanded = false
     @State private var showMergeSheet = false
     @State private var mergeFrom = ""
     @State private var mergeTo = ""
 
+    enum TrendRange: String, CaseIterable, Identifiable {
+        case d7, d30, d90, all
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .d7: return L("7 天")
+            case .d30: return L("30 天")
+            case .d90: return L("90 天")
+            case .all: return L("全部")
+            }
+        }
+        var days: Int? {
+            switch self {
+            case .d7: return 7
+            case .d30: return 30
+            case .d90: return 90
+            case .all: return nil
+            }
+        }
+        var title: String {
+            switch self {
+            case .d7: return L("近 7 天用量")
+            case .d30: return L("近 30 天用量")
+            case .d90: return L("近 90 天用量")
+            case .all: return L("全部用量")
+            }
+        }
+    }
+
+    private var series: [(date: String, token: Int64)] {
+        switch range {
+        case .all: return vm.dayTokensAll.isEmpty ? vm.dayTokens : vm.dayTokensAll
+        default: return Array(vm.dayTokens.suffix(range.days ?? 30))
+        }
+    }
+    private var rangeTotal: Int64 { series.reduce(0) { $0 + $1.token } }
+    private var prevTotal: Int64? {
+        guard let d = range.days, vm.dayTokens.count >= d * 2 else { return nil }
+        return vm.dayTokens.dropLast(d).suffix(d).reduce(0) { $0 + $1.token }
+    }
+    private var peakPoint: (date: String, token: Int64)? {
+        series.max { $0.token < $1.token }
+    }
+    /// 主力模型占比分母（历史总量，与原型一致）
+    private var shareBase: Int64 {
+        vm.totalAll
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
-                HStack {
-                    Spacer()
-                    Button(L("导出长图")) { exportLongImage() }
-                        .font(.system(size: 11))
-                }
+                header
                 content
             }
         }
         .sheet(isPresented: $showMergeSheet) { mergeSheet }
     }
 
+    /// 页头：标题/数据时刻 + 范围切换 + 导出
+    private var header: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L("使用通查"))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(Color(nsColor: Design.textPrimary))
+                Text(L("数据截至") + " " + updatedText + " · " + L("单位 tokens"))
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+            }
+            Spacer()
+            Button { exportLongImage() } label: {
+                Image(systemName: "square.and.arrow.down")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Color(nsColor: Design.textSecondary))
+                    .padding(7)
+                    .background(Circle().fill(Color(nsColor: Design.cardFillDark)))
+                    .overlay(Circle().stroke(Color(nsColor: Design.cardBorderDark)))
+            }
+            .buttonStyle(.plain)
+            .help(L("导出长图"))
+            rangeSwitcher
+        }
+    }
+
+    private var rangeSwitcher: some View {
+        HStack(spacing: 2) {
+            ForEach(TrendRange.allCases) { r in
+                Text(r.label)
+                    .font(.system(size: 11, weight: range == r ? .semibold : .regular))
+                    .foregroundColor(Color(nsColor: range == r ? Design.textPrimary : Design.textSecondary))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(range == r ? Color.white.opacity(0.1) : Color.clear))
+                    .contentShape(Capsule())
+                    .onTapGesture { range = r }
+            }
+        }
+        .padding(2)
+        .background(Capsule().fill(Color(nsColor: Design.cardFillDark)))
+        .overlay(Capsule().stroke(Color(nsColor: Design.cardBorderDark)))
+    }
+
+    private var updatedText: String {
+        let f = DateFormatter()
+        f.dateFormat = "MM-dd HH:mm"
+        return f.string(from: Date())
+    }
+
     /// 页面内容（长图导出也渲染这份，不含工具行）
     private var content: some View {
         VStack(spacing: 14) {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
-                insightCard("🔥 " + L("连续使用"), "\(vm.streak)", unit: L("天"))
+            heroCard
+
+            HStack(spacing: 14) {
+                insightCard(L("连续使用"), "\(vm.streak)", unit: L("天"), icon: "flame.fill",
+                            iconColor: Design.warningColor)
                 insightCard(L("今日会话"), "\(vm.sessionCount)", unit: L("个"),
                             sub: String(format: L("平均 %d 分钟 · 最长 %d 分钟"),
                                         vm.sessionAvgMin, vm.sessionLongestMin))
-                insightCard(L("本周用量"), Design.formatTokens(vm.thisWeek),
-                            badge: weekDeltaBadge)
-                insightCard(L("日均用量（近 30 天）"), Design.formatTokens(vm.dailyAvg))
-                insightCard(L("历史总量"), Design.formatTokens(vm.totalAll))
-                insightCard(L("单日峰值（近 30 天）"),
-                            vm.peak.map { Design.formatTokens($0.token) } ?? "-",
-                            sub: vm.peak?.date ?? "")
-                insightCard(L("最活跃时段（近 30 天）"), peakHourText)
-                insightCard(L("使用量最大的模型（近 30 天）"),
-                            vm.topModel.map { Design.formatTokens($0.token) } ?? "-",
-                            sub: vm.topModel?.model ?? "")
-                insightCard(L("预计本月消耗"), Design.formatTokens(vm.monthProjected),
-                            sub: String(format: L("按当前速率 · 本月已用 %@"), Design.formatTokens(vm.monthMtd)))
+                insightCard(L("最活跃时段"), peakHourText, sub: L("近 30 天"))
+                insightCard(L("主力模型"), vm.topModel?.model ?? "-",
+                            sub: vm.topModel.map {
+                                Design.formatTokens($0.token) + " · " + String(format: L("占 %d%%"),
+                                    shareBase > 0 ? Int(Double($0.token) / Double(shareBase) * 100) : 0)
+                            } ?? "",
+                            valueSize: 14)
             }
             .frame(maxWidth: .infinity)
 
-            pageCard(L("星期分布（近 90 天）")) {
-                weekdayChart
+            HStack(alignment: .top, spacing: 14) {
+                weekdayPanel
+                heatmapPanel
             }
 
-            pageCard(L("近 90 天用量热力图")) {
-                heatmapGrid
-            }
+            chroniclePanel
+        }
+    }
 
-            pageCard(L("模型编年史")) {
-                modelChronicle
+    /// 统一卡片：标题 + 可选右上说明 + 内容
+    private func panel<C: View>(_ title: String, trailing: String? = nil,
+                                @ViewBuilder _ content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Color(nsColor: Design.textSecondary))
+                Spacer()
+                if let trailing {
+                    Text(trailing)
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                }
+            }
+            content()
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 232, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .fill(Color(nsColor: Design.cardFillDark)))
+        .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .stroke(Color(nsColor: Design.cardBorderDark)))
+    }
+
+    /// Hero：范围总量 + 环比 + 面积走势 + 日均/峰值/历史总量
+    private var heroCard: some View {
+        panel(range.title) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(Design.formatTokens(rangeTotal))
+                            .font(.system(size: 32, weight: .bold).monospacedDigit())
+                            .foregroundColor(Color(nsColor: Design.successColor))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                        Text("tokens")
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(nsColor: Design.textSecondary))
+                        rangeDeltaBadge
+                    }
+                    Spacer()
+                    if vm.monthProjected > 0 {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text(L("预计本月消耗"))
+                                .font(.system(size: 10))
+                                .foregroundColor(Color(nsColor: Design.textMuted))
+                            Text(Design.formatTokens(vm.monthProjected))
+                                .font(.system(size: 14, weight: .semibold).monospacedDigit())
+                                .foregroundColor(Color(nsColor: Design.bigNumberColor))
+                            Text(L("已用") + " " + Design.formatTokens(vm.monthMtd) + " · "
+                                 + String(format: "%.0f%%",
+                                          vm.monthProjected > 0
+                                          ? Double(vm.monthMtd) / Double(vm.monthProjected) * 100 : 0))
+                                .font(.system(size: 10).monospacedDigit())
+                                .foregroundColor(Color(nsColor: Design.textMuted))
+                        }
+                    }
+                }
+                rangeChart
+                Divider().overlay(Color.white.opacity(0.05))
+                HStack(spacing: 0) {
+                    heroStat(L("日均") + "（\(series.count) " + L("天") + "）",
+                             Design.formatTokens(rangeTotal / Int64(max(series.count, 1))))
+                    heroStat(L("单日峰值"),
+                             peakPoint.map { Design.formatTokens($0.token) } ?? "-",
+                             sub: peakPoint?.date ?? "")
+                    heroStat(L("历史总量"), Design.formatTokens(vm.totalAll))
+                }
             }
         }
+    }
+
+    @ViewBuilder
+    private var rangeDeltaBadge: some View {
+        if let prev = prevTotal, prev > 0 {
+            let d = Double(rangeTotal - prev) / Double(prev) * 100
+            HStack(spacing: 2) {
+                Image(systemName: d >= 0 ? "arrow.up" : "arrow.down")
+                    .font(.system(size: 7, weight: .bold))
+                Text(String(format: "%.0f%%", abs(d)))
+            }
+            .font(.system(size: 9, weight: .semibold).monospacedDigit())
+            .foregroundColor(Color(nsColor: d >= 0 ? Design.successColor : Design.warningColor))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Color(nsColor: (d >= 0
+                                                      ? Design.successColor : Design.warningColor)).opacity(0.14)))
+        }
+    }
+
+    /// 面积走势（按索引连续，避免空日断线）
+    private var rangeChart: some View {
+        Chart {
+            ForEach(Array(series.enumerated()), id: \.offset) { i, p in
+                AreaMark(x: .value(L("日期"), i),
+                         y: .value("Token", p.token))
+                    .foregroundStyle(LinearGradient(
+                        colors: [Color(nsColor: Design.successColor).opacity(0.28),
+                                 Color(nsColor: Design.successColor).opacity(0.02)],
+                        startPoint: .top, endPoint: .bottom))
+                LineMark(x: .value(L("日期"), i),
+                         y: .value("Token", p.token))
+                    .foregroundStyle(Color(nsColor: Design.successColor))
+                    .lineStyle(StrokeStyle(lineWidth: 1.4))
+            }
+        }
+        .chartXAxis(.hidden)
+        .chartYAxis(.hidden)
+        .frame(height: 96)
+    }
+
+    private func heroStat(_ title: String, _ value: String, sub: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 10))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+            Text(value)
+                .font(.system(size: 14, weight: .semibold).monospacedDigit())
+                .foregroundColor(Color(nsColor: Design.bigNumberColor))
+                .lineLimit(1)
+            if let sub, !sub.isEmpty {
+                Text(sub)
+                    .font(.system(size: 9).monospacedDigit())
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// 整页长图（含深色底）存 PNG
@@ -858,57 +1322,200 @@ struct InsightsPageView: View {
         saveImageAsPNG(img, "ccbar-insights")
     }
 
-    @ViewBuilder
-    private var modelChronicle: some View {
-        if vm.modelHistory.isEmpty {
-            mutedHint(L("暂无数据"))
-        } else {
-            VStack(spacing: 8) {
-                // 默认只列前 10 个（按首用时间），点了再展开全部
-                let shown = chronicleExpanded ? vm.modelHistory : Array(vm.modelHistory.prefix(10))
-                ForEach(shown) { m in
-                    HStack(spacing: 8) {
-                        Text(m.model)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(Color(nsColor: Design.textPrimary))
-                            .lineLimit(1)
-                        Text("\(shortDate(m.firstEpoch)) → \(shortDate(m.lastEpoch))")
-                            .font(.system(size: 10).monospacedDigit())
-                            .foregroundColor(Color(nsColor: Design.textMuted))
-                        Spacer()
-                        Text(Design.formatTokens(m.token))
-                            .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                            .foregroundColor(Color(nsColor: Design.dataHighlightColor))
-                            .frame(width: 84, alignment: .trailing)
-                    }
-                }
-                if vm.modelHistory.count > 10 {
-                    Button(chronicleExpanded ? L("收起") :
-                            String(format: L("展开全部 %d 个模型"), vm.modelHistory.count)) {
-                        chronicleExpanded.toggle()
-                    }
-                    .font(.system(size: 11))
-                    .buttonStyle(.plain)
-                    .foregroundColor(Color(nsColor: Design.brandColor))
-                }
-                HStack {
-                    Spacer()
-                    Menu {
-                        Button(L("自动合并同名模型")) { autoMerge() }
-                        Button(L("手动合并…")) {
-                            mergeFrom = vm.modelHistory.first?.model ?? ""
-                            mergeTo = mergeFrom
-                            showMergeSheet = true
+    // MARK: 星期分布
+
+    private var weekdayPanel: some View {
+        let symbols = Calendar.current.veryShortWeekdaySymbols
+        let labels = (0..<7).map { symbols[($0 + 1) % 7] }
+        // 90 天窗口内每个星期几出现次数（约 12~13 次）
+        let avg = vm.weekdayTotals.map { Double($0) * 7.0 / 90.0 }
+        let maxAvg = max(avg.max() ?? 1, 1)
+        let weekdayAvg = (0..<5).reduce(0.0) { $0 + avg[$1] } / 5
+        let weekendAvg = (5..<7).reduce(0.0) { $0 + avg[$1] } / 2
+        return panel(L("星期分布"), trailing: L("近 90 天均值")) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .bottom, spacing: 10) {
+                    ForEach(0..<7, id: \.self) { i in
+                        VStack(spacing: 4) {
+                            Text(String(format: "%.2f", avg[i] / 1e8))
+                                .font(.system(size: 9).monospacedDigit())
+                                .foregroundColor(Color(nsColor: Design.textMuted))
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(Color(nsColor: Design.successColor)
+                                    .opacity(i < 5 ? 0.95 : 0.38))
+                                .frame(height: CGFloat(avg[i] / maxAvg) * 92 + 4)
+                            Text(labels[i])
+                                .font(.system(size: 10))
+                                .foregroundColor(Color(nsColor: Design.textMuted))
                         }
-                    } label: {
-                        Label(L("整理模型"), systemImage: "arrow.triangle.merge")
-                            .font(.system(size: 11))
-                            .foregroundColor(Color(nsColor: Design.textSecondary))
+                        .frame(maxWidth: .infinity)
                     }
-                    .fixedSize()
+                }
+                .frame(height: 128, alignment: .bottom)
+                HStack(spacing: 14) {
+                    Text(L("工作日日均") + " " + String(format: "%.2f", weekdayAvg / 1e8) + " " + L("亿"))
+                    Text(L("周末日均") + " " + String(format: "%.2f", weekendAvg / 1e8) + " " + L("亿"))
+                }
+                .font(.system(size: 10).monospacedDigit())
+                .foregroundColor(Color(nsColor: Design.textMuted))
+            }
+        }
+    }
+
+    // MARK: 近 90 天热力
+
+    private var heatmapPanel: some View {
+        panel(L("近 90 天热力")) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 4) {
+                    Spacer()
+                    Text(L("少"))
+                        .font(.system(size: 9))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                    ForEach(0..<4, id: \.self) { i in
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color(nsColor: Design.successColor)
+                                .opacity([0.16, 0.35, 0.6, 0.95][i]))
+                            .frame(width: 9, height: 9)
+                    }
+                    Text(L("多"))
+                        .font(.system(size: 9))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                }
+                heatmapGrid
+                monthLabels
+            }
+        }
+    }
+
+    /// 底部月份标签（按热力日期去重，等距排布）
+    private var monthLabels: some View {
+        let months = Self.monthKeys(vm.heatmap)
+        return HStack(spacing: 0) {
+            ForEach(months, id: \.self) { key in
+                Text(Self.monthLabel(key))
+                    .font(.system(size: 9))
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+                if key != months.last { Spacer() }
+            }
+        }
+    }
+
+    static func monthKeys(_ cells: [HeatCell]) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for c in cells where !c.date.isEmpty {
+            let key = String(c.date.prefix(7))
+            if seen.insert(key).inserted { out.append(key) }
+        }
+        return out
+    }
+
+    static func monthLabel(_ key: String) -> String {
+        guard let m = Int(key.suffix(2)) else { return key }
+        return L10n.isEnglish ? "\(Calendar.current.shortMonthSymbols[m - 1])" : "\(m)月"
+    }
+
+    // MARK: 模型编年史
+
+    private var chroniclePanel: some View {
+        let rows = vm.modelHistory.sorted { $0.firstEpoch < $1.firstEpoch }
+        let minE = rows.map(\.firstEpoch).min() ?? 0
+        let maxE = max(rows.map(\.lastEpoch).max() ?? 0, minE + 1)
+        let span = max(Double(maxE - minE), 86400)
+        let shown = chronicleExpanded ? rows : Array(rows.prefix(10))
+        return panel(L("模型编年史"),
+                     trailing: String(format: L("共 %d 个 · 按首次使用排序"), rows.count)) {
+            if rows.isEmpty {
+                mutedHint(L("暂无数据"))
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(shown) { m in
+                        HStack(spacing: 8) {
+                            Text(m.model)
+                                .font(.system(size: 11))
+                                .foregroundColor(Color(nsColor: Design.textPrimary))
+                                .lineLimit(1)
+                                .frame(width: 150, alignment: .leading)
+                            GeometryReader { geo in
+                                let x = CGFloat(Double(m.firstEpoch - minE) / span) * geo.size.width
+                                let w = max(CGFloat(Double(m.lastEpoch - m.firstEpoch) / span) * geo.size.width, 2)
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(Color(nsColor: Design.successColor).opacity(0.85))
+                                    .frame(width: w, height: 4)
+                                    .position(x: x + w / 2, y: geo.size.height / 2)
+                            }
+                            .frame(height: 8)
+                            Text(Design.formatTokens(m.token))
+                                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                                .foregroundColor(Color(nsColor: Design.textSecondary))
+                                .frame(width: 70, alignment: .trailing)
+                        }
+                        .frame(height: 14)
+                    }
+                    // 时间轴：月初刻度
+                    HStack(spacing: 8) {
+                        Color.clear.frame(width: 150, height: 12)
+                        GeometryReader { geo in
+                            ForEach(Self.monthTicks(from: minE, to: maxE), id: \.epoch) { tick in
+                                let x = CGFloat(Double(tick.epoch - minE) / span) * geo.size.width
+                                Text(tick.label)
+                                    .font(.system(size: 8).monospacedDigit())
+                                    .foregroundColor(Color(nsColor: Design.textMuted))
+                                    .position(x: min(max(x, 16), geo.size.width - 16), y: 6)
+                            }
+                        }
+                        .frame(height: 12)
+                        Color.clear.frame(width: 70, height: 12)
+                    }
+                    HStack(spacing: 8) {
+                        Spacer()
+                        if rows.count > 10 {
+                            Button(chronicleExpanded ? L("收起")
+                                   : String(format: L("展开其余 %d 个模型"), rows.count - 10)) {
+                                chronicleExpanded.toggle()
+                            }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 10))
+                            .foregroundColor(Color(nsColor: Design.brandColor))
+                        }
+                        Menu {
+                            Button(L("自动合并同名模型")) { autoMerge() }
+                            Button(L("手动合并…")) {
+                                mergeFrom = vm.modelHistory.first?.model ?? ""
+                                mergeTo = mergeFrom
+                                showMergeSheet = true
+                            }
+                        } label: {
+                            Label(L("整理模型"), systemImage: "arrow.triangle.merge")
+                                .font(.system(size: 10))
+                                .foregroundColor(Color(nsColor: Design.textSecondary))
+                        }
+                        .fixedSize()
+                    }
                 }
             }
         }
+    }
+
+    /// 时间轴月初刻度（最多 8 个，避免拥挤）
+    static func monthTicks(from: Int64, to: Int64) -> [(epoch: Int64, label: String)] {
+        guard to > from else { return [] }
+        let cal = Calendar.current
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "MM-dd"
+        var start = cal.date(from: cal.dateComponents([.year, .month], from: Date(timeIntervalSince1970: TimeInterval(from)))) ?? Date()
+        if start.timeIntervalSince1970 < Double(from) {
+            start = cal.date(byAdding: .month, value: 1, to: start) ?? start
+        }
+        var out: [(Int64, String)] = []
+        var d = start
+        while d.timeIntervalSince1970 <= Double(to) && out.count < 8 {
+            out.append((Int64(d.timeIntervalSince1970), f.string(from: d)))
+            d = cal.date(byAdding: .month, value: 1, to: d) ?? d.addingTimeInterval(86400 * 31)
+        }
+        return out
     }
 
     private func autoMerge() {
@@ -1009,9 +1616,10 @@ struct InsightsPageView: View {
     private func heatColor(_ token: Int64, maxToken: Int64) -> Color {
         guard token >= 0 else { return Color.white.opacity(0.04) }   // 占位
         guard token > 0 else { return Color.white.opacity(0.08) }    // 无用量
-        // 用量色阶（绿→黄→橙→红），与菜单栏阈值变色同一套视觉语言
+        // 绿色色阶（0.18 → 1.0），与原型热力图一致
         let progress = min(Double(token) / Double(maxToken), 1.0)
-        return Color(nsColor: Design.usageColor(progress: progress))
+        return Color(nsColor: Design.successColor)
+            .opacity(0.18 + 0.82 * progress)
     }
 
     private var weekDeltaBadge: String? {
@@ -1029,39 +1637,47 @@ struct InsightsPageView: View {
     private var lastWeek: Int64 { vm.lastWeek }
     private var thisWeek: Int64 { vm.thisWeek }
 
-    private func insightCard(_ title: String, _ value: String, unit: String = "", badge: String? = nil, sub: String = "") -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.system(size: 12))
-                .foregroundColor(Color(nsColor: Design.textSecondary))
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
+    private func insightCard(_ title: String, _ value: String, unit: String = "",
+                             sub: String = "", icon: String? = nil,
+                             iconColor: NSColor = Design.textMuted,
+                             valueSize: CGFloat = 22) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 4) {
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(Color(nsColor: iconColor))
+                }
+                Text(title)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(nsColor: Design.textSecondary))
+                    .lineLimit(1)
+                Spacer(minLength: 2)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(value)
-                    .font(.system(size: 24, weight: .bold).monospacedDigit())
+                    .font(.system(size: valueSize, weight: .bold).monospacedDigit())
                     .foregroundColor(Color(nsColor: Design.bigNumberColor))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                 if !unit.isEmpty {
                     Text(unit)
-                        .font(.system(size: 12))
+                        .font(.system(size: 10))
                         .foregroundColor(Color(nsColor: Design.textSecondary))
                 }
-                if let badge {
-                    Text(badge)
-                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                        .foregroundColor(Color(nsColor: badge.hasPrefix("-") ? Design.successColor : Design.warningColor))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.white.opacity(0.06)))
-                }
-                Spacer()
+                Spacer(minLength: 0)
             }
             if !sub.isEmpty {
                 Text(sub)
-                    .font(.system(size: 10))
+                    .font(.system(size: 9))
                     .foregroundColor(Color(nsColor: Design.textMuted))
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
             }
+            Spacer(minLength: 0)
         }
-        // 撑满网格单元：同排卡片顶/底对齐（有无副行都一样高）
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(14)
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 104, maxHeight: 104, alignment: .topLeading)
         .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
             .fill(Color(nsColor: Design.cardFillDark)))
         .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
@@ -1349,58 +1965,113 @@ enum WeeklyReport {
 
 struct ChannelsPage: View {
     @ObservedObject var vm: InsightsViewModel
+    @State private var range: ChannelRange = .d30
+    @State private var mode: ChannelMode = .channel
+
+    enum ChannelRange: String, CaseIterable, Identifiable {
+        case d7, d30, d90
+        var id: String { rawValue }
+        var days: Int {
+            switch self {
+            case .d7: return 7
+            case .d30: return 30
+            case .d90: return 90
+            }
+        }
+        var label: String { String(format: L("%d 天"), days) }
+    }
+
+    enum ChannelMode: String, Identifiable {
+        case channel, app
+        var id: String { rawValue }
+        var label: String { self == .channel ? L("按渠道") : L("按应用") }
+    }
+
+    /// 构成图展开点
+    private struct FlowPoint {
+        let day: Date
+        let key: String
+        let name: String
+        let token: Int64
+    }
+
+    /// 百分比堆叠切片
+    private struct ShareSlice: Identifiable {
+        let id = UUID()
+        let day: Date
+        let name: String
+        let share: Double
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                channelChartCard
-                todayChannelsCard
-                appDistCard
-                compCard
-                hitRateCard
-            }
-        }
-    }
-
-    private var channelChartCard: some View {
-        pageCard(L("近 30 天渠道用量（堆叠）")) {
-            Chart {
-                ForEach(vm.channelPoints) { p in
-                    AreaMark(
-                        x: .value(L("日期"), p.day, unit: .day),
-                        y: .value(L("Token"), p.token),
-                        series: .value(L("渠道"), p.name)
-                    )
-                    .interpolationMethod(.catmullRom)
-                    .foregroundStyle(by: .value(L("渠道"), p.name))
+                header
+                todayCard
+                compositionCard
+                HStack(alignment: .top, spacing: 14) {
+                    tokenMixCard
+                    cacheBenefitCard
                 }
             }
-            .chartLegend(position: .top, alignment: .leading)
-            .chartYAxis { tokenYAxis() }
-            .chartXAxis { dateXAxis() }
-            .frame(height: 200)
         }
     }
 
-    private var todayChannelsCard: some View {
-        pageCard(L("今日各渠道")) {
-            if vm.todaySources.isEmpty {
-                mutedHint(L("暂无数据"))
+    private var header: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L("渠道"))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(Color(nsColor: Design.textPrimary))
+                Text(L("渠道 = 接入方式 · 应用 = 实际使用的工具"))
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+            }
+            Spacer()
+            PillSwitcher(options: ChannelRange.allCases.map { ($0, $0.label) }, selection: $range)
+        }
+    }
+
+    // MARK: 今日渠道构成
+
+    private var todayCard: some View {
+        let rows = vm.todaySources
+        let total = rows.reduce(Int64(0)) { $0 + $1.total }
+        let requests = rows.reduce(0) { $0 + $1.reqs }
+        let trailing = "\(requests) " + L("次请求") + " · " + Design.formatTokens(total) + " tokens"
+        return pageCard(L("今日渠道构成"), trailing: trailing) {
+            if rows.isEmpty {
+                mutedHint(L("今日暂无请求"))
             } else {
-                VStack(spacing: 8) {
-                    ForEach(vm.todaySources, id: \.source) { s in
-                        HStack {
-                            Text("● \(AppDelegate.shared?.sourceDisplayName(s.source) ?? s.source)")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(Color(nsColor: Design.brandColor))
-                            Spacer()
-                            Text("\(s.reqs) " + L("次"))
-                                .font(.system(size: 11).monospacedDigit())
-                                .foregroundColor(Color(nsColor: Design.textSecondary))
-                            Text(Design.formatTokens(s.total))
-                                .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                                .foregroundColor(Color(nsColor: Design.dataHighlightColor))
-                                .frame(width: 90, alignment: .trailing)
+                VStack(alignment: .leading, spacing: 10) {
+                    proportionalBar(rows.indices.map {
+                        (Double(rows[$0].total) / Double(max(total, 1)), shade($0))
+                    })
+                    VStack(spacing: 7) {
+                        ForEach(rows.indices, id: \.self) { i in
+                            let s = rows[i]
+                            HStack(spacing: 8) {
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(shade(i))
+                                    .frame(width: 8, height: 8)
+                                Text(AppDelegate.shared?.sourceDisplayName(s.source) ?? s.source)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(Color(nsColor: Design.textPrimary))
+                                    .lineLimit(1)
+                                Text("\(s.reqs) " + L("次"))
+                                    .font(.system(size: 10).monospacedDigit())
+                                    .foregroundColor(Color(nsColor: Design.textSecondary))
+                                Spacer(minLength: 0)
+                                Text(Design.formatTokens(s.total))
+                                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                                    .foregroundColor(Color(nsColor: Design.bigNumberColor))
+                                    .frame(width: 84, alignment: .trailing)
+                                Text(String(format: "%.0f%%",
+                                            total > 0 ? Double(s.total) / Double(total) * 100 : 0))
+                                    .font(.system(size: 10).monospacedDigit())
+                                    .foregroundColor(Color(nsColor: Design.textMuted))
+                                    .frame(width: 38, alignment: .trailing)
+                            }
                         }
                     }
                 }
@@ -1408,88 +2079,306 @@ struct ChannelsPage: View {
         }
     }
 
-    private var appDistCard: some View {
-        pageCard(L("近 30 天应用分布（堆叠）")) {
-            Chart {
-                ForEach(vm.appPoints) { p in
-                    AreaMark(
-                        x: .value(L("日期"), p.day, unit: .day),
-                        y: .value(L("Token"), p.token),
-                        series: .value(L("应用"), p.name)
-                    )
-                    .interpolationMethod(.catmullRom)
-                    .foregroundStyle(by: .value(L("应用"), p.name))
-                }
+    // MARK: 近 N 天构成变化（按渠道 / 按应用）
+
+    private var compositionCard: some View {
+        let totals = flowTotals
+        let total = totals.reduce(Int64(0)) { $0 + $1.token }
+        let names = totals.map(\.name)
+        let colors = totals.indices.map { shade($0) }
+        let switchInfo = switchInfo
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(String(format: L("近 %d 天构成变化"), range.days))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Color(nsColor: Design.textPrimary))
+                Spacer()
+                PillSwitcher(options: [(ChannelMode.channel, L("按渠道")),
+                                       (ChannelMode.app, L("按应用"))], selection: $mode)
             }
-            .chartLegend(position: .top, alignment: .leading)
-            .chartYAxis { tokenYAxis() }
-            .chartXAxis { dateXAxis() }
-            .frame(height: 160)
+            if totals.isEmpty {
+                mutedHint(L("暂无数据"))
+            } else {
+                HStack(spacing: 14) {
+                    ForEach(totals.indices, id: \.self) { i in
+                        HStack(spacing: 4) {
+                            RoundedRectangle(cornerRadius: 2).fill(colors[i]).frame(width: 7, height: 7)
+                            Text(totals[i].name)
+                                .font(.system(size: 10))
+                                .foregroundColor(Color(nsColor: Design.textPrimary))
+                            Text(String(format: "%.0f%%",
+                                        total > 0 ? Double(totals[i].token) / Double(total) * 100 : 0))
+                                .font(.system(size: 10).monospacedDigit())
+                                .foregroundColor(Color(nsColor: Design.textMuted))
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                Chart {
+                    ForEach(flowSlices) { s in
+                        AreaMark(x: .value(L("日期"), s.day, unit: .day),
+                                 y: .value(L("占比"), s.share),
+                                 series: .value(L("渠道"), s.name))
+                            .foregroundStyle(by: .value(L("渠道"), s.name))
+                            .interpolationMethod(.monotone)
+                    }
+                    if let sw = switchInfo {
+                        RuleMark(x: .value(L("日期"), sw.day, unit: .day))
+                            .foregroundStyle(Color(nsColor: Design.warningColor).opacity(0.75))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                            .annotation(position: .top, alignment: .leading) {
+                                Text(monthDay(sw.day) + " " + L("切换") + " " + sw.to)
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundColor(Color(nsColor: Design.warningColor))
+                                    .fixedSize()
+                            }
+                    }
+                }
+                .chartForegroundStyleScale(domain: names, range: colors)
+                .chartYScale(domain: 0...100)
+                .chartYAxis(.hidden)
+                .chartLegend(.hidden)
+                .chartXAxis { dateXAxis() }
+                .frame(height: 190)
+                Text(noteText(switchInfo))
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .fill(Color(nsColor: Design.cardFillDark)))
+        .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .stroke(Color(nsColor: Design.cardBorderDark)))
+    }
+
+    private func noteText(_ sw: (day: Date, to: String, from: String,
+                                 fromBefore: Double, fromAfter: Double)?) -> String {
+        let base = L("百分比堆叠：纵轴是构成比例，不是用量。")
+        guard let sw, !sw.from.isEmpty else { return base }
+        return base + " " + String(format: L("%@ 后 %@ 从 %.0f%% 降到 %.0f%%，%@ 接管主要流量。"),
+                                   monthDay(sw.day), sw.from, sw.fromBefore, sw.fromAfter, sw.to)
+    }
+
+    private func monthDay(_ day: Date) -> String {
+        let c = Calendar.current.dateComponents([.month, .day], from: day)
+        return String(format: L("%d 月 %d 日"), c.month ?? 0, c.day ?? 0)
+    }
+
+    /// 占比突增的切换点（当天份额涨幅 > 30 个点才标注）
+    private var switchInfo: (day: Date, to: String, from: String,
+                             fromBefore: Double, fromAfter: Double)? {
+        let totals = flowTotals
+        let days = flowDays
+        guard totals.count >= 2, days.count >= 2 else { return nil }
+        let dayMap = flowDayMap
+        var best: (day: Date, to: String, from: String,
+                   before: Double, after: Double, gain: Double)?
+        for i in 1..<days.count {
+            let prevRow = dayMap[days[i - 1]] ?? [:]
+            let curRow = dayMap[days[i]] ?? [:]
+            let prevTotal = max(prevRow.values.reduce(0, +), 1)
+            let curTotal = max(curRow.values.reduce(0, +), 1)
+            for t in totals {
+                let before = Double(prevRow[t.key] ?? 0) / Double(prevTotal) * 100
+                let after = Double(curRow[t.key] ?? 0) / Double(curTotal) * 100
+                let gain = after - before
+                guard gain > (best?.gain ?? 30) else { continue }
+                var loser = ""
+                var lBefore = 0.0, lAfter = 0.0, lDrop = 0.0
+                for u in totals where u.key != t.key {
+                    let b = Double(prevRow[u.key] ?? 0) / Double(prevTotal) * 100
+                    let a = Double(curRow[u.key] ?? 0) / Double(curTotal) * 100
+                    if b - a > lDrop { lDrop = b - a; loser = u.name; lBefore = b; lAfter = a }
+                }
+                best = (days[i], t.name, loser, lBefore, lAfter, gain)
+            }
+        }
+        guard let b = best else { return nil }
+        return (b.day, b.to, b.from, b.before, b.after)
+    }
+
+    // MARK: 构成数据
+
+    private var flowPoints: [FlowPoint] {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -(range.days - 1),
+                                           to: Calendar.current.startOfDay(for: Date())) ?? Date()
+        switch mode {
+        case .channel:
+            return vm.channelPoints.filter { $0.day >= cutoff }.map {
+                FlowPoint(day: Calendar.current.startOfDay(for: $0.day),
+                          key: $0.source, name: $0.name, token: $0.token)
+            }
+        case .app:
+            return vm.appPoints.filter { $0.day >= cutoff }.map {
+                FlowPoint(day: Calendar.current.startOfDay(for: $0.day),
+                          key: $0.app, name: $0.name, token: $0.token)
+            }
         }
     }
 
-    private var compCard: some View {
-        pageCard(L("近 30 天 Token 构成")) {
-            Chart {
-                ForEach(compSlices) { slice in
-                    AreaMark(
-                        x: .value(L("日期"), slice.day, unit: .day),
-                        y: .value(L("Token"), slice.token),
-                        series: .value(L("构成"), slice.name)
-                    )
-                    .interpolationMethod(.catmullRom)
-                    .foregroundStyle(by: .value(L("构成"), slice.name))
-                }
-            }
-            .chartLegend(position: .top, alignment: .leading)
-            .chartYAxis { tokenYAxis() }
-            .chartXAxis { dateXAxis() }
-            .frame(height: 160)
+    private var flowTotals: [(key: String, name: String, token: Int64)] {
+        var map: [String: (name: String, token: Int64)] = [:]
+        for p in flowPoints {
+            let prev = map[p.key]?.token ?? 0
+            map[p.key] = (p.name, prev + p.token)
         }
+        return map.map { (key: $0.key, name: $0.value.name, token: $0.value.token) }
+            .sorted { $0.token > $1.token }
     }
 
-    private var compSlices: [CompSlice] {
-        let names = [L("输入"), L("输出"), L("缓存读"), L("缓存创建")]
-        let keys: [KeyPath<CompPoint, Int64>] = [\.input, \.output, \.cacheRead, \.cacheCreate]
-        var out: [CompSlice] = []
-        for (i, name) in names.enumerated() {
-            for p in vm.compDaily {
-                out.append(CompSlice(name: name, day: p.day, token: p[keyPath: keys[i]]))
+    private var flowDays: [Date] {
+        Array(Set(flowPoints.map(\.day))).sorted()
+    }
+
+    private var flowDayMap: [Date: [String: Int64]] {
+        var map: [Date: [String: Int64]] = [:]
+        for p in flowPoints { map[p.day, default: [:]][p.key, default: 0] += p.token }
+        return map
+    }
+
+    private var flowSlices: [ShareSlice] {
+        let totals = flowTotals
+        let dayMap = flowDayMap
+        var out: [ShareSlice] = []
+        for day in flowDays {
+            let row = dayMap[day] ?? [:]
+            let total = row.values.reduce(0, +)
+            guard total > 0 else { continue }
+            for t in totals {
+                out.append(ShareSlice(day: day, name: t.name,
+                                      share: Double(row[t.key] ?? 0) / Double(total) * 100))
             }
         }
         return out
     }
 
-    private var hitRateCard: some View {
-        pageCard(L("缓存命中率（近 30 天）")) {
-            Chart {
-                ForEach(vm.compDaily) { p in
-                    LineMark(
-                        x: .value(L("日期"), p.day, unit: .day),
-                        y: .value(L("命中率"), hitRate(p))
-                    )
-                    .interpolationMethod(.catmullRom)
-                    .foregroundStyle(Color(nsColor: Design.brandColor))
-                }
-            }
-            .chartYScale(domain: 0...100)
-            .chartXAxis { dateXAxis() }
-            .chartYAxis {
-                AxisMarks(position: .trailing) { value in
-                    AxisGridLine()
-                    AxisValueLabel {
-                        if let v = value.as(Double.self) {
-                            Text(String(format: "%.0f%%", v)).font(.system(size: 9))
+    // MARK: Token 构成（近 30 天）
+
+    private var compSums: (input: Int64, output: Int64, cacheRead: Int64, cacheCreate: Int64) {
+        vm.compDaily.reduce((0, 0, 0, 0)) {
+            ($0.0 + $1.input, $0.1 + $1.output, $0.2 + $1.cacheRead, $0.3 + $1.cacheCreate)
+        }
+    }
+
+    private var tokenMixCard: some View {
+        let s = compSums
+        let total = s.input + s.output + s.cacheRead + s.cacheCreate
+        let items: [(name: String, token: Int64, color: Color)] = [
+            (L("缓存读"), s.cacheRead, shade(0)),
+            (L("输入"), s.input, shade(1)),
+            (L("输出"), s.output, shade(2)),
+            (L("缓存创建"), s.cacheCreate, shade(3)),
+        ]
+        return pageCard(L("Token 构成"),
+                        trailing: L("近 30 天") + " · " + Design.formatTokens(total)) {
+            if total == 0 {
+                mutedHint(L("暂无数据"))
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    proportionalBar(items.map { (Double($0.token) / Double(total), $0.color) })
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach([0, 2], id: \.self) { r in
+                            HStack(spacing: 6) {
+                                mixLegend(items[r], total: total)
+                                mixLegend(items[r + 1], total: total)
+                            }
                         }
                     }
                 }
             }
-            .frame(height: 120)
         }
     }
 
-    private func hitRate(_ p: CompPoint) -> Double {
-        Double(p.cacheRead) / Double(max(p.total, 1)) * 100
+    // MARK: 缓存收益（近 30 天构成 + 本月账单）
+
+    private var cacheBenefitCard: some View {
+        let s = compSums
+        let total = s.input + s.output + s.cacheRead + s.cacheCreate
+        let cacheShare = total > 0 ? Double(s.cacheRead) / Double(total) : 0
+        let base = vm.costMtd > 0 ? vm.costMtd : vm.cost30
+        let saved = base * 0.9 * cacheShare
+        let without = base + saved
+        let pct = without > 0 ? saved / without : 0
+        return pageCard(L("缓存收益")) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("$" + String(Int(saved.rounded())))
+                        .font(.system(size: 28, weight: .bold).monospacedDigit())
+                        .foregroundColor(Color(nsColor: Design.successColor))
+                    Text(L("本月估算省下"))
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                }
+                Text(String(format: L("%d%% 的 token 命中缓存，按缓存读约为输入价 1/10 计。若全部走输入，本月账单约 %@。"),
+                            Int((cacheShare * 100).rounded()), money(without)))
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(nsColor: Design.textSecondary))
+                    .fixedSize(horizontal: false, vertical: true)
+                Divider().overlay(Color.white.opacity(0.05))
+                HStack(spacing: 6) {
+                    Text(L("实际") + " " + money(base))
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundColor(Color(nsColor: Design.textSecondary))
+                    Spacer(minLength: 0)
+                    Text(L("省") + " " + String(format: "%.0f%%", pct * 100))
+                        .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                        .foregroundColor(Color(nsColor: Design.successColor))
+                }
+                progressBar(pct)
+            }
+        }
+    }
+
+    // MARK: 小组件
+
+    /// 绿系色阶（0 = 最亮）
+    private func shade(_ i: Int) -> Color {
+        Color(nsColor: Design.successColor).opacity([1.0, 0.58, 0.38, 0.26, 0.18][min(i, 4)])
+    }
+
+    private func mixLegend(_ item: (name: String, token: Int64, color: Color),
+                           total: Int64) -> some View {
+        HStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(item.color)
+                .frame(width: 8, height: 8)
+            Text(item.name)
+                .font(.system(size: 10))
+                .foregroundColor(Color(nsColor: Design.textSecondary))
+            Spacer(minLength: 0)
+            Text(String(format: "%.0f%%", Double(item.token) / Double(max(total, 1)) * 100))
+                .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                .foregroundColor(Color(nsColor: Design.textPrimary))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 单条构成比例条
+    private func proportionalBar(_ segments: [(Double, Color)], height: CGFloat = 8) -> some View {
+        GeometryReader { geo in
+            HStack(spacing: 2) {
+                ForEach(segments.indices, id: \.self) { i in
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(segments[i].1)
+                        .frame(width: max(geo.size.width * CGFloat(segments[i].0) - 2, 1))
+                }
+            }
+        }
+        .frame(height: height)
+    }
+
+    private func progressBar(_ ratio: Double, height: CGFloat = 4) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.06))
+                Capsule().fill(Color(nsColor: Design.successColor))
+                    .frame(width: max(geo.size.width * CGFloat(min(max(ratio, 0), 1)), 0))
+            }
+        }
+        .frame(height: height)
     }
 }
 
@@ -1820,17 +2709,19 @@ struct TimelinePage: View {
     @State private var sourceFilter = "all"
     @State private var modelFilter = "all"
     @State private var showCalendar = false
+    /// 首屏最多渲染的行数，底部按钮可继续展开
+    @State private var visibleCount = 40
 
     /// 流水页行模型：组头与数据行拍平成单一序列。
     /// 曾用嵌套 ForEach（外层 id=hour、内层 id=offset），30 秒刷新时行视图按位置复用，
     /// 内容会串组错位（20:26 出现在 12:00 组里）——改单层扁平结构后不可能再错。
     enum TimelineLine: Identifiable {
-        case header(hour: Int, count: Int)
+        case header(hour: Int, count: Int, credits: Double)
         case row(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)
 
         var id: String {
             switch self {
-            case .header(let hour, _): return "h-\(hour)"
+            case .header(let hour, _, _): return "h-\(hour)"
             case .row(let time, _, _, _, _, _): return "t-\(time)"
             }
         }
@@ -1841,13 +2732,17 @@ struct TimelinePage: View {
         let cal = Calendar.current
         let hours = rows.map { cal.component(.hour, from: Date(timeIntervalSince1970: TimeInterval($0.time))) }
         var counts: [Int: Int] = [:]
-        for h in hours { counts[h, default: 0] += 1 }
+        var creditSums: [Int: Double] = [:]
+        for (i, row) in rows.enumerated() {
+            counts[hours[i], default: 0] += 1
+            creditSums[hours[i], default: 0] += row.credits
+        }
         var out: [TimelineLine] = []
         var last = -1
         for (i, row) in rows.enumerated() {
             let h = hours[i]
             if h != last {
-                out.append(.header(hour: h, count: counts[h] ?? 0))
+                out.append(.header(hour: h, count: counts[h] ?? 0, credits: creditSums[h] ?? 0))
                 last = h
             }
             out.append(.row(time: row.time, model: row.model, source: row.source,
@@ -1873,14 +2768,94 @@ struct TimelinePage: View {
     }
 
     private var lines: [TimelineLine] {
-        Self.buildLines(filtered)
+        let all = Self.buildLines(filtered)
+        guard filtered.count > visibleCount else { return all }
+        // 只渲染前 visibleCount 行，但组头统计仍取整组实数
+        var out: [TimelineLine] = []
+        var seen = 0
+        for line in all {
+            if case .row = line {
+                if seen >= visibleCount { break }
+                seen += 1
+            }
+            out.append(line)
+        }
+        return out
+    }
+
+    /// 当日合计（不受渠道/模型筛选影响，用于页头）
+    private var dayTotals: (credits: Double, tokens: Int64, count: Int) {
+        let rows = vm.timeline
+        return (rows.reduce(0) { $0 + $1.credits },
+                rows.reduce(0) { $0 + $1.token },
+                rows.count)
+    }
+
+    /// 异常行阈值：单笔 ≥ 当日 10% 积分且不低于 5
+    private var anomalyThreshold: Double {
+        max(dayTotals.credits * 0.1, 5)
     }
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 10) {
+            pageHeader
             filtersBar
+            tableHeader
             detailList
         }
+        .padding(.top, 2)
+        .onChange(of: vm.timelineDay) { _ in visibleCount = 40 }
+        .onChange(of: sourceFilter) { _ in visibleCount = 40 }
+        .onChange(of: modelFilter) { _ in visibleCount = 40 }
+    }
+
+    /// 页头：标题 + 当日合计 + 较昨日
+    private var pageHeader: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L("流水明细"))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(Color(nsColor: Design.textPrimary))
+                Text(L(isToday ? "今日合计" : "当日合计") + " "
+                     + formatCredits(dayTotals.credits) + " " + L("积分") + " · "
+                     + Design.formatTokens(dayTotals.tokens) + " tokens · "
+                     + "\(dayTotals.count) " + L("次请求"))
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+            }
+            Spacer()
+            if isToday, vm.creditsPrevDay > 0, dayTotals.credits > 0 {
+                let d = (dayTotals.credits - vm.creditsPrevDay) / vm.creditsPrevDay * 100
+                HStack(spacing: 3) {
+                    Text(L("较昨日"))
+                    Image(systemName: d >= 0 ? "arrow.up" : "arrow.down")
+                        .font(.system(size: 8, weight: .bold))
+                    Text(String(format: "%.0f%%", abs(d)))
+                }
+                .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                .foregroundColor(Color(nsColor: d >= 0 ? Design.successColor : Design.warningColor))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color(nsColor: (d >= 0
+                                                          ? Design.successColor : Design.warningColor)).opacity(0.14)))
+            }
+        }
+    }
+
+    /// 表头：时间 / 渠道 / 模型 / 积分 / Tokens
+    private var tableHeader: some View {
+        HStack(spacing: 8) {
+            Text(L("时间")).frame(width: 66, alignment: .leading)
+            Text(L("渠道")).frame(width: 52, alignment: .leading)
+            Text(L("模型"))
+            Spacer()
+            Text(L("积分")).frame(width: 70, alignment: .trailing)
+            Text("Tokens").frame(width: 84, alignment: .trailing)
+        }
+        .font(.system(size: 10))
+        .foregroundColor(Color(nsColor: Design.textMuted))
+        .padding(.horizontal, 8)
+        .padding(.bottom, 2)
     }
 
     private var dayBinding: Binding<Date> {
@@ -1952,28 +2927,41 @@ struct TimelinePage: View {
     }
 
     private var filtersBar: some View {
-        HStack(spacing: 10) {
-            Text(L("筛选"))
-                .font(.system(size: 11))
-                .foregroundColor(Color(nsColor: Design.textMuted))
+        HStack(spacing: 8) {
             dayNav
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(Capsule().fill(Color(nsColor: Design.cardFillDark)))
+                .overlay(Capsule().stroke(Color(nsColor: Design.cardBorderDark)))
             Picker("", selection: $sourceFilter) {
                 ForEach(sourceOptions, id: \.self) { option in
                     Text(option == "all" ? L("全部渠道") : (AppDelegate.shared?.sourceDisplayName(option) ?? option)).tag(option)
                 }
             }
             .labelsHidden()
-            .frame(width: 130)
+            .pickerStyle(.menu)
+            .frame(width: 120)
             Picker("", selection: $modelFilter) {
                 ForEach(modelOptions, id: \.self) { option in
                     Text(option == "all" ? L("全部模型") : option).tag(option)
                 }
             }
             .labelsHidden()
-            .frame(width: 170)
+            .pickerStyle(.menu)
+            .frame(width: 160)
             Spacer()
-            Button(L("导出 CSV")) { exportTimelineCSV() }
-                .font(.system(size: 11))
+            Button { exportTimelineCSV() } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "square.and.arrow.down").font(.system(size: 10, weight: .semibold))
+                    Text(L("导出")).font(.system(size: 11, weight: .medium))
+                }
+                .foregroundColor(Color(nsColor: Design.textSecondary))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Capsule().fill(Color(nsColor: Design.cardFillDark)))
+                .overlay(Capsule().stroke(Color(nsColor: Design.cardBorderDark)))
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -2017,20 +3005,46 @@ struct TimelinePage: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(lines) { line in
                             switch line {
-                            case .header(let hour, let count):
-                                HStack {
-                                    Text(String(format: "%02d:00 – %02d:00", hour, (hour + 1) % 24))
-                                        .font(.system(size: 11, weight: .semibold))
+                            case .header(let hour, let count, let hourCredits):
+                                let share = dayTotals.credits > 0 ? hourCredits / dayTotals.credits : 0
+                                let featured = share >= 0.25 && hourCredits > 0
+                                HStack(spacing: 4) {
+                                    Text(String(format: "%02d:00 — %02d:00", hour, (hour + 1) % 24))
+                                        .font(.system(size: 10, weight: .semibold))
                                         .foregroundColor(Color(nsColor: Design.textMuted))
                                     Spacer()
-                                    Text("\(count) " + L("次"))
+                                    Text("\(count) " + L("次") + " · " + formatCredits(hourCredits) + " " + L("积分"))
                                         .font(.system(size: 10).monospacedDigit())
-                                        .foregroundColor(Color(nsColor: Design.textMuted))
+                                        .foregroundColor(Color(nsColor: featured ? Design.warningColor
+                                                                   : Design.textMuted))
+                                    if featured {
+                                        Text("· " + L("占今日") + " \(Int((share * 100).rounded()))%")
+                                            .font(.system(size: 10).monospacedDigit())
+                                            .foregroundColor(Color(nsColor: Design.warningColor))
+                                    }
                                 }
-                                .padding(.vertical, 8)
+                                .padding(.horizontal, 8)
+                                .padding(.top, 12)
+                                .padding(.bottom, 4)
                             case .row(let time, let model, let source, let token, let cost, let credits):
                                 timelineRow((time, model, source, token, cost, credits))
                             }
+                        }
+                        if filtered.count > visibleCount {
+                            Button {
+                                visibleCount += 40
+                            } label: {
+                                Text(L("查看更早") + " \(filtered.count - visibleCount) " + L("条记录"))
+                                    .font(.system(size: 11))
+                                    .foregroundColor(Color(nsColor: Design.textSecondary))
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 6)
+                                    .background(Capsule().fill(Color(nsColor: Design.cardFillDark)))
+                                    .overlay(Capsule().stroke(Color(nsColor: Design.cardBorderDark)))
+                            }
+                            .buttonStyle(.plain)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 12)
                         }
                     }
                     .padding(.bottom, 12)
@@ -2041,45 +3055,75 @@ struct TimelinePage: View {
 
     private func timelineRow(_ row: (time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)) -> some View {
         let t = Date(timeIntervalSince1970: TimeInterval(row.time))
-        let timeText = DateFormatter.localizedString(from: t, dateStyle: .none, timeStyle: .medium)
+        let tfmt = DateFormatter()
+        tfmt.dateFormat = "HH:mm:ss"
         // 钱列：Trae 按积分口径显示（cost 是折算金额，积分才是 Trae 的计费单位），其他源仍显示美元费用
         let isTrae = row.source == "trae"
-        return HStack(spacing: 10) {
-            Text(timeText)
+        let isAnomaly = isTrae && row.credits >= anomalyThreshold
+        return HStack(spacing: 8) {
+            Text(tfmt.string(from: t))
                 .font(.system(size: 11).monospacedDigit())
                 .foregroundColor(Color(nsColor: Design.textMuted))
-                .frame(width: 64, alignment: .leading)
-            RoundedRectangle(cornerRadius: 1.5)
-                .fill(Color(nsColor: Design.brandColor))
-                .frame(width: 3, height: 14)
-            Text(AppDelegate.shared?.sourceDisplayName(row.source) ?? row.source)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(Color(nsColor: Design.brandColor))
-                .frame(width: 76, alignment: .leading)
-                .lineLimit(1)
+                .frame(width: 66, alignment: .leading)
+            sourceChip(row.source)
+                .frame(width: 52, alignment: .leading)
             Text(row.model)
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .foregroundColor(Color(nsColor: Design.textPrimary))
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Spacer()
+            if isAnomaly {
+                Text(L("异常"))
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(Color(nsColor: Design.warningColor))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Color(nsColor: Design.warningColor).opacity(0.16)))
+                    .fixedSize()
+            }
+            Spacer(minLength: 8)
             if isTrae {
-                if row.credits > 0 {
-                    Text("\(formatCredits(row.credits)) " + L("积分"))
-                        .font(.system(size: 10).monospacedDigit())
-                        .foregroundColor(Color(nsColor: Design.textSecondary))
-                }
+                Text(formatCredits(row.credits))
+                    .font(.system(size: 12, weight: .medium).monospacedDigit())
+                    .foregroundColor(Color(nsColor: row.credits > 0 ? Design.successColor : Design.textMuted))
+                    .frame(width: 70, alignment: .trailing)
             } else if row.cost > 0 {
                 Text(money(row.cost))
-                    .font(.system(size: 10).monospacedDigit())
+                    .font(.system(size: 12).monospacedDigit())
                     .foregroundColor(Color(nsColor: Design.textSecondary))
+                    .frame(width: 70, alignment: .trailing)
+            } else {
+                Color.clear.frame(width: 70, height: 1)
             }
             Text(Design.formatTokens(row.token))
-                .font(.system(size: 11, weight: .medium).monospacedDigit())
-                .foregroundColor(Color(nsColor: Design.dataHighlightColor))
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundColor(Color(nsColor: Design.textSecondary))
                 .frame(width: 84, alignment: .trailing)
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(isAnomaly
+                    ? Color(nsColor: Design.warningColor).opacity(0.07)
+                    : Color.clear)
+        .overlay(alignment: .leading) {
+            if isAnomaly {
+                Rectangle().fill(Color(nsColor: Design.warningColor)).frame(width: 2)
+            }
+        }
+    }
+
+    /// 渠道小标签（trae 绿色，其他源品牌色）
+    private func sourceChip(_ source: String) -> some View {
+        let isTrae = source == "trae"
+        let c = isTrae ? Design.successColor : Design.brandColor
+        let name = isTrae ? "trae" : (AppDelegate.shared?.sourceDisplayName(source) ?? source)
+        return Text(name)
+            .font(.system(size: 9, weight: .medium))
+            .foregroundColor(Color(nsColor: c))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(RoundedRectangle(cornerRadius: 3).fill(Color(nsColor: c).opacity(0.16)))
+            .lineLimit(1)
     }
 }
 
