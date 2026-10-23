@@ -1008,3 +1008,92 @@ class AllTimeDetailWindowController: DetailBaseWindowController {
                   rows: exportRows)
     }
 }
+
+// MARK: - 净输入 Top 会话窗口
+//
+// 回答"钱烧在哪"：净输入（不含缓存读，实际计费的主力）最大的会话排行。
+// Trae 行为会话级快照，其他源为单请求行；今日数据实时参与排名（Trae 行直接落 usage_log）。
+
+class TopSessionsDetailWindowController: DetailBaseWindowController {
+    private var exportRows: [[String]] = []
+
+    convenience init() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered, defer: false
+        )
+        window.title = L("净输入 Top 会话")
+        window.center()
+        window.setFrameAutosaveName("CCBarTopSessions")
+        window.backgroundColor = Design.backgroundDark
+        window.minSize = NSSize(width: 440, height: 300)
+        self.init(window: window)
+        installContent(onExport: { [weak self] in self?.exportCSVClicked() })
+        content.dateText = L("近7天 · 按净输入排序")
+    }
+
+    func reloadData() {
+        guard let store = AppDelegate.shared?.store else { return }
+        exportRows = []
+
+        let rows = store.queryTopSessions(days: 7, limit: 15)
+        let totals = store.querySessionWindowTotals(days: 7)
+        guard !rows.isEmpty else {
+            content.set([.empty(L("暂无数据"))])
+            return
+        }
+
+        let todayKey = StatsStore.dayString(fromEpoch: StatsStore.localMidnight(0))
+        let topInput = rows[0].input
+        let topShare = totals.input > 0 ? Double(topInput) / Double(totals.input) * 100 : 0
+
+        let widths: [CGFloat] = [80, 140, 90, 90, 70]
+        var sessionRows: [DetailRow] = []
+        for (rank, r) in rows.enumerated() {
+            exportRows.append([r.date, r.model, "\(r.input)", "\(r.output)", String(format: "%.2f", r.credits)])
+            sessionRows.append(DetailRow(cells: [
+                detailCell(r.date, widths[0],
+                           r.date == todayKey ? Design.brandColor : Design.dataHighlightColor,
+                           bold: r.date == todayKey, leading: true),
+                detailCell(shortModelName(r.model), widths[1], Design.textPrimary, leading: true),
+                detailCell(fmtNum(r.input), widths[2], Design.dataHighlightColor),
+                detailCell(fmtNum(r.output), widths[3], Design.textPrimary),
+                detailCell(r.credits > 0 ? SettingsViewModel.fmtCredits(r.credits) : "-",
+                           widths[4], r.credits > 0 ? Design.textSecondary : Design.textMuted),
+            ], highlight: rank == 0))
+        }
+
+        content.set([
+            .statCards([
+                DetailStat(label: L("净输入合计"), value: Design.formatTokens(totals.input)),
+                DetailStat(label: L("输出合计"), value: Design.formatTokens(totals.output)),
+                DetailStat(label: L("Top1 占比"), value: String(format: "%.0f%%", topShare),
+                           accent: Design.warningColor),
+            ]),
+            .separator,
+            tableHeader([L("日期"), L("模型"), L("净输入"), L("输出"), L("积分")], widths: widths),
+            .separator,
+            .rows(sessionRows)
+        ])
+    }
+
+    func exportCSVClicked() {
+        exportCSV(defaultName: L("ccbar-净输入Top会话.csv"),
+                  header: [L("日期"), L("模型"), L("净输入"), L("输出"), L("积分")],
+                  rows: exportRows)
+    }
+
+    private func shortModelName(_ name: String) -> String {
+        var s = name.lowercased()
+        if let r = s.range(of: "-", options: .backwards) {
+            let after = s[r.upperBound...]
+            if after.count == 8, Int(after) != nil { s = String(s[..<r.lowerBound]) }
+        }
+        for p in ["claude-", "openai-", "deepseek-", "google-"] {
+            if s.hasPrefix(p) { s = String(s.dropFirst(p.count)); break }
+        }
+        if s.count > 18 { s = String(s.prefix(18)) + "…" }
+        return s
+    }
+}
