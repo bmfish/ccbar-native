@@ -12,23 +12,25 @@ import UniformTypeIdentifiers
 // MARK: - 页面定义
 
 enum InsightsPage: String, CaseIterable, Identifiable {
-    case cost       = "费用"
     case insights   = "洞察"
-    case share      = "分享"
-    case channels   = "渠道"
-    case timeline   = "流水"
     case credits    = "积分"
+    case timeline   = "流水"
+    case channels   = "渠道"
+    case cost       = "费用"
+    case share      = "分享"
+    case settings   = "设置"
 
     var id: String { rawValue }
 
     var icon: String {
         switch self {
-        case .cost: return "dollarsign.circle"
         case .insights: return "sparkles"
-        case .share: return "square.and.arrow.up"
-        case .channels: return "square.stack.3d.up"
-        case .timeline: return "list.bullet.rectangle"
         case .credits: return "bolt.circle"
+        case .timeline: return "list.bullet.rectangle"
+        case .channels: return "square.stack.3d.up"
+        case .cost: return "dollarsign.circle"
+        case .share: return "square.and.arrow.up"
+        case .settings: return "gearshape"
         }
     }
 }
@@ -541,25 +543,28 @@ final class InsightsViewModel: ObservableObject {
 
 struct InsightsRootView: View {
     @ObservedObject var vm: InsightsViewModel
+    /// 内嵌设置页复用同一套设置模型；保存后立即应用（不关闭窗口）
+    @StateObject private var settingsVM = SettingsViewModel(settings: AppDelegate.shared?.settings ?? Settings()) {
+        guard let d = AppDelegate.shared else { return }
+        d.connectDB()
+        d.startTimer()
+        d.updateData()
+        d.rebuildStatusBarChrome()
+        d.refreshTitleColor()
+    }
     // 记住上次停留的页签（重启也保留）
-    @AppStorage("insightsLastPage") private var pageRaw: String = InsightsPage.cost.rawValue
+    @AppStorage("insightsLastPage") private var pageRaw: String = InsightsPage.insights.rawValue
 
     private var pageBinding: Binding<InsightsPage> {
         Binding(
-            get: { InsightsPage(rawValue: pageRaw) ?? .cost },
+            get: { InsightsPage(rawValue: pageRaw) ?? .insights },
             set: { pageRaw = $0.rawValue }
         )
     }
 
     var body: some View {
-        NavigationSplitView {
-            List(InsightsPage.allCases, selection: pageBinding) { p in
-                Label(L(p.rawValue), systemImage: p.icon)
-                    .tag(p)
-            }
-            .listStyle(.sidebar)
-            .frame(minWidth: 150)
-        } detail: {
+        HStack(spacing: 0) {
+            rail
             ZStack {
                 Rectangle().fill(.ultraThinMaterial)
                 Rectangle().fill(Color(nsColor: Design.backgroundDark).opacity(0.8))
@@ -567,8 +572,74 @@ struct InsightsRootView: View {
                     .padding(18)
             }
         }
-        .frame(minWidth: 720, minHeight: 480)
+        .frame(minWidth: 720, minHeight: 520)
         .onAppear { vm.load() }
+    }
+
+    /// 左侧图标导航栏（原型风格：顶部 logo + 图标/文字竖排 + 选中左侧指示条）
+    private var rail: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(LinearGradient(
+                        colors: [Color(nsColor: Design.successColor),
+                                 Color(nsColor: Design.successColor).opacity(0.65)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing))
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(Color(nsColor: Design.backgroundDark))
+            }
+            .frame(width: 28, height: 28)
+            .padding(.top, 14)
+            .padding(.bottom, 20)
+
+            VStack(spacing: 6) {
+                ForEach(InsightsPage.allCases) { railItem($0) }
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(width: 78)
+        .frame(maxHeight: .infinity)
+        .background(Color(nsColor: Design.backgroundDark).opacity(0.55))
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(Color(nsColor: Design.separatorColor).opacity(0.6))
+                .frame(width: 1)
+        }
+    }
+
+    private func railItem(_ p: InsightsPage) -> some View {
+        let selected = pageBinding.wrappedValue == p
+        return Button {
+            pageRaw = p.rawValue
+        } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color(nsColor: Design.successColor).opacity(selected ? 0.14 : 0))
+                    .frame(width: 54, height: 54)
+                VStack(spacing: 6) {
+                    Image(systemName: p.icon)
+                        .font(.system(size: 15, weight: selected ? .semibold : .regular))
+                        .frame(height: 16)
+                    Text(L(p.rawValue))
+                        .font(.system(size: 9.5, weight: selected ? .semibold : .regular))
+                        .fixedSize()
+                }
+                .foregroundColor(Color(nsColor: selected ? Design.successColor : Design.textMuted))
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 54)
+            .contentShape(Rectangle())
+            .overlay(alignment: .leading) {
+                Capsule()
+                    .fill(Color(nsColor: Design.successColor))
+                    .frame(width: 3, height: 20)
+                    .padding(.leading, 3)
+                    .opacity(selected ? 1 : 0)
+            }
+        }
+        .buttonStyle(.plain)
+        .help(L(p.rawValue))
     }
 
     @ViewBuilder
@@ -580,6 +651,7 @@ struct InsightsRootView: View {
         case .channels: ChannelsPage(vm: vm)
         case .timeline: TimelinePage(vm: vm)
         case .credits: CreditsPage(vm: vm)
+        case .settings: SettingsRootView(vm: settingsVM)
         }
     }
 }
@@ -2528,18 +2600,43 @@ struct CreditsPage: View {
                         }
                     }
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(formatCredits(ent.consumed))
-                            .font(.system(size: 34, weight: .bold).monospacedDigit())
-                            .foregroundColor(Color(nsColor: Design.bigNumberColor))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                        Spacer()
                         if ent.total > 0 {
-                            Text(L("剩余积分") + " " + formatCredits(remaining))
-                                .font(.system(size: 11).monospacedDigit())
+                            Text(formatCredits(remaining))
+                                .font(.system(size: 34, weight: .bold).monospacedDigit())
                                 .foregroundColor(Color(nsColor: Design.successColor))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                                .layoutPriority(1)
+                            Text(L("剩余"))
+                                .font(.system(size: 11))
+                                .foregroundColor(Color(nsColor: Design.textSecondary))
+                                .fixedSize()
+                            Spacer()
+                            Text(L("已用") + " " + formatCredits(ent.consumed))
+                                .font(.system(size: 11).monospacedDigit())
+                                .foregroundColor(Color(nsColor: Design.textMuted))
+                                .fixedSize()
+                        } else {
+                            Text(formatCredits(ent.consumed))
+                                .font(.system(size: 34, weight: .bold).monospacedDigit())
+                                .foregroundColor(Color(nsColor: Design.bigNumberColor))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                            Text(L("已用"))
+                                .font(.system(size: 11))
+                                .foregroundColor(Color(nsColor: Design.textSecondary))
+                                .fixedSize()
+                            Spacer()
                         }
                     }
+                    HStack(spacing: 14) {
+                        Text(L("近 7 天日均") + " " + formatCredits(sevenDayRate))
+                        Text(L("近 30 天日均") + " " + formatCredits(dailyAvg))
+                        Spacer()
+                    }
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+                    .fixedSize()
                     if ent.total > 0 {
                         GeometryReader { geo in
                             ZStack(alignment: .leading) {
@@ -3180,7 +3277,7 @@ class InsightsWindowController: NSWindowController {
         window.center()
         window.setFrameAutosaveName("CCBarInsights")
         window.backgroundColor = Design.backgroundDark
-        window.minSize = NSSize(width: 680, height: 460)
+        window.minSize = NSSize(width: 680, height: 520)
         window.appearance = NSAppearance(named: .darkAqua)
         self.init(window: window)
         window.contentViewController = NSHostingController(rootView: InsightsRootView(vm: vm))

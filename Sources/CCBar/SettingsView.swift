@@ -476,7 +476,7 @@ struct SettingsRootView: View {
                 ScanlineShape().allowsHitTesting(false)
             }
         }
-        .frame(minWidth: 560, minHeight: 520)
+        .frame(minWidth: 480, minHeight: 420)
         .onReceive(vm.objectWillChange) { _ in
             if !dirty { DispatchQueue.main.async { dirty = true } }
         }
