@@ -140,7 +140,7 @@ final class PopoverViewModel: ObservableObject {
     }
 
     /// 环比百分比：(今期 - 上期) / 上期；上期无数据返回 nil
-    static func delta(current: Int64?, prev: Int64?) -> Double? {
+    nonisolated static func delta(current: Int64?, prev: Int64?) -> Double? {
         guard let cur = current, let p = prev, p > 0 else { return nil }
         return (Double(cur) - Double(p)) / Double(p) * 100
     }

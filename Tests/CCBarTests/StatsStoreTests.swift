@@ -289,6 +289,25 @@ final class StatsStoreTests: XCTestCase {
         XCTAssertEqual(store.queryUnmeteredTokens(days: 7), 30)
     }
 
+    func testTodayRequestTimesNotLimited() throws {
+        // 回归：会话统计依赖今日全量时间戳，不能被流水的 800 行上限截断
+        makeFixtureSource()
+        let midnight = StatsStore.localMidnight(0)
+        fixtureExec("""
+        WITH RECURSIVE cnt(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM cnt WHERE i < 899)
+        INSERT INTO proxy_request_logs
+        SELECT 'req-' || i, 'claude', 'test-model', 1, 1, 0, 0, 0, \(midnight) + 60 + i
+        FROM cnt;
+        """)
+        rebuildWithFixture()
+
+        let times = store.queryTodayRequestTimes()
+        XCTAssertEqual(times.count, 900)
+        XCTAssertEqual(times.first, Int(midnight) + 60)
+        XCTAssertEqual(times.last, Int(midnight) + 959)
+        XCTAssertEqual(store.queryTodayTimeline().count, 800, "流水页仍按 800 行截断")
+    }
+
     func testModelHistoryAndWindowStats() throws {
         // 5 天前 model-B 首用、3 天前 model-A 加入、昨天 model-A 再用
         makeFixtureSource()

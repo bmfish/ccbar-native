@@ -254,7 +254,7 @@ final class TraeSyncTests: XCTestCase {
         // 静默期定时器驱动（非 interactive）直接 return，sourceStatus 保持"连接中…"。
         // 若静默被移除，假凭据会走真实 API 并把状态置为过期——测试即失败，守护有效
         let night = cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 3, minute: 0))!
-        store.syncTraeIfNeeded(now: night)
+        XCTAssertFalse(store.syncTraeIfNeeded(now: night), "静默期不应发起同步")
         XCTAssertEqual(store.sourceStatus["trae"], "连接中…", "静默期定时器不应发起同步")
     }
 
@@ -267,7 +267,7 @@ final class TraeSyncTests: XCTestCase {
         cal.timeZone = .current
         let day = cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 11, minute: 0))!
         // 白天 interactive：会真实发起（假凭据 → 状态被改写），证明 interactive 未被静默误伤
-        store.syncTraeIfNeeded(now: day, interactive: true)
+        XCTAssertTrue(store.syncTraeIfNeeded(now: day, interactive: true), "interactive 应发起同步")
         XCTAssertNotEqual(store.sourceStatus["trae"], "连接中…", "interactive 同步不应被拦截")
     }
 

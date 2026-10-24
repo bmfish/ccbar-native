@@ -195,19 +195,38 @@ final class InsightsViewModel: ObservableObject {
     @Published var weeklyTrend: [ChartEntry] = []
 
     private var loaded = false
+    /// 后台加载代数：窗口快速开关/连续刷新时丢弃过期结果
+    private var loadGeneration = 0
 
-    /// 全量加载（查询都是索引区间扫描，实测 < 20ms，一次全查省得各页互相清数据）。
+    /// 全量加载（一次全查省得各页互相清数据）；查询在后台队列执行，算完回主线程一次性应用。
     /// 曾按页懒加载 + apply 全量覆盖，后加载的页面会把先加载的清零——勿改回。
     func load(force: Bool = false) {
         guard let store = AppDelegate.shared?.store else { return }
-        load(store: store, force: force)
+        guard force || !loaded else { return }
+        loaded = true
+        loadGeneration += 1
+        let generation = loadGeneration
+        let day = timelineDay
+        let budget = AppDelegate.shared?.settings.monthlyBudgetUsd ?? 0
+        let price = AppDelegate.shared?.settings.defaultTokenPrice ?? 0
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let snapshot = self.compute(store: store, timelineDay: day,
+                                        monthlyBudget: budget, defaultTokenPrice: price)
+            Task { @MainActor [weak self] in
+                guard let self, self.loadGeneration == generation else { return }
+                self.apply(snapshot)
+            }
+        }
     }
 
-    /// 测试/预览注入 store 的版本
+    /// 测试/预览注入 store 的版本（同步执行，便于立即断言）
     func load(store: StatsStore, force: Bool = false) {
         guard force || !loaded else { return }
         loaded = true
-        apply(compute(store: store))
+        apply(compute(store: store, timelineDay: timelineDay,
+                      monthlyBudget: AppDelegate.shared?.settings.monthlyBudgetUsd ?? 0,
+                      defaultTokenPrice: AppDelegate.shared?.settings.defaultTokenPrice ?? 0))
     }
 
     /// 流水页切日期：只重查流水，其余字段不动（一次性全量加载的增量通道）
@@ -279,8 +298,10 @@ final class InsightsViewModel: ObservableObject {
         var creditsEnt: (consumed: Double, total: Double)?
     }
 
-    private func compute(store: StatsStore) -> Snapshot {
+    private nonisolated func compute(store: StatsStore, timelineDay: Date,
+                                     monthlyBudget: Double, defaultTokenPrice: Double) -> Snapshot {
         var s = Snapshot()
+        s.timelineDay = timelineDay
         // 费用页
         s.costToday = store.queryCost(days: 0)
         s.cost7 = store.queryCost(days: 7)
@@ -304,9 +325,9 @@ final class InsightsViewModel: ObservableObject {
         s.costMtd = mtd.mtd
         s.monthDaysElapsed = mtd.daysElapsed
         s.monthDaysTotal = mtd.daysInMonth
-        s.monthlyBudget = AppDelegate.shared?.settings.monthlyBudgetUsd ?? 0
+        s.monthlyBudget = monthlyBudget
         // 未计费渠道估算（默认单价 $/M tokens）
-        let price = AppDelegate.shared?.settings.defaultTokenPrice ?? 0
+        let price = defaultTokenPrice
         if price > 0 {
             s.estToday = Double(store.queryUnmeteredTokens(days: 0)) / 1_000_000 * price
             s.est7 = Double(store.queryUnmeteredTokens(days: 7)) / 1_000_000 * price
@@ -317,7 +338,8 @@ final class InsightsViewModel: ObservableObject {
         let delta = store.queryWeeklyDelta()
         s.thisWeek = delta.thisWeek
         s.lastWeek = delta.lastWeek
-        s.dailyAvg = (store.queryDayStats(days: 30)?.total ?? 0) / 30
+        let month30Total = store.queryDayStats(days: 30)?.total ?? 0
+        s.dailyAvg = month30Total / 30
         s.peak = store.queryPeakDay(days: 30)
         let hist = store.queryHourHistogram(days: 30)
         s.peakHour = hist.max { $0.value < $1.value }?.key
@@ -326,7 +348,8 @@ final class InsightsViewModel: ObservableObject {
             ModelMilestone(model: $0.model, firstEpoch: $0.firstEpoch,
                            lastEpoch: $0.lastEpoch, token: $0.token)
         }
-        s.totalAll = store.queryTotalStats()?.total ?? 0
+        let totalAll = store.queryTotalStats()?.total ?? 0
+        s.totalAll = totalAll
         // 范围切换：180 天按日补齐序列（含今天）+ 全量序列
         func zeroFilled(_ raw: [(date: String, token: Int64)], days: Int) -> [(date: String, token: Int64)] {
             var map: [String: Int64] = [:]
@@ -386,10 +409,11 @@ final class InsightsViewModel: ObservableObject {
         s.weekTrend = store.queryDailyTokens(days: 7).map {
             ChartEntry(label: String($0.date.suffix(5)), value: $0.token)
         }
-        s.shareToday = store.queryDayStats(days: 0)?.total ?? 0
+        let todayStats = store.queryDayStats(days: 0)
+        s.shareToday = todayStats?.total ?? 0
         s.shareWeek = store.queryDayStats(days: 7)?.total ?? 0
-        s.shareMonth = store.queryDayStats(days: 30)?.total ?? 0
-        s.shareTotal = store.queryTotalStats()?.total ?? 0
+        s.shareMonth = month30Total
+        s.shareTotal = totalAll
         // 周报（最近一个完整周：上周一 ~ 上周日）
         let w = WeeklyReport.lastWeekWindow()
         if let ws = store.queryWindowStats(daysAgoFrom: w.from, daysAgoTo: w.to) {
@@ -412,8 +436,9 @@ final class InsightsViewModel: ObservableObject {
         s.todaySources = store.querySourceBreakdown()
         // 流水页（按当前选中日期查，切日期走 loadTimeline 增量刷新）
         s.timeline = store.queryTimeline(day: timelineDay)
-        // 今日会话：30 分钟内连续请求算同一会话
-        let (cnt, avg, longest) = Self.sessionStats(from: s.timeline)
+        // 今日会话：30 分钟内连续请求算同一会话；须用全量时间戳，流水页只取最近 800 行会少算
+        let todayTimes = store.queryTodayRequestTimes()
+        let (cnt, avg, longest) = Self.sessionStats(fromTimes: todayTimes)
         s.sessionCount = cnt
         s.sessionAvgMin = avg
         s.sessionLongestMin = longest
@@ -435,13 +460,12 @@ final class InsightsViewModel: ObservableObject {
         s.creditsDaily = creditPoints
         // 积分页 Hero / 余额 / 峰值
         s.creditsTodayHourly = store.queryCreditsHourHistogram(days: 0)
-        s.todayReqs = store.queryDayStats(days: 0)?.reqs ?? 0
+        s.todayReqs = todayStats?.reqs ?? 0
         if let last = s.compDaily.last, last.date == fmt.string(from: Date()) {
             let total = last.input + last.output + last.cacheRead + last.cacheCreate
             s.todayCacheHit = total > 0 ? Double(last.cacheRead) / Double(total) * 100 : 0
         }
-        let todayTimes = store.queryTodayTimeline().map(\.time)
-        if let mn = todayTimes.min(), let mx = todayTimes.max(), mx > mn {
+        if let mn = todayTimes.first, let mx = todayTimes.last, mx > mn {
             s.todayActiveMin = (mx - mn) / 60
         }
         if let peak = creditPoints.max(by: { $0.credits < $1.credits }) {
@@ -520,8 +544,8 @@ final class InsightsViewModel: ObservableObject {
     }
 
     /// 今日会话统计：相邻请求间隔 > 30 分钟切新会话，返回（会话数, 平均时长分钟, 最长时长分钟）
-    static func sessionStats(from rows: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)]) -> (Int, Int, Int) {
-        let times = rows.map(\.time).sorted()
+    nonisolated static func sessionStats(fromTimes times: [Int]) -> (Int, Int, Int) {
+        let times = times.sorted()
         guard !times.isEmpty else { return (0, 0, 0) }
         var durations: [Int] = []
         var start = times[0], last = times[0]

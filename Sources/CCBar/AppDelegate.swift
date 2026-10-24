@@ -91,10 +91,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
 
         // 每日家务：自动备份 + 静默检查更新
         runDailyHousekeeping()
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-            self?.openInsights()
-        }
     }
 
     /// 每日家务（全部静默，失败只打日志不打扰）：
@@ -326,6 +322,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
 
     /// 定时刷新：后台队列跑同步与查询，结果回主线程更新缓存与 UI
     @objc func updateData() {
+        // 弹窗可见性在主线程取；本方法由定时器 / 设置保存 / 启动调用，均在主线程
+        let popoverShown = popover?.isShown == true
         queryQueue.async { [weak self] in
             guard let self = self else { return }
 
@@ -336,9 +334,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             self.syncTraeInBackground(interactive: false)
 
             let todayStats = self.store.queryDayStats(days: 0)
-            let workHours = self.store.queryWorkHours()
-            // 弹窗今日区（逐时/积分/会话脚注）全部在后台队列算好，主线程只读缓存
-            let todayExtras = Self.makeTodayExtras(store: self.store)
+            // 工时与今日区只有弹窗在用：关闭时不查，省掉每轮 800 行流水与逐时聚合
+            let workHours = popoverShown ? self.store.queryWorkHours() : nil
+            let todayExtras = popoverShown ? Self.makeTodayExtras(store: self.store) : nil
 
             var modelBreakdown: [ModelStat]?
             if DataCache.shared.needsModelCache() {
@@ -371,7 +369,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                     monthSeries: self.store.queryDailyTokens(days: 30).map(\.token),
                     historySeries: self.store.queryDailyTokens(days: 90).map(\.token),
                     yesterdayDelta: PopoverViewModel.delta(
-                        current: self.store.queryDayStats(days: 1)?.total,
+                        current: yesterdayStats?.total,
                         prev: self.store.queryWindowStats(daysAgoFrom: 2, daysAgoTo: 2)?.total),
                     weekDelta: PopoverViewModel.delta(
                         current: weekStats?.total,
@@ -449,7 +447,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             // Trae 走独立队列，网络完成后会补一次今日刷新，先查到的本地数据不阻塞
             self.syncTraeInBackground(interactive: true)
             let todayStats = self.store.queryDayStats(days: 0)
-            let modelBreakdown = self.store.queryModelBreakdown()
+            // 模型分布与定时刷新共用小时缓存，避免每次点开弹窗都重扫今日明细
+            var modelBreakdown: [ModelStat]?
+            if DataCache.shared.needsModelCache() {
+                modelBreakdown = self.store.queryModelBreakdown()
+                DataCache.shared.markModelCacheDone()
+            }
             let workHours = self.store.queryWorkHours()
             let todayExtras = Self.makeTodayExtras(store: self.store)
 
@@ -479,23 +482,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
 
     /// 弹窗今日区数据（逐时 / 积分 / 会话脚注）；含 SQLite 查询，必须在后台队列调用
     static func makeTodayExtras(store: StatsStore) -> TodayExtras {
-        let times = store.queryTodayTimeline().map(\.time).sorted()
+        let times = store.queryTodayRequestTimes()
         var summary: String?
         if !times.isEmpty {
-            // 相邻请求间隔 > 30 分钟切新会话
-            var durations: [Int] = []
-            var start = times[0], last = times[0]
-            for t in times.dropFirst() {
-                if t - last > 30 * 60 {
-                    durations.append(last - start)
-                    start = t
-                }
-                last = t
-            }
-            durations.append(last - start)
-            let avgMin = durations.reduce(0, +) / max(durations.count, 1) / 60
-            let longestMin = (durations.max() ?? 0) / 60
-            summary = L("今日会话") + " \(durations.count) " + L("个") + " · "
+            let (count, avgMin, longestMin) = InsightsViewModel.sessionStats(fromTimes: times)
+            summary = L("今日会话") + " \(count) " + L("个") + " · "
                 + String(format: L("平均 %d 分钟 · 最长 %d 分钟"), avgMin, longestMin)
         }
         return TodayExtras(hourly: store.queryHourHistogram(days: 0),
@@ -511,8 +502,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     private func syncTraeInBackground(interactive: Bool) {
         traeQueue.async { [weak self] in
             guard let self else { return }
-            self.store.syncTraeIfNeeded(interactive: interactive)
-            guard interactive else { return }
+            let didSync = self.store.syncTraeIfNeeded(interactive: interactive)
+            // 只有真的拉过 Trae 才补查；无凭据/静默/节流时不重复查今日
+            guard interactive, didSync else { return }
             self.queryQueue.async { [weak self] in
                 guard let self else { return }
                 let todayStats = self.store.queryDayStats(days: 0)

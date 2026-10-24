@@ -225,7 +225,8 @@ enum SourceRegistry {
 // 线程模型：定时器查询走后台串行队列，rebuild 在主线程，detail 窗口在主线程直连。
 // 全部入口经 lock 串行，底层连接又开了 FULLMUTEX，双重保险。
 
-final class StatsStore {
+/// 跨队列使用：可变状态由 `lock` 串行、SQLite 连接开了 FULLMUTEX，故标注 unchecked
+final class StatsStore: @unchecked Sendable {
     private(set) var handle: OpaquePointer?
     private(set) var attachedAdapters: [SourceAdapter] = []
     /// 每个数据源的连接诊断信息（设置页展示）：已连接 / 未启用 / 具体失败原因
@@ -622,17 +623,19 @@ final class StatsStore {
     /// 凌晨会话由 9 点后第一次同步的"水位-2 天"窗口覆盖，不会丢数；
     /// 点弹窗（interactive）不受静默限制，随时可查。
     /// force=true（设置页"立即同步"）：跳过静默与节流，用户明确操作即时生效。
-    func syncTraeIfNeeded(now: Date = Date(), interactive: Bool = false, force: Bool = false) {
-        guard force || interactive || !Self.inNightSilence(now) else { return }
+    /// 返回是否真的发起了同步；调用方据此决定要不要补查今日（静默/无凭据/节流时跳过）。
+    @discardableResult
+    func syncTraeIfNeeded(now: Date = Date(), interactive: Bool = false, force: Bool = false) -> Bool {
+        guard force || interactive || !Self.inNightSilence(now) else { return false }
 
         // 凭据快照（锁内）
         lock.lock()
         let credential = traeCredential
-        guard !credential.isEmpty else { lock.unlock(); return }
+        guard !credential.isEmpty else { lock.unlock(); return false }
         let minInterval = interactive ? Self.traeInteractiveMinInterval : Self.traeSyncMinInterval
         let delta = now.timeIntervalSince1970 - lastTraeSyncAt
         lock.unlock()
-        guard force || delta >= minInterval else { return }
+        guard force || delta >= minInterval else { return false }
 
         // 拉取窗口：水位 -2 天回看（跨零点迟到会话 + 会话跨天推进），首次 90 天全量。
         // 积分账单按小时节流（ent_usage 只喂设置页展示，没必要跟着每次同步拉）
@@ -688,6 +691,7 @@ final class StatsStore {
             print("[ccBar] Trae 同步失败: \(msg)")
             sourceStatus["trae"] = "同步失败：\(msg)"
         }
+        return true
     }
 
     /// Trae 明细入库：会话级 UPSERT（同一 session 用量随对话推进增长，覆盖旧值）。
@@ -879,6 +883,9 @@ final class StatsStore {
         var minEpoch: Int64?
         var maxEpoch: Int64?
 
+        // 整批一个事务：逐行 autocommit 在 WAL 下每行一次 fsync，几万行会慢一个数量级
+        exec("BEGIN IMMEDIATE")
+
         for record in records.dropFirst() {
             // v1.8 = 13 列（含 credits）；旧版导出 = 12 列，credits 按 0 处理
             guard record.count == 12 || record.count == 13,
@@ -915,6 +922,7 @@ final class StatsStore {
             minEpoch = min(minEpoch ?? epoch, epoch)
             maxEpoch = max(maxEpoch ?? epoch, epoch)
         }
+        exec("COMMIT")
 
         // 导入行并入聚合缓存（含跨天余量），幂等重算
         if let mn = minEpoch, let mx = maxEpoch {
@@ -1706,6 +1714,21 @@ final class StatsStore {
         let todaySources = sourceBreakdownUnlocked()
         for s in todaySources where s.total > 0 {
             result.append((today, s.source, s.total))
+        }
+        return result
+    }
+
+    /// 今日全部请求时间戳（升序、不截断）：会话切分与活跃时长用，只取一列
+    func queryTodayRequestTimes() -> [Int] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var result: [Int] = []
+        forEachRow("""
+        SELECT created_at FROM usage_all
+        WHERE created_at >= ?
+        ORDER BY created_at
+        """, binds: [Self.localMidnight(0)]) { stmt in
+            result.append(Int(sqlite3_column_int64(stmt, 0)))
         }
         return result
     }
