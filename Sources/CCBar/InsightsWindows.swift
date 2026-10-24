@@ -2943,30 +2943,39 @@ struct TimelinePage: View {
                 Text(L("流水明细"))
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(Color(nsColor: Design.textPrimary))
-                Text(L(isToday ? "今日合计" : "当日合计") + " "
-                     + formatCredits(dayTotals.credits) + " " + L("积分") + " · "
-                     + Design.formatTokens(dayTotals.tokens) + " tokens · "
-                     + "\(dayTotals.count) " + L("次请求"))
+                Text(headerSummary)
                     .font(.system(size: 10))
                     .foregroundColor(Color(nsColor: Design.textMuted))
             }
             Spacer()
             if isToday, vm.creditsPrevDay > 0, dayTotals.credits > 0 {
-                let d = (dayTotals.credits - vm.creditsPrevDay) / vm.creditsPrevDay * 100
-                HStack(spacing: 3) {
-                    Text(L("较昨日"))
-                    Image(systemName: d >= 0 ? "arrow.up" : "arrow.down")
-                        .font(.system(size: 8, weight: .bold))
-                    Text(String(format: "%.0f%%", abs(d)))
-                }
-                .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                .foregroundColor(Color(nsColor: d >= 0 ? Design.successColor : Design.warningColor))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Capsule().fill(Color(nsColor: (d >= 0
-                                                          ? Design.successColor : Design.warningColor)).opacity(0.14)))
+                deltaBadge
             }
         }
+    }
+
+    private var headerSummary: String {
+        let label = L(isToday ? "今日合计" : "当日合计")
+        let credits = formatCredits(dayTotals.credits)
+        let tokens = Design.formatTokens(dayTotals.tokens)
+        return "\(label) \(credits) \(L("积分")) · \(tokens) tokens · \(dayTotals.count) \(L("次请求"))"
+    }
+
+    /// 今日积分相对昨日的变化徽标
+    private var deltaBadge: some View {
+        let d = (dayTotals.credits - vm.creditsPrevDay) / vm.creditsPrevDay * 100
+        let color = d >= 0 ? Design.successColor : Design.warningColor
+        return HStack(spacing: 3) {
+            Text(L("较昨日"))
+            Image(systemName: d >= 0 ? "arrow.up" : "arrow.down")
+                .font(.system(size: 8, weight: .bold))
+            Text(String(format: "%.0f%%", abs(d)))
+        }
+        .font(.system(size: 10, weight: .semibold).monospacedDigit())
+        .foregroundColor(Color(nsColor: color))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(Color(nsColor: color).opacity(0.14)))
     }
 
     /// 表头：时间 / 渠道 / 模型 / 积分 / Tokens

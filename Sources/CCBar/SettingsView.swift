@@ -361,7 +361,7 @@ final class SettingsViewModel: ObservableObject {
         let store = AppDelegate.shared?.store
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let ok = store?.exportCSV(to: url.path) == true
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 if ok {
                     self.showAlert(L("导出完成"), L("明细已导出到：") + "\n\(url.path)")
@@ -381,7 +381,7 @@ final class SettingsViewModel: ObservableObject {
         let store = AppDelegate.shared?.store
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let r = store?.importCSV(from: url.path) ?? (read: 0, inserted: 0, skipped: 0)
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 if r.skipped == -1 {
                     self.showAlert(L("导入失败"), L("不是 ccBar 导出的明细 CSV（表头不符）"))

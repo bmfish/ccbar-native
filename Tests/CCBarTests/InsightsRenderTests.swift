@@ -149,11 +149,15 @@ final class InsightsRenderTests: XCTestCase {
         let db = try XCTUnwrap(store.handle)
 
         let midnight = StatsStore.localMidnight(0)
+        // 用当天已经过去的时刻：固定 +1h/+2h 在凌晨跑测试时会落到未来被窗口排除
+        let nowEpoch = Int64(Date().timeIntervalSince1970)
+        let t1 = max(midnight, nowEpoch - 2)
+        let t2 = max(midnight, nowEpoch - 1)
         store.upsertTraeRows([
             TraeRow(sessionID: "s1", model: "claude-test", input: 100, output: 50,
-                    cacheRead: 10, cacheWrite: 0, costUsd: 0.1, credits: 7.5, epoch: midnight + 3600),
+                    cacheRead: 10, cacheWrite: 0, costUsd: 0.1, credits: 7.5, epoch: t1),
             TraeRow(sessionID: "s2", model: "claude-test", input: 200, output: 80,
-                    cacheRead: 20, cacheWrite: 0, costUsd: 0.2, credits: 2.25, epoch: midnight + 7200),
+                    cacheRead: 20, cacheWrite: 0, costUsd: 0.2, credits: 2.25, epoch: t2),
         ])
         let totalCredits = SettingsViewModel.fmtCredits(9.75)
 
@@ -182,7 +186,9 @@ final class InsightsRenderTests: XCTestCase {
         let week = DetailWindowController()
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
-        let monday = cal.date(byAdding: .day, value: -(cal.component(.weekday, from: today) - 2), to: today)!
+        // Calendar 以周日=1：换算成距周一天数，周日应回看 6 天而不是前进 1 天
+        let sinceMonday = (cal.component(.weekday, from: today) + 5) % 7
+        let monday = cal.date(byAdding: .day, value: -sinceMonday, to: today)!
         week.reloadData(db: store.handle, weekStart: monday)
         verify(week.content, name: "近7天")
 
