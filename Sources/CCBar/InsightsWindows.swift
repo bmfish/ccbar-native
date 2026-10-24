@@ -2641,9 +2641,10 @@ struct CreditsPage: View {
                         GeometryReader { geo in
                             ZStack(alignment: .leading) {
                                 Capsule().fill(Color.white.opacity(0.06))
+                                // 绿色段表示「剩余额度」，越短越接近耗尽
                                 Capsule().fill(Color(nsColor: ratio >= 0.85
                                                      ? Design.warningColor : Design.successColor).opacity(0.8))
-                                    .frame(width: geo.size.width * CGFloat(ratio))
+                                    .frame(width: geo.size.width * CGFloat(max(1 - ratio, 0)))
                             }
                         }
                         .frame(height: 5)
@@ -2652,7 +2653,7 @@ struct CreditsPage: View {
                             Spacer()
                             Text(L("已用") + " " + String(format: "%.0f%%", ratio * 100))
                                 .foregroundColor(Color(nsColor: ratio >= 0.85
-                                                       ? Design.warningColor : Design.successColor))
+                                                       ? Design.warningColor : Design.textMuted))
                             Spacer()
                             Text(formatCredits(ent.total))
                         }
