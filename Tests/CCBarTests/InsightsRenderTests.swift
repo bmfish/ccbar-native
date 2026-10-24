@@ -138,6 +138,74 @@ final class InsightsRenderTests: XCTestCase {
         try data.write(to: URL(fileURLWithPath: "/tmp/detail-render.png"))
     }
 
+    func testDetailWindowsIncludeCredits() throws {
+        // 各详情窗口的表格都必须带积分列、合计行含积分（早期只有 Top 会话窗口有）
+        let dir = NSTemporaryDirectory() + "ccbar-detail-credits-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let store = StatsStore(storePath: dir + "/ccbar.db")
+        store.rebuild(configs: [])
+        defer { store.close() }
+        let db = try XCTUnwrap(store.handle)
+
+        let midnight = StatsStore.localMidnight(0)
+        store.upsertTraeRows([
+            TraeRow(sessionID: "s1", model: "claude-test", input: 100, output: 50,
+                    cacheRead: 10, cacheWrite: 0, costUsd: 0.1, credits: 7.5, epoch: midnight + 3600),
+            TraeRow(sessionID: "s2", model: "claude-test", input: 200, output: 80,
+                    cacheRead: 20, cacheWrite: 0, costUsd: 0.2, credits: 2.25, epoch: midnight + 7200),
+        ])
+        let totalCredits = SettingsViewModel.fmtCredits(9.75)
+
+        func blocks(_ content: DetailContentModel) -> [DetailRow] {
+            content.blocks.flatMap { block -> [DetailRow] in
+                if case .rows(let rows) = block.kind { return rows }
+                return []
+            }
+        }
+        func verify(_ content: DetailContentModel, name: String,
+                    file: StaticString = #filePath, line: UInt = #line) {
+            let rows = blocks(content)
+            XCTAssertFalse(rows.isEmpty, "\(name): 应有表格行", file: file, line: line)
+            XCTAssertEqual(rows.first(where: \.isHeader)?.cells.last?.text, L("积分"),
+                           "\(name): 表头应有积分列", file: file, line: line)
+            for row in rows {
+                XCTAssertEqual(row.cells.count, 5, "\(name): 每行应有 5 列", file: file, line: line)
+            }
+            let total = rows.first { $0.cells.first?.text == L("合计") }
+            XCTAssertEqual(total?.cells.last?.text, totalCredits,
+                           "\(name): 合计行应含积分", file: file, line: line)
+            XCTAssertTrue(rows.contains { !$0.isHeader && $0.cells.last?.text == totalCredits },
+                          "\(name): 应有数据行展示积分", file: file, line: line)
+        }
+
+        let week = DetailWindowController()
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let monday = cal.date(byAdding: .day, value: -(cal.component(.weekday, from: today) - 2), to: today)!
+        week.reloadData(db: store.handle, weekStart: monday)
+        verify(week.content, name: "近7天")
+
+        let month = MonthDetailWindowController()
+        month.db = store.handle
+        month.currentMonth = Date()
+        month.reloadData()
+        verify(month.content, name: "近30天")
+
+        let model = ModelDetailWindowController()
+        model.reloadData(db: store.handle, date: Date())
+        verify(model.content, name: "模型分布")
+
+        let hourly = HourlyDetailWindowController()
+        hourly.reloadData(db: store.handle, date: Date())
+        verify(hourly.content, name: "每小时")
+
+        // 历史总量：按月积分走独立 SQL（daily_agg 无 credits 列）
+        let base = DetailBaseWindowController(window: nil)
+        let monthKey = String(StatsStore.dayString(fromEpoch: midnight).prefix(7))
+        XCTAssertEqual(base.queryCreditsByMonth(db: db)[monthKey] ?? 0, 9.75, accuracy: 0.001)
+    }
+
     func testSessionStats() throws {
         // 30 分钟间隔切会话：t0、t0+1min 一段；t0+4000s（>30min）新一段
         let base = 1_800_000_000

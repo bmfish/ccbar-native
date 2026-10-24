@@ -304,26 +304,31 @@ class DetailBaseWindowController: NSWindowController {
                    color: Color(nsColor: color), alignment: leading ? .leading : .trailing)
     }
 
-    /// 数据行（日期/名称, 请求, 总Token, 缓存读）——各窗口共用同套配色口径。
+    /// 数据行（日期/名称, 请求, 总Token, 缓存读, 积分）——各窗口共用同套配色口径。
     /// highlight = 峰值行（主题色淡底）；markToday = 今天（首列主题色）
-    func dataRow(col0: String, reqs: Int, token: Int64, cache: Int64, widths: [CGFloat],
-                 highlight: Bool = false, markToday: Bool = false) -> DetailRow {
+    func dataRow(col0: String, reqs: Int, token: Int64, cache: Int64, credits: Double,
+                 widths: [CGFloat], highlight: Bool = false, markToday: Bool = false) -> DetailRow {
         DetailRow(cells: [
             detailCell(col0, widths[0],
                        markToday ? Design.brandColor : (token == 0 ? Design.textMuted : Design.dataHighlightColor),
                        bold: markToday, leading: true),
             detailCell(reqs == 0 ? "-" : "\(reqs)", widths[1], reqs == 0 ? Design.textMuted : Design.textPrimary),
             detailCell(fmtNum(token), widths[2], token == 0 ? Design.textMuted : Design.textPrimary),
-            detailCell(fmtNum(cache), widths[3], cache == 0 ? Design.textMuted : Design.textSecondary)
+            detailCell(fmtNum(cache), widths[3], cache == 0 ? Design.textMuted : Design.textSecondary),
+            detailCell(credits > 0 ? SettingsViewModel.fmtCredits(credits) : "-", widths[4],
+                       credits > 0 ? Design.textSecondary : Design.textMuted)
         ], highlight: highlight)
     }
 
-    func totalRow(_ label: String, reqs: Int, token: Int64, cache: Int64, widths: [CGFloat]) -> DetailRow {
+    func totalRow(_ label: String, reqs: Int, token: Int64, cache: Int64, credits: Double,
+                  widths: [CGFloat]) -> DetailRow {
         DetailRow(cells: [
             detailCell(label, widths[0], Design.textPrimary, bold: true, leading: true),
             detailCell("\(reqs)", widths[1], Design.textPrimary, bold: true),
             detailCell(fmtNum(token), widths[2], Design.textPrimary, bold: true),
-            detailCell(fmtNum(cache), widths[3], Design.textPrimary, bold: true)
+            detailCell(fmtNum(cache), widths[3], Design.textPrimary, bold: true),
+            detailCell(credits > 0 ? SettingsViewModel.fmtCredits(credits) : "-", widths[4],
+                       Design.textPrimary, bold: true)
         ])
     }
 
@@ -335,25 +340,66 @@ class DetailBaseWindowController: NSWindowController {
 
     // MARK: 查询辅助
 
-    /// 某一天的实时聚合：请求数 / 总 Token / 缓存读（daysAgo=0 表示今天）。
+    /// 某一天的实时聚合：请求数 / 总 Token / 缓存读 / 积分（daysAgo=0 表示今天）。
     /// 走统一的 usage_all；epoch 区间 + 参数绑定让 created_at 索引可用。
     /// 注意 daily_agg 不含今天，所以历史日期请用 queryDailyRows，本方法只用于今天。
-    func queryDay(db: OpaquePointer, daysAgo: Int) -> (Int, Int64, Int64) {
+    func queryDay(db: OpaquePointer, daysAgo: Int) -> (Int, Int64, Int64, Double) {
         let sql = """
         SELECT COALESCE(SUM(request_count),0), COALESCE(SUM(output_tokens+input_tokens+cache_read_tokens+cache_creation_tokens),0),
-            COALESCE(SUM(cache_read_tokens),0)
+            COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(credits),0)
         FROM usage_all WHERE created_at >= ? AND created_at < ?
         """
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return (0, 0, 0) }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return (0, 0, 0, 0) }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int64(stmt, 1, StatsStore.localMidnight(daysAgo))
         sqlite3_bind_int64(stmt, 2, StatsStore.localMidnight(daysAgo - 1))
-        var result = (0, Int64(0), Int64(0))
+        var result = (0, Int64(0), Int64(0), 0.0)
         if sqlite3_step(stmt) == SQLITE_ROW {
-            result = (Int(sqlite3_column_int64(stmt, 0)), sqlite3_column_int64(stmt, 1), sqlite3_column_int64(stmt, 2))
+            result = (Int(sqlite3_column_int64(stmt, 0)), sqlite3_column_int64(stmt, 1),
+                      sqlite3_column_int64(stmt, 2), sqlite3_column_double(stmt, 3))
         }
         return result
+    }
+
+    /// [fromDay, toDay]（本地日期）每日积分汇总，date → credits。
+    /// 积分只在 usage_log/usage_all 里，daily_agg 没有该列，故单独按日汇总。
+    func queryCreditsByDay(db: OpaquePointer, fromDay: String, toDay: String) -> [String: Double] {
+        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        let cal = Calendar.current
+        guard let fromText = fmt.date(from: fromDay),
+              let toText = fmt.date(from: toDay),
+              let toEnd = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: toText)) else { return [:] }
+        let sql = """
+        SELECT date(created_at,'unixepoch','localtime'), COALESCE(SUM(credits),0)
+        FROM usage_all WHERE created_at >= ? AND created_at < ? GROUP BY 1
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [:] }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(cal.startOfDay(for: fromText).timeIntervalSince1970))
+        sqlite3_bind_int64(stmt, 2, Int64(toEnd.timeIntervalSince1970))
+        var out: [String: Double] = [:]
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            out[String(cString: sqlite3_column_text(stmt, 0))] = sqlite3_column_double(stmt, 1)
+        }
+        return out
+    }
+
+    /// 全量按月积分汇总，month(yyyy-MM) → credits（含今日实时）
+    func queryCreditsByMonth(db: OpaquePointer) -> [String: Double] {
+        let sql = """
+        SELECT substr(date(created_at,'unixepoch','localtime'),1,7), COALESCE(SUM(credits),0)
+        FROM usage_all GROUP BY 1
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [:] }
+        defer { sqlite3_finalize(stmt) }
+        var out: [String: Double] = [:]
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            out[String(cString: sqlite3_column_text(stmt, 0))] = sqlite3_column_double(stmt, 1)
+        }
+        return out
     }
 
     /// 一次拉取 [fromDay, toDay] 的每日汇总（daily_agg，date → 请求数/总Token/缓存读），
@@ -458,11 +504,12 @@ class DetailWindowController: DetailBaseWindowController {
         let end = Calendar.current.date(byAdding: .day, value: 6, to: weekStart)!
         content.dateText = "\(fmt.string(from: weekStart))  ~  \(fmt.string(from: end))"
 
-        let widths: [CGFloat] = [70, 65, 95, 95]
+        let widths: [CGFloat] = [70, 65, 95, 95, 80]
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let dayKey = DateFormatter(); dayKey.dateFormat = "yyyy-MM-dd"
         var totalReqs = 0; var totalToken: Int64 = 0; var totalCache: Int64 = 0
+        var totalCredits = 0.0
         var chartEntries: [ChartEntry] = []
         var dayRows: [DetailRow] = []
         exportRows = []
@@ -471,20 +518,24 @@ class DetailWindowController: DetailBaseWindowController {
         let endOfWeek = cal.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
         let agg = queryDailyRows(db: db, fromDay: dayKey.string(from: weekStart),
                                  toDay: dayKey.string(from: endOfWeek))
+        let creditsByDate = queryCreditsByDay(db: db, fromDay: dayKey.string(from: weekStart),
+                                              toDay: dayKey.string(from: endOfWeek))
 
-        var dayData: [(dateStr: String, reqs: Int, token: Int64, cache: Int64, daysAgo: Int)] = []
+        var dayData: [(dateStr: String, reqs: Int, token: Int64, cache: Int64,
+                       credits: Double, daysAgo: Int)] = []
         for d in 0..<7 {
             guard let date = cal.date(byAdding: .day, value: d, to: weekStart) else { continue }
             let dateStr = dayKey.string(from: date)
             let daysAgo = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: today).day ?? 0
-            var reqs = 0; var token = Int64(0); var cache = Int64(0)
+            var reqs = 0; var token = Int64(0); var cache = Int64(0); var credits = 0.0
             if daysAgo == 0 {
-                (reqs, token, cache) = queryDay(db: db, daysAgo: 0)
+                (reqs, token, cache, credits) = queryDay(db: db, daysAgo: 0)
             } else if let a = agg[dateStr] {
                 reqs = a.reqs; token = a.token; cache = a.cache
+                credits = creditsByDate[dateStr] ?? 0
             }
-            totalReqs += reqs; totalToken += token; totalCache += cache
-            dayData.append((dateStr, reqs, token, cache, daysAgo))
+            totalReqs += reqs; totalToken += token; totalCache += cache; totalCredits += credits
+            dayData.append((dateStr, reqs, token, cache, credits, daysAgo))
             chartEntries.append(ChartEntry(label: String(dateStr.suffix(5)), value: token))
         }
 
@@ -492,9 +543,10 @@ class DetailWindowController: DetailBaseWindowController {
         let daysWithData = dayData.filter { $0.token > 0 }.count
         let dailyAvg = daysWithData > 0 ? totalToken / Int64(daysWithData) : 0
         for e in dayData {
-            exportRows.append([e.dateStr, "\(e.reqs)", "\(e.token)", "\(e.cache)"])
+            exportRows.append([e.dateStr, "\(e.reqs)", "\(e.token)", "\(e.cache)",
+                               String(format: "%.2f", e.credits)])
             dayRows.append(dataRow(col0: e.dateStr, reqs: e.reqs, token: e.token, cache: e.cache,
-                                   widths: widths,
+                                   credits: e.credits, widths: widths,
                                    highlight: peakToken > 0 && e.token == peakToken,
                                    markToday: e.daysAgo == 0))
         }
@@ -508,17 +560,18 @@ class DetailWindowController: DetailBaseWindowController {
             ]),
             .chart(.trend(chartEntries), height: 90),
             .separator,
-            tableHeader([L("日期"), L("请求"), L("总 Token"), L("缓存读")], widths: widths),
+            tableHeader([L("日期"), L("请求"), L("总 Token"), L("缓存读"), L("积分")], widths: widths),
             .separator,
             .rows(dayRows),
             .separator,
-            .rows([totalRow(L("合计"), reqs: totalReqs, token: totalToken, cache: totalCache, widths: widths)])
+            .rows([totalRow(L("合计"), reqs: totalReqs, token: totalToken, cache: totalCache,
+                            credits: totalCredits, widths: widths)])
         ])
     }
 
     func exportCSVClicked() {
         exportCSV(defaultName: L("ccbar-近7天.csv"),
-                  header: [L("日期"), L("请求数"), L("总Token"), L("缓存读")],
+                  header: [L("日期"), L("请求数"), L("总Token"), L("缓存读"), L("积分")],
                   rows: exportRows)
     }
 }
@@ -573,10 +626,11 @@ class MonthDetailWindowController: DetailBaseWindowController {
         let first = cal.date(from: comps)!
         let days = cal.range(of: .day, in: .month, for: currentMonth)!.count
 
-        let widths: [CGFloat] = [70, 65, 95, 95]
+        let widths: [CGFloat] = [70, 65, 95, 95, 80]
         let today = cal.startOfDay(for: Date())
         let dayKey = DateFormatter(); dayKey.dateFormat = "yyyy-MM-dd"
         var totalReqs = 0; var totalToken: Int64 = 0; var totalCache: Int64 = 0
+        var totalCredits = 0.0
         var chartEntries: [ChartEntry] = []
         var dayRows: [DetailRow] = []
         exportRows = []
@@ -585,22 +639,26 @@ class MonthDetailWindowController: DetailBaseWindowController {
         let lastDay = cal.date(byAdding: .day, value: days - 1, to: first) ?? first
         let agg = queryDailyRows(db: db, fromDay: dayKey.string(from: first),
                                  toDay: dayKey.string(from: lastDay))
+        let creditsByDate = queryCreditsByDay(db: db, fromDay: dayKey.string(from: first),
+                                              toDay: dayKey.string(from: lastDay))
 
-        var dayData: [(dateStr: String, keyStr: String, reqs: Int, token: Int64, cache: Int64, daysAgo: Int)] = []
+        var dayData: [(dateStr: String, keyStr: String, reqs: Int, token: Int64, cache: Int64,
+                       credits: Double, daysAgo: Int)] = []
         for day in 1...days {
             guard let date = cal.date(byAdding: .day, value: day - 1, to: first) else { continue }
             if cal.startOfDay(for: date) > today { break }
             let daysAgo = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: today).day ?? 0
             let keyStr = dayKey.string(from: date)
-            var reqs = 0; var token = Int64(0); var cache = Int64(0)
+            var reqs = 0; var token = Int64(0); var cache = Int64(0); var credits = 0.0
             if daysAgo == 0 {
-                (reqs, token, cache) = queryDay(db: db, daysAgo: 0)
+                (reqs, token, cache, credits) = queryDay(db: db, daysAgo: 0)
             } else if let a = agg[keyStr] {
                 reqs = a.reqs; token = a.token; cache = a.cache
+                credits = creditsByDate[keyStr] ?? 0
             }
-            totalReqs += reqs; totalToken += token; totalCache += cache
+            totalReqs += reqs; totalToken += token; totalCache += cache; totalCredits += credits
             let dateStr = String(format: "%02d/%02d", comps.month!, day)
-            dayData.append((dateStr, keyStr, reqs, token, cache, daysAgo))
+            dayData.append((dateStr, keyStr, reqs, token, cache, credits, daysAgo))
             chartEntries.append(ChartEntry(label: dateStr, value: token))
         }
 
@@ -608,9 +666,10 @@ class MonthDetailWindowController: DetailBaseWindowController {
         let daysWithData = dayData.filter { $0.token > 0 }.count
         let dailyAvg = daysWithData > 0 ? totalToken / Int64(daysWithData) : 0
         for e in dayData {
-            exportRows.append([e.keyStr, "\(e.reqs)", "\(e.token)", "\(e.cache)"])
+            exportRows.append([e.keyStr, "\(e.reqs)", "\(e.token)", "\(e.cache)",
+                               String(format: "%.2f", e.credits)])
             dayRows.append(dataRow(col0: e.dateStr, reqs: e.reqs, token: e.token, cache: e.cache,
-                                   widths: widths,
+                                   credits: e.credits, widths: widths,
                                    highlight: peakToken > 0 && e.token == peakToken,
                                    markToday: e.daysAgo == 0))
         }
@@ -624,17 +683,18 @@ class MonthDetailWindowController: DetailBaseWindowController {
             ]),
             .chart(.bars(chartEntries, showXAxis: false), height: 100),
             .separator,
-            tableHeader([L("日期"), L("请求"), L("总 Token"), L("缓存读")], widths: widths),
+            tableHeader([L("日期"), L("请求"), L("总 Token"), L("缓存读"), L("积分")], widths: widths),
             .separator,
             .rows(dayRows),
             .separator,
-            .rows([totalRow(L("合计"), reqs: totalReqs, token: totalToken, cache: totalCache, widths: widths)])
+            .rows([totalRow(L("合计"), reqs: totalReqs, token: totalToken, cache: totalCache,
+                            credits: totalCredits, widths: widths)])
         ])
     }
 
     func exportCSVClicked() {
         exportCSV(defaultName: L("ccbar-近30天.csv"),
-                  header: [L("日期"), L("请求数"), L("总Token"), L("缓存读")],
+                  header: [L("日期"), L("请求数"), L("总Token"), L("缓存读"), L("积分")],
                   rows: exportRows)
     }
 }
@@ -648,7 +708,7 @@ class ModelDetailWindowController: DetailBaseWindowController {
 
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 466),
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 466),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered, defer: false
         )
@@ -656,7 +716,7 @@ class ModelDetailWindowController: DetailBaseWindowController {
         window.center()
         window.setFrameAutosaveName("CCBarModelDetail")
         window.backgroundColor = Design.backgroundDark
-        window.minSize = NSSize(width: 460, height: 300)
+        window.minSize = NSSize(width: 560, height: 300)
         self.init(window: window)
         installContent(onPrev: { [weak self] in self?.goPrevDay() },
                        onNext: { [weak self] in self?.goNextDay() })
@@ -684,7 +744,7 @@ class ModelDetailWindowController: DetailBaseWindowController {
         let sql = """
         SELECT source, model, COALESCE(SUM(request_count),0),
             COALESCE(SUM(input_tokens+output_tokens+cache_read_tokens+cache_creation_tokens),0),
-            COALESCE(SUM(cache_read_tokens),0)
+            COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(credits),0)
         FROM usage_all
         WHERE created_at >= ? AND created_at < ?
         GROUP BY source, model ORDER BY 4 DESC
@@ -693,13 +753,14 @@ class ModelDetailWindowController: DetailBaseWindowController {
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         sqlite3_bind_int64(stmt, 1, StatsStore.localMidnight(daysAgo))
         sqlite3_bind_int64(stmt, 2, StatsStore.localMidnight(daysAgo - 1))
-        var rows: [(source: String, model: String, reqs: Int, token: Int64, cache: Int64)] = []
+        var rows: [(source: String, model: String, reqs: Int, token: Int64, cache: Int64, credits: Double)] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
             rows.append((String(cString: sqlite3_column_text(stmt, 0)),
                          String(cString: sqlite3_column_text(stmt, 1)),
                          Int(sqlite3_column_int64(stmt, 2)),
                          sqlite3_column_int64(stmt, 3),
-                         sqlite3_column_int64(stmt, 4)))
+                         sqlite3_column_int64(stmt, 4),
+                         sqlite3_column_double(stmt, 5)))
         }
         sqlite3_finalize(stmt)
 
@@ -726,7 +787,7 @@ class ModelDetailWindowController: DetailBaseWindowController {
                                                  percentage: pct)
         }
 
-        let widths: [CGFloat] = [160, 65, 100, 100]
+        let widths: [CGFloat] = [160, 65, 100, 100, 80]
         let topShare = totalToken > 0
             ? Double(donutModels.first?.value.token ?? 0) / Double(totalToken) * 100 : 0
         var blocks: [DetailBlock.Kind] = [
@@ -738,24 +799,24 @@ class ModelDetailWindowController: DetailBaseWindowController {
             ]),
             .chart(.donut(donutItems), height: 140),
             .separator,
-            tableHeader([L("模型"), L("请求"), L("总 Token"), L("缓存读")], widths: widths)
+            tableHeader([L("模型"), L("请求"), L("总 Token"), L("缓存读"), L("积分")], widths: widths)
         ]
 
         // 表格按渠道分组（渠道按各自总量降序）
         var groupOrder: [String] = []
-        var groups: [String: [(model: String, reqs: Int, token: Int64, cache: Int64)]] = [:]
+        var groups: [String: [(model: String, reqs: Int, token: Int64, cache: Int64, credits: Double)]] = [:]
         for r in rows {
             if groups[r.source] == nil {
                 groupOrder.append(r.source)
                 groups[r.source] = []
             }
-            groups[r.source]?.append((r.model, r.reqs, r.token, r.cache))
+            groups[r.source]?.append((r.model, r.reqs, r.token, r.cache, r.credits))
         }
         groupOrder.sort {
             groups[$0]!.reduce(Int64(0)) { $0 + $1.token } > groups[$1]!.reduce(Int64(0)) { $0 + $1.token }
         }
 
-        var totR = 0; var totT: Int64 = 0; var totC: Int64 = 0
+        var totR = 0; var totT: Int64 = 0; var totC: Int64 = 0; var totCr = 0.0
         for source in groupOrder {
             let models = groups[source]!
             let srcToken = models.reduce(Int64(0)) { $0 + $1.token }
@@ -765,20 +826,23 @@ class ModelDetailWindowController: DetailBaseWindowController {
                 detailCell("● \(AppDelegate.shared?.sourceDisplayName(source) ?? source)", widths[0], Design.brandColor, bold: true, leading: true),
                 detailCell("", widths[1], Design.textMuted),
                 detailCell(fmtNum(srcToken), widths[2], Design.dataHighlightColor, bold: true),
-                detailCell("", widths[3], Design.textMuted)
+                detailCell("", widths[3], Design.textMuted),
+                detailCell("", widths[4], Design.textMuted)
             ])]))
 
             var modelRows: [DetailRow] = []
             for m in models {
-                totR += m.reqs; totT += m.token; totC += m.cache
+                totR += m.reqs; totT += m.token; totC += m.cache; totCr += m.credits
                 modelRows.append(dataRow(col0: shortModelName(m.model), reqs: m.reqs,
-                                         token: m.token, cache: m.cache, widths: widths))
+                                         token: m.token, cache: m.cache, credits: m.credits,
+                                         widths: widths))
             }
             blocks.append(.rows(modelRows))
         }
 
         blocks.append(.separator)
-        blocks.append(.rows([totalRow(L("合计"), reqs: totR, token: totT, cache: totC, widths: widths)]))
+        blocks.append(.rows([totalRow(L("合计"), reqs: totR, token: totT, cache: totC,
+                                      credits: totCr, widths: widths)]))
         content.set(blocks)
     }
 
@@ -804,7 +868,7 @@ class HourlyDetailWindowController: DetailBaseWindowController {
 
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 440, height: 480),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 480),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered, defer: false
         )
@@ -812,7 +876,7 @@ class HourlyDetailWindowController: DetailBaseWindowController {
         window.center()
         window.setFrameAutosaveName("CCBarHourlyDetail")
         window.backgroundColor = Design.backgroundDark
-        window.minSize = NSSize(width: 360, height: 300)
+        window.minSize = NSSize(width: 450, height: 300)
         self.init(window: window)
         installContent(onPrev: { [weak self] in self?.goPrevDay() },
                        onNext: { [weak self] in self?.goNextDay() },
@@ -843,12 +907,12 @@ class HourlyDetailWindowController: DetailBaseWindowController {
         let cal = Calendar.current
         let daysAgo = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: Date())).day ?? 0
 
-        var hourly: [(Int, Int64, Int64, Int64, Int64)] = Array(repeating: (0, 0, 0, 0, 0), count: 24)
+        var hourly: [(reqs: Int, token: Int64, cache: Int64, credits: Double)] =
+            Array(repeating: (0, 0, 0, 0), count: 24)
         let sql = """
         SELECT strftime('%H',created_at,'unixepoch','localtime'), COALESCE(SUM(request_count),0),
             COALESCE(SUM(output_tokens+input_tokens+cache_read_tokens+cache_creation_tokens),0),
-            COALESCE(SUM(cache_read_tokens),0),
-            COALESCE(SUM(cache_creation_tokens),0)
+            COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(credits),0)
         FROM usage_all
         WHERE created_at >= ? AND created_at < ?
         GROUP BY 1 ORDER BY 1
@@ -862,7 +926,7 @@ class HourlyDetailWindowController: DetailBaseWindowController {
                 let h = Int(String(cString: hs)) ?? 0
                 if h >= 0 && h < 24 {
                     hourly[h] = (Int(sqlite3_column_int(stmt, 1)), sqlite3_column_int64(stmt, 2),
-                                 sqlite3_column_int64(stmt, 3), sqlite3_column_int64(stmt, 4), 0)
+                                 sqlite3_column_int64(stmt, 3), sqlite3_column_double(stmt, 4))
                 }
             }
         }
@@ -880,20 +944,21 @@ class HourlyDetailWindowController: DetailBaseWindowController {
             return
         }
 
-        var totR = 0; var totT: Int64 = 0; var totC: Int64 = 0
+        var totR = 0; var totT: Int64 = 0; var totC: Int64 = 0; var totCr = 0.0
         var peakHour = start
         for h in start...end {
-            let d = hourly[h]; totR += d.0; totT += d.1; totC += d.2
-            if d.1 > hourly[peakHour].1 { peakHour = h }
+            let d = hourly[h]; totR += d.reqs; totT += d.token; totC += d.cache; totCr += d.credits
+            if d.token > hourly[peakHour].token { peakHour = h }
         }
 
-        let widths: [CGFloat] = [50, 65, 100, 100]
+        let widths: [CGFloat] = [50, 65, 100, 100, 80]
         var hourRows: [DetailRow] = []
         for h in start...end {
             let d = hourly[h]
             hourRows.append(dataRow(col0: L10n.isEnglish ? String(format: "%02d:00", h) : "\(h)时",
-                                    reqs: d.0, token: d.1, cache: d.2, widths: widths,
-                                    highlight: d.1 > 0 && h == peakHour,
+                                    reqs: d.reqs, token: d.token, cache: d.cache, credits: d.credits,
+                                    widths: widths,
+                                    highlight: d.token > 0 && h == peakHour,
                                     markToday: daysAgo == 0))
         }
 
@@ -908,9 +973,10 @@ class HourlyDetailWindowController: DetailBaseWindowController {
             .chart(.bars((0..<24).map { ChartEntry(label: String(format: "%02d", $0), value: hourly[$0].1) },
                          showXAxis: true), height: 100),
             .separator,
-            .rows([totalRow(L("合计"), reqs: totR, token: totT, cache: totC, widths: widths)]),
+            .rows([totalRow(L("合计"), reqs: totR, token: totT, cache: totC,
+                            credits: totCr, widths: widths)]),
             .separator,
-            tableHeader([L("时间"), L("请求"), L("总 Token"), L("缓存读")], widths: widths),
+            tableHeader([L("时间"), L("请求"), L("总 Token"), L("缓存读"), L("积分")], widths: widths),
             .separator,
             .rows(hourRows)
         ])
@@ -918,7 +984,7 @@ class HourlyDetailWindowController: DetailBaseWindowController {
         // 内容高度 = 统计卡 ≈50 + 图表 100 + 表头/合计/分隔 ≈ 71 + 每行 24；
         // 再加导航/留白 56（顶 10 + 导航 30 + 间隔 6 + 底 10）。
         let h = CGFloat(end - start + 1) * 24 + 277
-        window?.setContentSize(NSSize(width: 440, height: min(h, 680)))
+        window?.setContentSize(NSSize(width: 480, height: min(h, 680)))
     }
 }
 
@@ -937,7 +1003,7 @@ class AllTimeDetailWindowController: DetailBaseWindowController {
         window.center()
         window.setFrameAutosaveName("CCBarAllTimeDetail")
         window.backgroundColor = Design.backgroundDark
-        window.minSize = NSSize(width: 420, height: 300)
+        window.minSize = NSSize(width: 480, height: 300)
         self.init(window: window)
         installContent(onExport: { [weak self] in self?.exportCSVClicked() })
         content.dateText = L("按月汇总")
@@ -969,15 +1035,19 @@ class AllTimeDetailWindowController: DetailBaseWindowController {
             return
         }
 
-        let widths: [CGFloat] = [70, 65, 95, 95]
+        let creditsByMonth = db.map { queryCreditsByMonth(db: $0) } ?? [:]
+        let widths: [CGFloat] = [70, 65, 95, 95, 80]
         var monthRows: [DetailRow] = []
         var totalReqs = 0; var totalToken: Int64 = 0; var totalCache: Int64 = 0
+        var totalCredits = 0.0
         let peakMonthToken = rows.map(\.token).max() ?? 0
         for r in rows {
-            totalReqs += r.reqs; totalToken += r.token; totalCache += r.cache
-            exportRows.append([r.month, "\(r.reqs)", "\(r.token)", "\(r.cache)"])
+            let credits = creditsByMonth[r.month] ?? 0
+            totalReqs += r.reqs; totalToken += r.token; totalCache += r.cache; totalCredits += credits
+            exportRows.append([r.month, "\(r.reqs)", "\(r.token)", "\(r.cache)",
+                               String(format: "%.2f", credits)])
             monthRows.append(dataRow(col0: r.month, reqs: r.reqs, token: r.token, cache: r.cache,
-                                     widths: widths,
+                                     credits: credits, widths: widths,
                                      highlight: peakMonthToken > 0 && r.token == peakMonthToken))
         }
         let bestMonth = rows.max { $0.token < $1.token }?.month ?? "-"
@@ -994,17 +1064,18 @@ class AllTimeDetailWindowController: DetailBaseWindowController {
             ]),
             .chart(.bars(monthEntries, showXAxis: true), height: 100),
             .separator,
-            tableHeader([L("月份"), L("请求"), L("总 Token"), L("缓存读")], widths: widths),
+            tableHeader([L("月份"), L("请求"), L("总 Token"), L("缓存读"), L("积分")], widths: widths),
             .separator,
             .rows(monthRows),
             .separator,
-            .rows([totalRow(L("合计"), reqs: totalReqs, token: totalToken, cache: totalCache, widths: widths)])
+            .rows([totalRow(L("合计"), reqs: totalReqs, token: totalToken, cache: totalCache,
+                            credits: totalCredits, widths: widths)])
         ])
     }
 
     func exportCSVClicked() {
         exportCSV(defaultName: L("ccbar-按月汇总.csv"),
-                  header: [L("月份"), L("请求数"), L("总Token"), L("缓存读")],
+                  header: [L("月份"), L("请求数"), L("总Token"), L("缓存读"), L("积分")],
                   rows: exportRows)
     }
 }
