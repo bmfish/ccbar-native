@@ -109,6 +109,68 @@ final class TraeSyncTests: XCTestCase {
         XCTAssertEqual(calls, 1, "单日窗口不再拆分")
     }
 
+    // MARK: 分页提前停（服务端按 usage_time 倒序）
+
+    private func session(_ id: String, _ t: Int64) -> TraeSession {
+        let json = #"{"session_id":"\#(id)","usage_time":\#(t)}"#
+        return try! JSONDecoder().decode(TraeSession.self, from: json.data(using: .utf8)!)
+    }
+
+    /// 整页都早于截止点 → 不再请求后续页；已取到的行照常返回，且不算截断
+    func testPaginateStopsAtPageFullyOlderThanCutoff() {
+        let pages: [[Int64]] = [[500, 400], [300, 200], [100, 50]]
+        var requested: [Int] = []
+        var stats: (pages: Int, rows: Int, stoppedEarly: Bool)?
+        let result = TraeSync.paginate(earlyStopBefore: 350,
+                                       onPageStats: { stats = ($0, $1, $2) }) { page in
+            requested.append(page)
+            return .page(pages[page - 1].map { self.session("s\(page)-\($0)", $0) }, total: 6)
+        }
+        guard case .success(let rows, let truncated) = result else { return XCTFail("应成功") }
+        XCTAssertEqual(requested, [1, 2], "第 2 页最新一条已早于截止点，不应再翻第 3 页")
+        XCTAssertEqual(rows.count, 4)
+        XCTAssertFalse(truncated)
+        XCTAssertEqual(stats?.pages, 2)
+        XCTAssertEqual(stats?.rows, 4)
+        XCTAssertEqual(stats?.stoppedEarly, true)
+    }
+
+    /// 首次全量（无截止点）时按 total 翻完所有页
+    func testPaginateWithoutCutoffFetchesUntilTotal() {
+        var requested: [Int] = []
+        let result = TraeSync.paginate(earlyStopBefore: nil) { page in
+            requested.append(page)
+            return .page([self.session("s\(page)", Int64(1000 - page))], total: 3)
+        }
+        guard case .success(let rows, let truncated) = result else { return XCTFail("应成功") }
+        XCTAssertEqual(requested, [1, 2, 3])
+        XCTAssertEqual(rows.count, 3)
+        XCTAssertFalse(truncated)
+    }
+
+    /// 触达 50 页上限仍没翻完 → truncated，调用方据此不推进水位/截止点
+    func testPaginateReportsTruncationAtPageCap() {
+        var requested = 0
+        let result = TraeSync.paginate(earlyStopBefore: nil) { page in
+            requested += 1
+            return .page([self.session("s\(page)", Int64(10_000 - page))], total: 10_000)
+        }
+        guard case .success(_, let truncated) = result else { return XCTFail("应成功") }
+        XCTAssertEqual(requested, TraeAPI.maxPages)
+        XCTAssertTrue(truncated)
+    }
+
+    /// 数据水位只随实际看到的最新 usage_time 前进，空结果不回退、超前时间封顶
+    func testNextDataWatermark() {
+        XCTAssertEqual(StatsStore.nextDataWatermark(previous: 0, fetchedMax: 100, toEpoch: 200), 100)
+        XCTAssertEqual(StatsStore.nextDataWatermark(previous: 150, fetchedMax: 100, toEpoch: 200), 150,
+                       "旧水位不能回退")
+        XCTAssertEqual(StatsStore.nextDataWatermark(previous: 150, fetchedMax: nil, toEpoch: 200), 150,
+                       "空结果应保留旧水位，给延迟数据留重扫机会")
+        XCTAssertEqual(StatsStore.nextDataWatermark(previous: 0, fetchedMax: 300, toEpoch: 200), 200,
+                       "服务端时间超前时以窗口上界封顶")
+    }
+
     // MARK: JWT / Set-Cookie
 
     /// JWT payload exp 解析（base64url，无 padding）

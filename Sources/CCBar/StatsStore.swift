@@ -460,6 +460,7 @@ final class StatsStore: @unchecked Sendable {
                     if !newCredential.isEmpty, !traeCredential.isEmpty, newCredential != traeCredential {
                         metaSet("trae_auth", value: "")
                         metaSet("trae_synced_day", value: "")
+                        metaSet("trae_data_watermark", value: "")
                         metaSet("trae_ent", value: "")
                         metaSet("trae_ent_at", value: "")
                         exec("DELETE FROM usage_log WHERE source = 'trae'")
@@ -617,6 +618,13 @@ final class StatsStore: @unchecked Sendable {
         Calendar.current.component(.hour, from: date) < 9
     }
 
+    /// 下次数据水位：无新行保持原值；有行取 max(旧值, min(最新 usage_time, 窗口上界))，
+    /// 防服务端时钟超前把截止点推到未来。
+    static func nextDataWatermark(previous: Int64, fetchedMax: Int64?, toEpoch: Int64) -> Int64 {
+        guard let fetchedMax else { return previous }
+        return max(previous, min(fetchedMax, toEpoch))
+    }
+
     /// Trae 用量同步。网络在锁外跑（最长 ~15s×3），入库短临界区。
     /// AppDelegate 定时调用；interactive=true 用于用户点开弹窗的主动刷新（间隔更短）。
     /// 夜间静默（0:00–9:00 本地时间）只限定时器驱动：定时器不同步、签到也不跑，
@@ -642,6 +650,7 @@ final class StatsStore: @unchecked Sendable {
         let fmt = Self.dayFormatter
         lock.lock()
         let waterline = metaGet("trae_synced_day")
+        let dataWatermark = Int64(metaGet("trae_data_watermark")) ?? 0
         let auth = Self.traeAuthFromMeta(metaGet("trae_auth"))
         let lastEntAt = Double(metaGet("trae_ent_at")) ?? 0
         lock.unlock()
@@ -655,11 +664,20 @@ final class StatsStore: @unchecked Sendable {
             fromEpoch = Self.localMidnight(TraeAPI.firstFetchDays, now: now)
         }
         let toEpoch = Int64(now.timeIntervalSince1970)
+        // 分页增量截止用「数据水位」（上轮完整成功拉到的最大 usage_time），不用同步时刻：
+        // Trae 数据可能延迟可见，用 now 会把还没出现的老数据永久越过；数据水位只在
+        // 真正看到更新的会话时前进，延迟行下轮仍能捞回。留 30 分钟重叠兜时钟偏差。
+        // 上轮截断/失败不推进水位，仍从更早的截止点重扫。
+        let cutoff = dataWatermark - TraeAPI.earlyStopOverlapSeconds
+        let earlyStopBefore: Int64? = dataWatermark > 0 && cutoff > fromEpoch ? cutoff : nil
 
         // 网络（锁外）
+        let startedAt = Date()
         let (outcome, newAuth) = TraeSync.run(passportCookie: credential, auth: auth,
                                               fromEpoch: fromEpoch, toEpoch: toEpoch,
-                                              fetchEnt: fetchEnt)
+                                              fetchEnt: fetchEnt,
+                                              earlyStopBefore: earlyStopBefore)
+        let elapsed = Date().timeIntervalSince(startedAt)
 
         // 入库 + 状态（锁内）。节流时间戳在所有出口都推进：
         // 失败/过期也占掉节流窗口，防止弹窗反复开关时把请求打爆（下次后台周期自然重试）
@@ -674,9 +692,24 @@ final class StatsStore: @unchecked Sendable {
             // 仅完整成功才推进水位：窗口仍截断（单日超限/拆分深度用尽）时保留原起点，
             // 下一轮继续补拉，避免"缺口被水位永久越过"
             if truncated {
-                print("[ccBar] Trae 窗口仍不完整（from \(fromEpoch)），水位保持 \(waterline)")
+                ccLog("Trae 窗口仍不完整（from \(fromEpoch)），水位保持 \(waterline)")
             } else {
                 metaSet("trae_synced_day", value: fmt.string(from: now))
+                // 数据水位只随实际看到的最新 usage_time 前进，绝不推到 now：
+                // 空结果表示窗口内没有新会话，保留旧水位，给延迟数据留重扫机会。
+                let nextWatermark = Self.nextDataWatermark(
+                    previous: dataWatermark, fetchedMax: rows.map(\.epoch).max(), toEpoch: toEpoch)
+                if nextWatermark > dataWatermark {
+                    metaSet("trae_data_watermark", value: String(nextWatermark))
+                }
+                let tf = DateFormatter(); tf.dateFormat = "MM-dd HH:mm:ss"
+                let cutoffText = earlyStopBefore.map {
+                    tf.string(from: Date(timeIntervalSince1970: TimeInterval($0)))
+                } ?? "全量"
+                let watermarkText = tf.string(from: Date(timeIntervalSince1970: TimeInterval(nextWatermark)))
+                ccLog("Trae 同步成功\(interactive ? "（交互）" : ""): \(rows.count) 行, " +
+                      "截断=\(truncated), 增量截止=\(cutoffText), 水位=\(watermarkText), " +
+                      "耗时 \(String(format: "%.1f", elapsed))s")
             }
             if let c = consumed, let t = total {
                 metaSet("trae_ent", value: "\(c)|\(t)")
@@ -686,9 +719,10 @@ final class StatsStore: @unchecked Sendable {
         case .notConfigured:
             sourceStatus["trae"] = "未配置登录"
         case .authExpired:
+            ccLog("Trae 登录已过期")
             sourceStatus["trae"] = "登录已过期，请重新提供 sessionid"
         case .failed(let msg):
-            print("[ccBar] Trae 同步失败: \(msg)")
+            ccLog("Trae 同步失败: \(msg)")
             sourceStatus["trae"] = "同步失败：\(msg)"
         }
         return true

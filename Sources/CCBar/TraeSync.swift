@@ -27,6 +27,9 @@ enum TraeAPI {
     /// 拉取窗口：首次 90 天全量回填，之后水位 - 2 天回看
     static let firstFetchDays = 90
     static let pageLookbackDays = 2
+    /// 分页提前停的重叠量：相对数据水位（上轮拉到的最大 usage_time）再往前留 30 分钟，
+    /// 兜住服务端延迟可见 / 时钟偏差的会话（会话续聊会更新 usage_time，新数据都在水位之后）
+    static let earlyStopOverlapSeconds: Int64 = 30 * 60
     /// 实测 page_size 上限 20（>20 报 9004 "The submitted order parameters are incorrect"），
     /// 与 trae.cn 网页端的默认值一致
     static let pageSize = 20
@@ -124,8 +127,12 @@ enum TraeSync {
 
     /// 完整同步一次。auth 由调用方加载/保存（StatsStore 持锁读写 meta）。
     /// fetchEnt=false 时跳过积分账单（它 1 小时刷一次就够，减少无谓请求）。
+    /// earlyStopBefore：数据水位（上轮完整成功拉到的最大 usage_time）- 重叠。
+    /// 服务端按 usage_time 倒序返回，某页最新一条都早于该时刻时提前结束翻页
+    /// （更老的数据上轮已入库）。
     static func run(passportCookie: String, auth: TraeAuth,
-                    fromEpoch: Int64, toEpoch: Int64, fetchEnt: Bool = true) -> (outcome: TraeSyncOutcome, auth: TraeAuth) {
+                    fromEpoch: Int64, toEpoch: Int64, fetchEnt: Bool = true,
+                    earlyStopBefore: Int64? = nil) -> (outcome: TraeSyncOutcome, auth: TraeAuth) {
         var auth = auth
         guard !passportCookie.isEmpty else { return (.notConfigured, auth) }
 
@@ -146,7 +153,8 @@ enum TraeSync {
         var truncated = false
         let fetchAll: () -> SessionsOutcome = {
             Self.fetchWithSplit(fromEpoch: fromEpoch, toEpoch: toEpoch) { f, t in
-                Self.fetchSessions(jwt: jwt2, fromEpoch: f, toEpoch: t)
+                Self.fetchSessions(jwt: jwt2, fromEpoch: f, toEpoch: t,
+                                   earlyStopBefore: earlyStopBefore)
             }
         }
         switch fetchAll() {
@@ -219,11 +227,52 @@ enum TraeSync {
         return .success(Array(merged.values), truncated: olderTruncated || newerTruncated)
     }
 
-    /// 分页拉取会话明细。错误码：1001 = JWT/会话失效；9004 = 参数不合法；成功响应没有 code 字段。
-    private static func fetchSessions(jwt: String, fromEpoch: Int64, toEpoch: Int64) -> SessionsOutcome {
+    enum SessionPageOutcome {
+        case page([TraeSession], total: Int)
+        case authExpired
+        case failed(String)
+    }
+
+    /// 分页循环（取页由 fetchPage 注入，便于离线测试）。
+    /// 服务端按 usage_time 倒序返回：本页最新一条都早于 earlyStopBefore 时，
+    /// 后续页只会更旧，直接结束——避免每轮把窗口内所有历史页重扫一遍。
+    /// onPageStats 用于记录本次实际翻了几页、是否提前停。
+    static func paginate(earlyStopBefore: Int64?,
+                         onPageStats: ((_ pages: Int, _ rows: Int, _ stoppedEarly: Bool) -> Void)? = nil,
+                         fetchPage: (Int) -> SessionPageOutcome) -> SessionsOutcome {
         var rows: [TraeRow] = []
         var page = 1
+        func finish(_ outcome: SessionsOutcome, stoppedEarly: Bool) -> SessionsOutcome {
+            onPageStats?(page, rows.count, stoppedEarly)
+            return outcome
+        }
         while page <= TraeAPI.maxPages {
+            switch fetchPage(page) {
+            case .authExpired:
+                return .authExpired
+            case .failed(let msg):
+                return .failed(msg)
+            case .page(let sessions, let total):
+                rows.append(contentsOf: sessions.compactMap(normalize))
+                if rows.count >= total || sessions.isEmpty {
+                    return finish(.success(rows, truncated: false), stoppedEarly: false)
+                }
+                let newest = sessions.compactMap(\.usage_time).max()
+                if let cutoff = earlyStopBefore, let newest, newest < cutoff {
+                    return finish(.success(rows, truncated: false), stoppedEarly: true)
+                }
+                page += 1
+            }
+        }
+        return finish(.success(rows, truncated: true), stoppedEarly: false)
+    }
+
+    /// 分页拉取会话明细。错误码：1001 = JWT/会话失效；9004 = 参数不合法；成功响应没有 code 字段。
+    private static func fetchSessions(jwt: String, fromEpoch: Int64, toEpoch: Int64,
+                                      earlyStopBefore: Int64?) -> SessionsOutcome {
+        paginate(earlyStopBefore: earlyStopBefore, onPageStats: { pages, rowCount, stoppedEarly in
+            ccLog("Trae 分页: \(pages) 页, \(rowCount) 行\(stoppedEarly ? "（提前停）" : "")")
+        }) { page in
             let body = "{\"start_time\":\(fromEpoch),\"end_time\":\(toEpoch)," +
                        "\"page_size\":\(TraeAPI.pageSize),\"page_num\":\(page),\"usage_type\":[7]}"
             let r = post(url: TraeAPI.base + TraeAPI.usagePath, auth: "Cloud-IDE-JWT \(jwt)", body: body)
@@ -235,13 +284,8 @@ enum TraeSync {
                 if code == 1001 { return .authExpired }
                 return .failed("API code \(code)")
             }
-            let sessions = resp.user_usage_group_by_sessions ?? []
-            rows.append(contentsOf: sessions.compactMap(normalize))
-            let total = resp.total ?? 0
-            if rows.count >= total || sessions.isEmpty { break }
-            page += 1
+            return .page(resp.user_usage_group_by_sessions ?? [], total: resp.total ?? 0)
         }
-        return .success(rows, truncated: page > TraeAPI.maxPages)
     }
 
     // MARK: 换签链
