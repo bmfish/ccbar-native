@@ -1,6 +1,6 @@
 # CCBar
 
-macOS 菜单栏 AI CLI 用量统计工具。实时显示今日 token 消耗，支持**多数据源**聚合——目前内置 [cc-switch](https://github.com/farion1231/cc-switch)（Claude/Codex 等多应用代理统计）与 ZCode，后续可插拔扩展。
+macOS 菜单栏 AI CLI 用量统计工具。实时显示今日 token 消耗，支持**多数据源**聚合——目前内置 [cc-switch](https://github.com/farion1231/cc-switch)（Claude/Codex 等多应用代理统计）、ZCode 与 Trae（HTTP API，用量 + 积分），后续可插拔扩展。
 
 ![menu bar](https://img.shields.io/badge/platform-macOS%2013%2B-black) ![swift](https://img.shields.io/badge/swift-5.9-orange)
 ![ui](https://img.shields.io/badge/UI-SwiftUI-00A0E9) ![windows](https://img.shields.io/badge/Windows-tray-blue) ![license](https://img.shields.io/badge/license-MIT-green)
@@ -17,7 +17,7 @@ macOS 菜单栏 AI CLI 用量统计工具。实时显示今日 token 消耗，�
 
 ## English
 
-CCBar is a native macOS menu bar app that tracks your AI CLI token usage in real time — today, this week, and all-time — with **pluggable data sources**: [cc-switch](https://github.com/farion1231/cc-switch) (Claude Code / Codex / OpenCode via proxy) and ZCode (GLM). History is synced daily into a local SQLite store (source databases are opened read-only and never modified), while today's numbers are queried live. A seven-page insights center (insights / credits / timeline / channels / cost / share / settings) with a model chronicle, a shareable usage card with QR code, and an auto-generated weekly report (saved every Monday, backfilled if the Mac was off) are built in, along with milestone notifications, quota warnings, per-channel breakdowns, idempotent CSV export/import, a running pixel cat in the menu bar, six built-in themes plus importable JSON theme packs, bilingual UI (中文 / English), daily auto-backups with 7-copy rotation, and a drag-to-install DMG. A Windows system tray version lives in [ccbar-win](https://github.com/bmfish/ccbar-win).
+CCBar is a native macOS menu bar app that tracks your AI CLI token usage in real time — today, this week, and all-time — with **pluggable data sources**: [cc-switch](https://github.com/farion1231/cc-switch) (Claude Code / Codex / OpenCode via proxy), ZCode (GLM), and Trae (HTTP API with credits). History is synced daily into a local SQLite store (source databases are opened read-only and never modified), while today's numbers are queried live. A seven-page insights center (insights / credits / timeline / channels / cost / share / settings) with a model chronicle, shareable usage cards with QR code, and weekly / battle report cards are built in, along with milestone notifications, quota warnings, per-channel breakdowns, idempotent CSV export/import, a running pixel cat in the menu bar, six built-in themes plus importable JSON theme packs, bilingual UI (中文 / English), daily auto-backups with 7-copy rotation, and a drag-to-install DMG. A Windows system tray version lives in [ccbar-win](https://github.com/bmfish/ccbar-win).
 
 ## 功能
 
@@ -25,10 +25,11 @@ CCBar is a native macOS menu bar app that tracks your AI CLI token usage in real
 - **动画伴侣**：像素小猫住在菜单栏，没用量睡觉、用量越大跑得越快（可关，换回闪电 LED 图标）
 - **用量预警 / 里程碑**：超过阈值或每累计 N 万 token 弹出系统通知，陪你刷量 🫧
 - **弹窗面板**：今日卡片（请求数 / 缓存命中率 / 工时）、模型分布、趋势（昨日 / 近7天 / 近30天 / 历史总量）、速率预测
-- **详情窗口**：近 7 天、近 30 天（柱状图拖选读数）、模型分布（环形图 + 按渠道分组明细）、每小时分布，全部支持 CSV 导出
+- **详情窗口**：近 7 天、近 30 天（柱状图拖选读数）、模型分布（环形图 + 按渠道分组明细）、每小时分布、净输入 Top 会话，数据行与合计均含积分，全部支持 CSV 导出
 - **洞察中心**：洞察（连续天数 / 周环比 / 90 天热力图 / **模型编年史** / 月度预测）、积分（今日积分 / 余额与可用天数 / 7·30·90 天趋势）、流水（任意日期逐笔回看，可按渠道 / 模型筛选）、渠道（堆叠趋势 / 应用分布 / Token 构成 / 缓存命中率）、费用（走势 / 模型费用排行 / 性价比榜 / **月度预算进度与预算线**）、分享与设置（设置页内嵌，保存即生效）等板块
-- **周报 + 战报分享**：每周一自动生成上周用量周报 PNG 到 `~/Documents/CCBar 周报/`（周一没开机，下次启动自动补），分享页实时预览周报卡和带二维码的今日战报卡，保存 / 复制一键分享
-- **多数据源**：每个源可独立启用 / 停用、自定义数据库路径、保存前即时校验
+- **周报 + 战报分享**：分享页实时预览周报卡和带二维码的今日战报卡，保存 / 复制一键分享
+- **多数据源**：cc-switch / ZCode / Trae，每个源可独立启用 / 停用、自定义数据库路径、保存前即时校验
+- **Trae 用量与积分**：sessionid 自动换签，按数据水位增量同步会话快照，登录过期提示
 - **主题 + 主题包**：6 套内置配色（含 CRT 终端），JSON 主题包一键导入 / 导出，方便社区分享
 - **双语界面**：中文 / English / 跟随系统
 - **数据安全**：每天自动备份统计库（滚动保留 7 份），也可一键手动备份；明细 CSV 幂等导入导出（主键去重，重复导入零新增），换机 / 多机合并不重不漏；手动 + 静默检查更新
@@ -45,11 +46,13 @@ ccbar 自带一个统计库（`~/Library/Application Support/ccbar/ccbar.db`）�
  ├── meta        各源同步水位
  └── usage_all   视图 = 自家历史 + 各启用源"今日"实时数据
       ├── ATTACH ~/.cc-switch/cc-switch.db   (只读)
-      └── ATTACH ~/.zcode/cli/db/db.sqlite   (只读)
+      ├── ATTACH ~/.zcode/cli/db/db.sqlite   (只读)
+      └── Trae HTTP API（无本地库，直接写入 usage_log）
 ```
 
 - **历史**（昨天及更早）：每天首次刷新时自动补账进自家库，源库清理不影响已有统计
 - **今日**：每次刷新实时查各源库汇总，零延迟
+- **Trae**：无本地库，走官方 HTTP API 拉取会话用量与积分（JWT 自动续签）
 - 两段在 `usage_all` 视图中拼接，查询侧不区分数据来自哪一路
 
 ### 统计口径
@@ -58,6 +61,7 @@ ccbar 自带一个统计库（`~/Library/Application Support/ccbar/ccbar.db`）�
 |---|---|---|
 | cc-switch | input + output + 缓存读 + 缓存创建 | 全量 token 流量，费用按 cc-switch 记录的单价折算 |
 | ZCode | input + output | 与 ZCode 官方统计一致（`computed_total_tokens`），缓存命中不计入，可直接与 ZCode 界面对账 |
+| Trae | 净输入 + 输出 + 缓存读 | `input_token` 已含缓存，入库折算净输入；合计不重复计缓存，另按 `credits` 计积分 |
 
 ## 添加新数据源
 
@@ -104,6 +108,8 @@ codesign --force --deep -s - CCBar.app
 
 ## 版本
 
+- **v1.9.19** — 详情窗口全量积分列（7 天 / 30 天 / 模型 / 每小时 / 历史总量 / Top 会话，数据行、合计与 CSV 均含积分）、Trae 同步改数据水位增量分页（上轮最大 `usage_time` 前留 30 分钟，整页更旧即提前停，失败/截断不推进水位）、修复今日会话统计被 800 行截断、精简取数链路、积分余额条按剩余额度显示绿色
+- **v1.9.12** — 洞察中心与设置页改版（导航重排、设置内嵌、积分页重做、卡片配色与等高修正）、新增净输入 Top 会话窗口、弹窗对齐 Windows 版并缓存每日趋势、移除 Trae 自动签到与自动周报（分享页仍可手动保存周报 / 战报卡）
 - **v1.8.3** — Trae 每日自动签到（逆向 IDE 接口 `/trae/api/v2/ug/checkin_credits/status|claim`，复用既有 JWT 自愈链；9 点后第一轮定时器领取或点弹窗即领，成功发系统通知，水位幂等一天一次，失败按小时重试）、夜间静默语义修正（0–9 点只限定时器驱动，点弹窗随时可查/可签）、修复日期腐烂测试（动态取今天）
 - **v1.8.2** — 修复 CI（en 语言环境下 L10n 词典 "积分" 重复 key 触发运行时 trap，本地中文环境不触发所以一直没炸）、弹窗除"洞察"外所有开窗入口点击后收起（洞察保持弹窗便于对照）
 - **v1.8.1** — 修复 Trae 同步误报"登录已过期"（用量接口 1001 时自动强制换签并重试一次，仅 Login 失败才判定过期）、Trae token 改净输入口径（其 input_token 为总量已含缓存，入库折算 input = 总量 − 缓存命中，合计/缓存命中率不再重复计缓存）、修复自动备份文件名日期含斜杠导致 VACUUM INTO 永远失败、daily_agg 全量回填排除今天（避免与今日实时补行撞 key 致热力图崩溃）、热力图按日建索引加防 trap 防御
