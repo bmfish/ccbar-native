@@ -130,15 +130,24 @@ enum TraeSync {
     /// earlyStopBefore：数据水位（上轮完整成功拉到的最大 usage_time）- 重叠。
     /// 服务端按 usage_time 倒序返回，某页最新一条都早于该时刻时提前结束翻页
     /// （更老的数据上轮已入库）。
-    static func run(passportCookie: String, auth: TraeAuth,
+    static func run(credential: String, auth: TraeAuth,
                     fromEpoch: Int64, toEpoch: Int64, fetchEnt: Bool = true,
                     earlyStopBefore: Int64? = nil) -> (outcome: TraeSyncOutcome, auth: TraeAuth) {
         var auth = auth
-        guard !passportCookie.isEmpty else { return (.notConfigured, auth) }
+        let parsed = parseCredential(credential)
+        guard !parsed.passportCookie.isEmpty || !parsed.cloudideSession.isEmpty else {
+            return (.notConfigured, auth)
+        }
+        // 用户显式给了新的 X-Cloudide-Session：它对应的 JWT 必须重新换，不能沿用旧账号/旧会话的缓存
+        if !parsed.cloudideSession.isEmpty, parsed.cloudideSession != auth.cloudideSession {
+            auth.cloudideSession = parsed.cloudideSession
+            auth.jwt = ""
+            auth.jwtExp = 0
+        }
 
         // ---- 1. 确保 JWT 可用（无效就换签）----
         var jwt: String
-        switch ensureJWT(passportCookie: passportCookie, auth: &auth) {
+        switch ensureJWT(passportCookie: parsed.passportCookie, auth: &auth) {
         case .success(let token): jwt = token
         case .notConfigured: return (.notConfigured, auth)
         case .authExpired: return (.authExpired, auth)
@@ -167,7 +176,7 @@ enum TraeSync {
             // 强制换签（清 JWT；Session 也不行时 ensureJWT 内部会走 Login 重造）
             auth.jwt = ""
             auth.jwtExp = 0
-            switch ensureJWT(passportCookie: passportCookie, auth: &auth) {
+            switch ensureJWT(passportCookie: parsed.passportCookie, auth: &auth) {
             case .success(let fresh):
                 jwt2 = fresh
             case .notConfigured, .authExpired: return (.authExpired, auth)
@@ -288,6 +297,49 @@ enum TraeSync {
         }
     }
 
+    // MARK: 凭据解析
+
+    /// 设置里粘贴的内容 → (passport Cookie, X-Cloudide-Session)。
+    /// 支持整段 Cookie、带 `sessionid=` 前缀、裸值，以及显式 `X-Cloudide-Session=…`。
+    /// 未识别的 `name=value` 串原样当作 Cookie（兼容旧输入）。
+    static func parseCredential(_ raw: String) -> (passportCookie: String, cloudideSession: String) {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return ("", "") }
+        if text.lowercased().hasPrefix("cookie:") {
+            text = String(text.dropFirst("cookie:".count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        var sessionID: String?
+        var cloudideSession: String?
+        let parts = text
+            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\n", with: ";")
+            .split(separator: ";")
+        for part in parts {
+            let pair = String(part).trimmingCharacters(in: .whitespaces)
+            guard let eq = pair.firstIndex(of: "=") else { continue }
+            let name = String(pair[..<eq]).trimmingCharacters(in: .whitespaces).lowercased()
+            var value = String(pair[pair.index(after: eq)...])
+                .trimmingCharacters(in: .whitespaces)
+            if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") {
+                value = String(value.dropFirst().dropLast())
+            }
+            guard !value.isEmpty else { continue }
+            if name == "sessionid" {
+                sessionID = value
+            } else if name == "x-cloudide-session" {
+                cloudideSession = value
+            }
+        }
+
+        if sessionID == nil, cloudideSession == nil {
+            // 裸值按 sessionid 处理；带 '=' 的未知串保持原样，避免破坏旧输入
+            return text.contains("=") ? (text, "") : ("sessionid=" + text, "")
+        }
+        return (sessionID.map { "sessionid=" + $0 } ?? "", cloudideSession ?? "")
+    }
+
     // MARK: 换签链
 
     private enum JWTOutcome {
@@ -321,7 +373,8 @@ enum TraeSync {
         }
 
         // Login：passport cookie → 新 X-Cloudide-Session → 再换 JWT
-        guard let session = login(passportCookie: passportCookie) else {
+        guard !passportCookie.isEmpty,
+              let session = login(passportCookie: passportCookie) else {
             return .authExpired
         }
         auth.cloudideSession = session

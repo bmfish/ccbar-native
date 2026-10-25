@@ -194,6 +194,41 @@ final class TraeSyncTests: XCTestCase {
         XCTAssertNil(TraeSync.extractSessionCookie(from: ["Set-Cookie": "other=1"]))
     }
 
+    // MARK: 凭据解析（sessionid / 整段 Cookie / X-Cloudide-Session）
+
+    func testParseCredentialAcceptsCommonPasteFormats() {
+        let bare = TraeSync.parseCredential("  abc123\n")
+        XCTAssertEqual(bare.passportCookie, "sessionid=abc123")
+        XCTAssertTrue(bare.cloudideSession.isEmpty)
+
+        XCTAssertEqual(TraeSync.parseCredential("sessionid=abc123").passportCookie,
+                       "sessionid=abc123")
+        XCTAssertEqual(TraeSync.parseCredential("foo=1; sessionid=abc123; Path=/; HttpOnly").passportCookie,
+                       "sessionid=abc123")
+        XCTAssertEqual(TraeSync.parseCredential("Cookie: sessionid=abc123; foo=1").passportCookie,
+                       "sessionid=abc123")
+        XCTAssertEqual(TraeSync.parseCredential(#"sessionid="abc123""#).passportCookie,
+                       "sessionid=abc123")
+    }
+
+    func testParseCredentialAcceptsCloudideSession() {
+        let session = TraeSync.parseCredential(
+            "X-Cloudide-Session=KC_lA83=.18dc8d30b30; Path=/; HttpOnly")
+        XCTAssertEqual(session.cloudideSession, "KC_lA83=.18dc8d30b30")
+        XCTAssertTrue(session.passportCookie.isEmpty)
+
+        let both = TraeSync.parseCredential("sessionid=abc; X-Cloudide-Session=def")
+        XCTAssertEqual(both.passportCookie, "sessionid=abc")
+        XCTAssertEqual(both.cloudideSession, "def")
+    }
+
+    func testParseCredentialEmptyAndUnknownFormats() {
+        XCTAssertEqual(TraeSync.parseCredential("   ").passportCookie, "")
+        XCTAssertEqual(TraeSync.parseCredential("").cloudideSession, "")
+        // 未识别的 cookie 串保持旧行为：原样交给 Login
+        XCTAssertEqual(TraeSync.parseCredential("foo=bar").passportCookie, "foo=bar")
+    }
+
     // MARK: 凭据状态序列化（meta 往返）
 
     func testAuthMetaRoundTrip() {
@@ -346,6 +381,26 @@ final class TraeSyncTests: XCTestCase {
         store.rebuild(configs: [SourceConfig(id: "trae", enabled: true, dbPath: "", credential: "sessionid=new")])
         XCTAssertEqual(store.queryTodayCredits(), 0, "换凭据后旧账号明细应被清空")
         XCTAssertEqual(store.queryDayStats(days: 0)?.total ?? -1, 0, "旧账号数据不应残留")
+    }
+
+    func testCredentialFormatChangeKeepsAccountState() {
+        store.rebuild(configs: [SourceConfig(id: "trae", enabled: true, dbPath: "", credential: "sessionid=fake")])
+        store.upsertTraeRows([TraeRow(sessionID: "s1", model: "m", input: 10, output: 5,
+                                      cacheRead: 0, cacheWrite: 0, costUsd: 0.1, credits: 2.5,
+                                      epoch: StatsStore.localMidnight(0) + 60)])
+
+        // 同一凭据换个粘贴格式（裸值 / 整段 Cookie）不应被当成换账号
+        store.rebuild(configs: [SourceConfig(id: "trae", enabled: true, dbPath: "", credential: "fake")])
+        XCTAssertEqual(store.queryTodayCredits(), 2.5, "裸值不应清空同账号数据")
+        store.rebuild(configs: [SourceConfig(id: "trae", enabled: true, dbPath: "",
+                                             credential: "foo=1; sessionid=fake; Path=/")])
+        XCTAssertEqual(store.queryTodayCredits(), 2.5, "整段 Cookie 不应清空同账号数据")
+        store.rebuild(configs: [SourceConfig(id: "trae", enabled: true, dbPath: "",
+                                             credential: "sessionid=fake; X-Cloudide-Session=s1")])
+        XCTAssertEqual(store.queryTodayCredits(), 2.5, "补一个 Session 也不应清空同账号数据")
+        store.rebuild(configs: [SourceConfig(id: "trae", enabled: true, dbPath: "",
+                                             credential: "sessionid=fake")])
+        XCTAssertEqual(store.queryTodayCredits(), 2.5, "去掉 Session 仍不应清空同账号数据")
     }
 
     // MARK: 真实 API 端到端（CI 无凭据自动跳过；本地 TRAE_TEST_COOKIE="sessionid=…" 时跑通全链路）

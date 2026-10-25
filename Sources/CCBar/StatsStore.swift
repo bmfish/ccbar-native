@@ -453,11 +453,20 @@ final class StatsStore: @unchecked Sendable {
                 if config.id == "trae" {
                     traeEnabled = config.enabled
                     let newCredential = (config.credential ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    let newParsed = TraeSync.parseCredential(newCredential)
+                    let oldParsed = TraeSync.parseCredential(traeCredential)
                     // 凭据变更（换 cookie / 切账号）必须重置账号态，否则：
                     // 1. 缓存的 JWT（约 8h 有效，与 cookie 无关）未过期前仍拉旧账号数据
                     // 2. 旧水位把新账号首拉压成 3 天窗口（应为 90 天全量）
                     // 3. 旧账号明细/日聚合/积分账单混进新账号统计
-                    if !newCredential.isEmpty, !traeCredential.isEmpty, newCredential != traeCredential {
+                    // 按解析后的主身份比较：passport 优先，没有 passport 才用 Session。
+                    // 裸值/带前缀/整段 Cookie/补一个 Session 都不算换账号。
+                    let newIdentity = newParsed.passportCookie.isEmpty
+                        ? newParsed.cloudideSession : newParsed.passportCookie
+                    let oldIdentity = oldParsed.passportCookie.isEmpty
+                        ? oldParsed.cloudideSession : oldParsed.passportCookie
+                    if !newCredential.isEmpty, !traeCredential.isEmpty,
+                       !newIdentity.isEmpty, !oldIdentity.isEmpty, newIdentity != oldIdentity {
                         metaSet("trae_auth", value: "")
                         metaSet("trae_synced_day", value: "")
                         metaSet("trae_data_watermark", value: "")
@@ -673,7 +682,7 @@ final class StatsStore: @unchecked Sendable {
 
         // 网络（锁外）
         let startedAt = Date()
-        let (outcome, newAuth) = TraeSync.run(passportCookie: credential, auth: auth,
+        let (outcome, newAuth) = TraeSync.run(credential: credential, auth: auth,
                                               fromEpoch: fromEpoch, toEpoch: toEpoch,
                                               fetchEnt: fetchEnt,
                                               earlyStopBefore: earlyStopBefore)
@@ -720,7 +729,7 @@ final class StatsStore: @unchecked Sendable {
             sourceStatus["trae"] = "未配置登录"
         case .authExpired:
             ccLog("Trae 登录已过期")
-            sourceStatus["trae"] = "登录已过期，请重新提供 sessionid"
+            sourceStatus["trae"] = "登录已过期，请重新提供 sessionid 或 X-Cloudide-Session"
         case .failed(let msg):
             ccLog("Trae 同步失败: \(msg)")
             sourceStatus["trae"] = "同步失败：\(msg)"

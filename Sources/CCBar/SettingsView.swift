@@ -597,10 +597,10 @@ struct SettingsRootView: View {
                                 .frame(width: 74, alignment: .leading)
                             if row.isHTTP {
                                 pathField($row.credential,
-                                          placeholder: L("粘贴 trae.cn 登录后的 sessionid cookie 值")) {
+                                          placeholder: L("粘贴 sessionid / 整段 Cookie / X-Cloudide-Session")) {
                                     vm.validateSource(id: row.id)
                                 }
-                                .help(L("在浏览器登录 trae.cn 后，从 DevTools 的 Cookie 里复制 sessionid 的值"))
+                                .help(L("登录 trae.cn 后从 DevTools 复制 sessionid（可带前缀或整段 Cookie）；也可粘贴 X-Cloudide-Session=… 跳过首次换签（14 天有效）"))
                                 pillButton(vm.traeSyncing ? L("同步中…") : L("立即同步"),
                                             disabled: vm.traeSyncing || row.credential.isEmpty) {
                                     vm.syncTraeNow()
