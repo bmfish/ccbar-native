@@ -463,6 +463,7 @@ final class SettingsViewModel: ObservableObject {
 struct SettingsRootView: View {
     @ObservedObject var vm: SettingsViewModel
     @State private var dirty = false
+    @State private var showTraeHelp = false
 
     var body: some View {
         ZStack {
@@ -613,7 +614,26 @@ struct SettingsRootView: View {
                                 pillButton(L("浏览")) { vm.browseSource(id: row.id) }
                             }
                         }
-                        if !row.statusText.isEmpty {
+                        if row.isHTTP {
+                            HStack(spacing: 8) {
+                                if !row.statusText.isEmpty {
+                                    Text(row.statusText)
+                                        .font(.system(size: 9))
+                                        .foregroundColor(statusColor(row.statusKind))
+                                        .lineLimit(1)
+                                }
+                                Spacer(minLength: 8)
+                                Button(L("如何获取？")) { showTraeHelp = true }
+                                    .buttonStyle(.plain)
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundColor(Color(nsColor: Design.successColor))
+                                    .help(L("查看获取 Trae 凭据的完整步骤"))
+                                    .popover(isPresented: $showTraeHelp, arrowEdge: .bottom) {
+                                        traeHelpPopover
+                                    }
+                            }
+                            .padding(.leading, 14)
+                        } else if !row.statusText.isEmpty {
                             Text(row.statusText)
                                 .font(.system(size: 9))
                                 .foregroundColor(statusColor(row.statusKind))
@@ -630,6 +650,63 @@ struct SettingsRootView: View {
                     creditsFooter(cr)
                 }
             }
+        }
+    }
+
+    // MARK: Trae 凭据帮助
+
+    private var traeHelpPopover: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(L("获取 Trae 凭据"))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(Color(nsColor: Design.textPrimary))
+            Text(L("sessionid 就是登录态；推荐只复制它的值，不要带引号。"))
+                .font(.system(size: 10))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+            VStack(alignment: .leading, spacing: 6) {
+                helpStep(1, L("浏览器打开 trae.cn 并登录"))
+                helpStep(2, L("按 ⌥⌘I 打开开发者工具，进入 Application → Cookies → https://www.trae.cn"))
+                helpStep(3, L("找到 sessionid，双击 Value 后复制（约 60 天有效）"))
+                helpStep(4, L("粘贴到左侧输入框，点「立即同步」"))
+            }
+            Divider()
+            Text(L("也支持 X-Cloudide-Session=…（约 14 天）或整段 Cookie，但只填 sessionid 最省事。"))
+                .font(.system(size: 10))
+                .foregroundColor(Color(nsColor: Design.textSecondary))
+                .fixedSize(horizontal: false, vertical: true)
+            Text(L("凭据只保存在本机，仅用于请求 Trae 官方接口。"))
+                .font(.system(size: 10))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+            HStack {
+                Button(L("打开 trae.cn")) {
+                    NSWorkspace.shared.open(URL(string: "https://www.trae.cn")!)
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(Color(nsColor: Design.successColor))
+                Spacer()
+                Button(L("知道了")) { showTraeHelp = false }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(nsColor: Design.textSecondary))
+            }
+            .padding(.top, 2)
+        }
+        .padding(14)
+        .frame(width: 380)
+        .background(Color(nsColor: Design.backgroundDark))
+    }
+
+    private func helpStep(_ n: Int, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text("\(n).")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundColor(Color(nsColor: Design.successColor))
+                .frame(width: 14, alignment: .trailing)
+            Text(text)
+                .font(.system(size: 10))
+                .foregroundColor(Color(nsColor: Design.textSecondary))
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
