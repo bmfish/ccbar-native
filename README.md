@@ -4,20 +4,31 @@ macOS 菜单栏 AI CLI 用量统计工具。实时显示今日 token 消耗，�
 
 ![menu bar](https://img.shields.io/badge/platform-macOS%2013%2B-black) ![swift](https://img.shields.io/badge/swift-5.9-orange)
 ![ui](https://img.shields.io/badge/UI-SwiftUI-00A0E9) ![windows](https://img.shields.io/badge/Windows-tray-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![macOS release](https://img.shields.io/github/v/release/bmfish/ccbar-native?label=macOS) ![Windows release](https://img.shields.io/github/v/release/bmfish/ccbar-win?label=Windows)
 
 <p align="center">
-  <img src="docs/images/menubar.png" width="182" alt="菜单栏用量"/>
-  <br/>
-  <img src="docs/images/popover.png" width="300" alt="弹窗面板"/>
-  <br/>
-  <img src="docs/images/insights.png" width="560" alt="洞察中心"/>
-  <br/>
-  <img src="docs/images/credits.png" width="560" alt="积分与余额"/>
+  <a href="https://github.com/bmfish/ccbar-native/releases/latest"><strong>下载 macOS 版</strong></a>（Universal DMG · macOS 13+）
+  ·
+  <a href="https://github.com/bmfish/ccbar-win/releases/latest/download/ccBar.exe"><strong>下载 Windows 版</strong></a>（单文件 exe · Windows 10+）
+  ·
+  <a href="https://ccbar-jjawpfzj0an.qoder.website">官网</a>
 </p>
+
+<p align="center">
+  <img src="docs/images/ccbar-demo.gif" width="600" alt="CCBar 演示：菜单栏、弹窗、洞察中心与积分"/>
+</p>
+
+<p align="center"><sub>菜单栏实时用量 · 7 / 30 天趋势 · 模型编年史 · Trae 积分与余额</sub></p>
+
+> macOS 安装包尚未公证。首次打开若提示“无法验证开发者”，请右键应用选择“打开”，或执行 `xattr -dr com.apple.quarantine /Applications/CCBar.app`。
 
 ## English
 
 CCBar is a native macOS menu bar app that tracks your AI CLI token usage in real time — today, this week, and all-time — with **pluggable data sources**: [cc-switch](https://github.com/farion1231/cc-switch) (Claude Code / Codex / OpenCode via proxy), ZCode (GLM), and Trae (HTTP API with credits). History is synced daily into a local SQLite store (source databases are opened read-only and never modified), while today's numbers are queried live. A seven-page insights center (insights / credits / timeline / channels / cost / share / settings) with a model chronicle, shareable usage cards with QR code, and weekly / battle report cards are built in, along with milestone notifications, quota warnings, per-channel breakdowns, idempotent CSV export/import, a running pixel cat in the menu bar, six built-in themes plus importable JSON theme packs, bilingual UI (中文 / English), daily auto-backups with 7-copy rotation, and a drag-to-install DMG. A Windows system tray version lives in [ccbar-win](https://github.com/bmfish/ccbar-win).
+
+**Download:** [macOS universal DMG](https://github.com/bmfish/ccbar-native/releases/latest) · [Windows single exe](https://github.com/bmfish/ccbar-win/releases/latest/download/ccBar.exe) · [Website](https://ccbar-jjawpfzj0an.qoder.website)
+
+> The macOS build is not notarized yet. If Gatekeeper blocks the first launch, right-click the app and choose Open, or run `xattr -dr com.apple.quarantine /Applications/CCBar.app`.
 
 ## 功能
 
