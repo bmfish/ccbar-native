@@ -464,6 +464,32 @@ enum TraeSync {
         return num.int64Value
     }
 
+    /// 解 JWT payload 里的账号 uid（claims.data.id）。纯本地 base64 解码，失败返回 nil。
+    /// uid 是账号唯一身份：同一账号多份 cookie / 重登轮换后 uid 不变，
+    /// 游标（水位/余额）按 uid 记账，换 cookie 不再依赖字符串比对。
+    static func jwtUID(_ token: String) -> String? {
+        let parts = token.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        var b64 = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while b64.count % 4 != 0 { b64 += "=" }
+        guard let data = Data(base64Encoded: b64),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let inner = obj["data"] as? [String: Any] else { return nil }
+        if let s = inner["id"] as? String, !s.isEmpty { return s }
+        if let num = inner["id"] as? NSNumber { return num.stringValue }
+        return nil
+    }
+
+    /// 账号身份指纹：passport cookie 优先，退而 X-Cloudide-Session。
+    /// 用于"uid 记忆"与凭据的匹配——同一账号换 cookie（刷新/补 Session/整段粘贴）指纹不变，
+    /// 游标得以保留；跨账号指纹必变，uid 重新认领、走 90 天全量。
+    static func credentialIdentity(_ raw: String) -> String {
+        let parsed = parseCredential(raw)
+        return parsed.passportCookie.isEmpty ? parsed.cloudideSession : parsed.passportCookie
+    }
+
     /// 从响应头提取 X-Cloudide-Session 的值（URLSession 会把多个 Set-Cookie 合并成一个逗号串）
     static func extractSessionCookie(from headers: [AnyHashable: Any]) -> String? {
         for (key, value) in headers {

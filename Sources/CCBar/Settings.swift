@@ -10,12 +10,16 @@ struct SourceConfig: Codable {
     var dbPath: String
     /// HTTP 型数据源的登录凭据（Trae：passport sessionid cookie 值）。SQLite 源不使用
     var credential: String?
+    /// Trae 第二账号凭据（可选，多账号合计展示）；SQLite 源不使用
+    var credential2: String?
 
-    init(id: String, enabled: Bool, dbPath: String, credential: String? = nil) {
+    init(id: String, enabled: Bool, dbPath: String, credential: String? = nil,
+         credential2: String? = nil) {
         self.id = id
         self.enabled = enabled
         self.dbPath = dbPath
         self.credential = credential
+        self.credential2 = credential2
     }
 
     static func defaults() -> [SourceConfig] {

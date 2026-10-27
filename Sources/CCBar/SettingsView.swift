@@ -19,8 +19,12 @@ struct SourceRowDraft: Identifiable {
     var path: String
     /// HTTP 型源（Trae）的登录凭据；SQLite 源不使用
     var credential: String = ""
+    /// Trae 第二账号凭据（可选，多账号合计展示）
+    var credential2: String = ""
     var isHTTP: Bool = false
     var statusText: String = ""
+    /// Trae 账号 2 的同步状态（来自 sourceStatus["trae_2"]）
+    var status2Text: String = ""
     var statusKind: StatusKind = .muted
 }
 
@@ -103,7 +107,9 @@ final class SettingsViewModel: ObservableObject {
             sources.append(SourceRowDraft(
                 id: "trae", name: "Trae", defaultPath: "",
                 enabled: trae.enabled, path: "",
-                credential: trae.credential ?? "", isHTTP: true))
+                credential: trae.credential ?? "",
+                credential2: trae.credential2 ?? "",
+                isHTTP: true))
         }
         refreshSourceStatus()
     }
@@ -130,6 +136,12 @@ final class SettingsViewModel: ObservableObject {
                 sources[i].statusKind = .muted
             } else {
                 sources[i].statusKind = .warn
+            }
+            // Trae 账号 2 的同步状态（未配置时无状态不显示）
+            if sources[i].isHTTP, let st2 = statuses["trae_2"], !st2.isEmpty {
+                sources[i].status2Text = L("账号 2：") + L(st2)
+            } else {
+                sources[i].status2Text = ""
             }
         }
         traeCredits = credits
@@ -264,6 +276,9 @@ final class SettingsViewModel: ObservableObject {
                                 dbPath: path.isEmpty ? row.defaultPath : path,
                                 credential: row.isHTTP
                                     ? row.credential.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    : nil,
+                                credential2: row.isHTTP
+                                    ? row.credential2.trimmingCharacters(in: .whitespacesAndNewlines)
                                     : nil)
         }
         settings.warningThreshold = threshold!
@@ -615,6 +630,17 @@ struct SettingsRootView: View {
                             }
                         }
                         if row.isHTTP {
+                            // 账号 2（可选）：多账号合计展示，游标按 uid 独立记账
+                            HStack(spacing: 8) {
+                                Text(L("账号 2"))
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Color(nsColor: Design.textMuted))
+                                    .frame(width: 74, alignment: .leading)
+                                pathField($row.credential2,
+                                          placeholder: L("可选：第二账号 sessionid / Cookie（合计展示）")) { }
+                                    .help(L("可选填第二个 Trae 账号的 sessionid；两账号用量与积分将合计展示，各自的同步进度独立记录"))
+                            }
+                            .padding(.leading, 14)
                             HStack(spacing: 8) {
                                 if !row.statusText.isEmpty {
                                     Text(row.statusText)
@@ -633,6 +659,13 @@ struct SettingsRootView: View {
                                     }
                             }
                             .padding(.leading, 14)
+                            if !row.status2Text.isEmpty {
+                                Text(row.status2Text)
+                                    .font(.system(size: 9))
+                                    .foregroundColor(statusColor(row.statusKind))
+                                    .lineLimit(1)
+                                    .padding(.leading, 14)
+                            }
                         } else if !row.statusText.isEmpty {
                             Text(row.statusText)
                                 .font(.system(size: 9))

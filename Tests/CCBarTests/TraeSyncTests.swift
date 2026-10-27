@@ -368,7 +368,7 @@ final class TraeSyncTests: XCTestCase {
         XCTAssertNotEqual(store.sourceStatus["trae"], "连接中…", "interactive 同步不应被拦截")
     }
 
-    // MARK: 凭据变更（换账号）：旧账号态必须整体重置
+    // MARK: 凭据变更（v1.8.5 多账号方案）：永不删行，只清 JWT 缓存
 
     func testCredentialChangeResetsAccountState() {
         store.rebuild(configs: [SourceConfig(id: "trae", enabled: true, dbPath: "", credential: "sessionid=old")])
@@ -377,10 +377,12 @@ final class TraeSyncTests: XCTestCase {
                                       epoch: StatsStore.localMidnight(0) + 60)])
         XCTAssertEqual(store.queryTodayCredits(), 2.5, "旧账号数据应先入库")
 
-        // 换新账号 cookie → 旧明细/日聚合清空，等新账号 90 天全量首拉
+        // 换新账号 cookie：明细/日聚合永不删除（UPSERT 幂等保证无重复），
+        // 只清 JWT 缓存逼一次重新换签；游标按 uid 走，新账号自然 90 天全量
         store.rebuild(configs: [SourceConfig(id: "trae", enabled: true, dbPath: "", credential: "sessionid=new")])
-        XCTAssertEqual(store.queryTodayCredits(), 0, "换凭据后旧账号明细应被清空")
-        XCTAssertEqual(store.queryDayStats(days: 0)?.total ?? -1, 0, "旧账号数据不应残留")
+        XCTAssertEqual(store.queryTodayCredits(), 2.5, "换凭据后旧账号明细应保留（永不删行）")
+        XCTAssertEqual(store.metaGet("trae_auth"), "", "换凭据应清 JWT 缓存，防止旧 JWT 拉旧账号")
+        XCTAssertEqual(store.queryDayStats(days: 0)?.total ?? -1, 15, "旧账号 token 不应残留删除")
     }
 
     func testCredentialFormatChangeKeepsAccountState() {

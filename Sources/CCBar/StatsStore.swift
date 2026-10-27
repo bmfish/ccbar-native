@@ -236,6 +236,8 @@ final class StatsStore: @unchecked Sendable {
     private(set) var hasActiveSource = false
     /// Trae 的 passport 登录凭据（sessionid cookie），rebuild 时从配置快照进来
     private var traeCredential = ""
+    /// Trae 第二账号凭据（可选）。两槽各自换签、各自按 uid 记游标，明细同表 UPSERT 合计
+    private var traeCredential2 = ""
     /// Trae 节流：上次成功同步的时刻（in-memory 即可，重启后立即同步一次无妨）
     private var lastTraeSyncAt: TimeInterval = 0
     /// Trae 同步最小间隔（秒）：云端计费接口要克制，默认 15 分钟（后台定时跟随）。
@@ -312,7 +314,8 @@ final class StatsStore: @unchecked Sendable {
         return sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK
     }
 
-    private func scalarInt(_ sql: String) -> Int64 {
+    /// internal 供测试验证行数
+    func scalarInt(_ sql: String) -> Int64 {
         var stmt: OpaquePointer?
         guard let db = handle, sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
         defer { sqlite3_finalize(stmt) }
@@ -453,29 +456,18 @@ final class StatsStore: @unchecked Sendable {
                 if config.id == "trae" {
                     traeEnabled = config.enabled
                     let newCredential = (config.credential ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    let newParsed = TraeSync.parseCredential(newCredential)
-                    let oldParsed = TraeSync.parseCredential(traeCredential)
-                    // 凭据变更（换 cookie / 切账号）必须重置账号态，否则：
-                    // 1. 缓存的 JWT（约 8h 有效，与 cookie 无关）未过期前仍拉旧账号数据
-                    // 2. 旧水位把新账号首拉压成 3 天窗口（应为 90 天全量）
-                    // 3. 旧账号明细/日聚合/积分账单混进新账号统计
-                    // 按解析后的主身份比较：passport 优先，没有 passport 才用 Session。
-                    // 裸值/带前缀/整段 Cookie/补一个 Session 都不算换账号。
-                    let newIdentity = newParsed.passportCookie.isEmpty
-                        ? newParsed.cloudideSession : newParsed.passportCookie
-                    let oldIdentity = oldParsed.passportCookie.isEmpty
-                        ? oldParsed.cloudideSession : oldParsed.passportCookie
-                    if !newCredential.isEmpty, !traeCredential.isEmpty,
-                       !newIdentity.isEmpty, !oldIdentity.isEmpty, newIdentity != oldIdentity {
+                    // 换凭据只清 JWT 缓存（新 cookie 需要重新换签，旧 JWT 未过期前会拉旧账号数据）。
+                    // 游标与明细按 uid 记账、永不删除：同账号换 cookie 指纹不变、游标保留；
+                    // 跨账号指纹必变、uid 重新认领后自然走 90 天全量，明细 UPSERT 幂等无重复。
+                    if newCredential != traeCredential {
                         metaSet("trae_auth", value: "")
-                        metaSet("trae_synced_day", value: "")
-                        metaSet("trae_data_watermark", value: "")
-                        metaSet("trae_ent", value: "")
-                        metaSet("trae_ent_at", value: "")
-                        exec("DELETE FROM usage_log WHERE source = 'trae'")
-                        exec("DELETE FROM daily_agg WHERE source = 'trae'")
                     }
                     traeCredential = newCredential
+                    let newCredential2 = (config.credential2 ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if newCredential2 != traeCredential2 {
+                        metaSet("trae_auth_2", value: "")
+                    }
+                    traeCredential2 = newCredential2
                     sourceStatus["trae"] = config.enabled
                         ? (traeCredential.isEmpty ? "未配置登录" : "连接中…")
                         : "未启用"
@@ -641,27 +633,56 @@ final class StatsStore: @unchecked Sendable {
     /// 点弹窗（interactive）不受静默限制，随时可查。
     /// force=true（设置页"立即同步"）：跳过静默与节流，用户明确操作即时生效。
     /// 返回是否真的发起了同步；调用方据此决定要不要补查今日（静默/无凭据/节流时跳过）。
+    /// 多账号：槽 1 用主凭据，槽 2 用 credential2（空则跳过）；两槽共用节流时钟，串行执行。
     @discardableResult
     func syncTraeIfNeeded(now: Date = Date(), interactive: Bool = false, force: Bool = false) -> Bool {
-        guard force || interactive || !Self.inNightSilence(now) else { return false }
-
-        // 凭据快照（锁内）
         lock.lock()
         let credential = traeCredential
-        guard !credential.isEmpty else { lock.unlock(); return false }
+        let credential2 = traeCredential2
+        lock.unlock()
+        let primary = syncSlot(credential: credential, slot: 1,
+                               now: now, interactive: interactive, force: force)
+        if !credential2.isEmpty {
+            _ = syncSlot(credential: credential2, slot: 2,
+                         now: now, interactive: interactive, force: force)
+        }
+        return primary
+    }
+
+    /// 槽内 uid 记忆：uid 与凭据指纹绑定。同账号换 cookie 指纹不变 → 游标延续；
+    /// 跨账号指纹必变 → uid 视为未知，走 90 天全量（UPSERT 幂等，无重复风险）。
+    private func slotUID(_ slot: Int, credential: String) -> String {
+        let suffix = slot == 2 ? "_2" : ""
+        let saved = metaGet("trae_uid\(suffix)")
+        let savedCred = metaGet("trae_uid_cred\(suffix)")
+        guard !saved.isEmpty, savedCred == TraeSync.credentialIdentity(credential) else { return "" }
+        return saved
+    }
+
+    /// 单账号同步：网络与解析复用 TraeSync，游标（水位/数据水位/余额）全部按 uid 记账，明细永不删除。
+    private func syncSlot(credential: String, slot: Int,
+                          now: Date, interactive: Bool, force: Bool) -> Bool {
+        guard force || interactive || !Self.inNightSilence(now) else { return false }
+        guard !credential.isEmpty else { return false }
         let minInterval = interactive ? Self.traeInteractiveMinInterval : Self.traeSyncMinInterval
+        lock.lock()
         let delta = now.timeIntervalSince1970 - lastTraeSyncAt
         lock.unlock()
         guard force || delta >= minInterval else { return false }
 
-        // 拉取窗口：水位 -2 天回看（跨零点迟到会话 + 会话跨天推进），首次 90 天全量。
+        let uid = slotUID(slot, credential: credential)
+        let authKey = slot == 2 ? "trae_auth_2" : "trae_auth"
+        let entAtKey = slot == 2 ? "trae_ent_at_2" : "trae_ent_at"
+        let statusKey = slot == 2 ? "trae_2" : "trae"
+
+        // 拉取窗口：水位 -2 天回看（跨零点迟到会话 + 会话跨天推进），uid 未知时 90 天全量。
         // 积分账单按小时节流（ent_usage 只喂设置页展示，没必要跟着每次同步拉）
         let fmt = Self.dayFormatter
         lock.lock()
-        let waterline = metaGet("trae_synced_day")
-        let dataWatermark = Int64(metaGet("trae_data_watermark")) ?? 0
-        let auth = Self.traeAuthFromMeta(metaGet("trae_auth"))
-        let lastEntAt = Double(metaGet("trae_ent_at")) ?? 0
+        let waterline = uid.isEmpty ? "" : metaGet("trae_synced_day_\(uid)")
+        let dataWatermark = uid.isEmpty ? 0 : (Int64(metaGet("trae_data_watermark_\(uid)")) ?? 0)
+        let auth = Self.traeAuthFromMeta(metaGet(authKey))
+        let lastEntAt = Double(metaGet(entAtKey)) ?? 0
         lock.unlock()
         let fetchEnt = now.timeIntervalSince1970 - lastEntAt >= Self.traeEntMinInterval
 
@@ -692,47 +713,55 @@ final class StatsStore: @unchecked Sendable {
         // 失败/过期也占掉节流窗口，防止弹窗反复开关时把请求打爆（下次后台周期自然重试）
         lock.lock(); defer { lock.unlock() }
         lastTraeSyncAt = now.timeIntervalSince1970
-        metaSet("trae_auth", value: Self.traeAuthToMeta(newAuth))
+        metaSet(authKey, value: Self.traeAuthToMeta(newAuth))
+        // uid 认领：换签成功即解出账号 uid 并与凭据指纹绑定（uid 未变则无需重写）。
+        let resolvedUID = TraeSync.jwtUID(newAuth.jwt) ?? uid
+        if !resolvedUID.isEmpty, resolvedUID != uid {
+            metaSet(slot == 2 ? "trae_uid_2" : "trae_uid", value: resolvedUID)
+            metaSet(slot == 2 ? "trae_uid_cred_2" : "trae_uid_cred",
+                    value: TraeSync.credentialIdentity(credential))
+        }
         switch outcome {
         case .success(let rows, let consumed, let total, let truncated):
             upsertTraeRows(rows)
             // 今日行进 usage_log 由视图实时可见，daily_agg 只结算完整日（≤昨天）
             refreshDailyAgg(fromEpoch: fromEpoch, toEpoch: Self.localMidnight(0, now: now))
             // 仅完整成功才推进水位：窗口仍截断（单日超限/拆分深度用尽）时保留原起点，
-            // 下一轮继续补拉，避免"缺口被水位永久越过"
+            // 下一轮继续补拉，避免"缺口被水位永久越过"。uid 未知（首次/换号）时本轮只建立
+            // 基线，游标随 uid 认领成功后下一轮起正常增量（最多多一轮全量，无重复数据）。
             if truncated {
-                ccLog("Trae 窗口仍不完整（from \(fromEpoch)），水位保持 \(waterline)")
-            } else {
-                metaSet("trae_synced_day", value: fmt.string(from: now))
+                ccLog("Trae 槽\(slot) 窗口仍不完整（from \(fromEpoch)），水位保持 \(waterline)")
+            } else if !resolvedUID.isEmpty {
+                metaSet("trae_synced_day_\(resolvedUID)", value: fmt.string(from: now))
                 // 数据水位只随实际看到的最新 usage_time 前进，绝不推到 now：
                 // 空结果表示窗口内没有新会话，保留旧水位，给延迟数据留重扫机会。
                 let nextWatermark = Self.nextDataWatermark(
                     previous: dataWatermark, fetchedMax: rows.map(\.epoch).max(), toEpoch: toEpoch)
                 if nextWatermark > dataWatermark {
-                    metaSet("trae_data_watermark", value: String(nextWatermark))
+                    metaSet("trae_data_watermark_\(resolvedUID)", value: String(nextWatermark))
                 }
                 let tf = DateFormatter(); tf.dateFormat = "MM-dd HH:mm:ss"
                 let cutoffText = earlyStopBefore.map {
                     tf.string(from: Date(timeIntervalSince1970: TimeInterval($0)))
                 } ?? "全量"
                 let watermarkText = tf.string(from: Date(timeIntervalSince1970: TimeInterval(nextWatermark)))
-                ccLog("Trae 同步成功\(interactive ? "（交互）" : ""): \(rows.count) 行, " +
+                ccLog("Trae 槽\(slot)(uid \(resolvedUID)) 同步成功\(interactive ? "（交互）" : ""): \(rows.count) 行, " +
                       "截断=\(truncated), 增量截止=\(cutoffText), 水位=\(watermarkText), " +
                       "耗时 \(String(format: "%.1f", elapsed))s")
             }
-            if let c = consumed, let t = total {
-                metaSet("trae_ent", value: "\(c)|\(t)")
-                metaSet("trae_ent_at", value: String(Int(now.timeIntervalSince1970)))
+            if let c = consumed, let t = total, !resolvedUID.isEmpty {
+                metaSet("trae_ent_\(resolvedUID)", value: "\(c)|\(t)")
+                metaSet(entAtKey, value: String(Int(now.timeIntervalSince1970)))
             }
-            sourceStatus["trae"] = truncated ? "同步完成（窗口不完整，将续补）" : "已连接"
+            sourceStatus[statusKey] = truncated ? "同步完成（窗口不完整，将续补）" : "已连接"
         case .notConfigured:
-            sourceStatus["trae"] = "未配置登录"
+            sourceStatus[statusKey] = "未配置登录"
         case .authExpired:
-            ccLog("Trae 登录已过期")
-            sourceStatus["trae"] = "登录已过期，请重新提供 sessionid 或 X-Cloudide-Session"
+            ccLog("Trae 槽\(slot) 登录已过期")
+            sourceStatus[statusKey] = "登录已过期，请重新提供 sessionid 或 X-Cloudide-Session"
         case .failed(let msg):
-            ccLog("Trae 同步失败: \(msg)")
-            sourceStatus["trae"] = "同步失败：\(msg)"
+            ccLog("Trae 槽\(slot) 同步失败: \(msg)")
+            sourceStatus[statusKey] = "同步失败：\(msg)"
         }
         return true
     }
@@ -783,14 +812,27 @@ final class StatsStore: @unchecked Sendable {
         exec("COMMIT")
     }
 
-    /// Trae 官方积分账单（consumed|total），无数据显示 nil
+    /// Trae 官方积分账单（consumed|total），多账号按 uid 键合计；无数据显示 nil。
+    /// trae_ent_at* 是节流时间戳需跳过；存在 per-uid 键时忽略旧全局键（迁移脚本会搬走），
+    /// 避免"脚本未跑 + 新键已写"时同账号双算。
     func traeEntSummary() -> (consumed: Double, total: Double)? {
         lock.lock(); defer { lock.unlock() }
-        let raw = metaGet("trae_ent")
-        let parts = raw.split(separator: "|")
-        guard parts.count == 2,
-              let c = Double(parts[0]), let t = Double(parts[1]) else { return nil }
-        return (c, t)
+        guard handle != nil else { return nil }
+        var consumed = 0.0, total = 0.0, perUID = 0
+        var legacy: (Double, Double)?
+        forEachRow("SELECT key, value FROM meta WHERE key LIKE 'trae_ent%'") { stmt in
+            let key = String(cString: sqlite3_column_text(stmt, 0))
+            let raw = String(cString: sqlite3_column_text(stmt, 1))
+            let parts = raw.split(separator: "|")
+            guard parts.count == 2, let c = Double(parts[0]), let t = Double(parts[1]) else { return }
+            if key.hasPrefix("trae_ent_at") { return }
+            if key == "trae_ent" { legacy = (c, t); return }
+            consumed += c
+            total += t
+            perUID += 1
+        }
+        if perUID == 0, let l = legacy { consumed = l.0; total = l.1; perUID = 1 }
+        return perUID > 0 ? (consumed, total) : nil
     }
 
     static func traeAuthFromMeta(_ raw: String) -> TraeAuth {
@@ -816,7 +858,8 @@ final class StatsStore: @unchecked Sendable {
         return DayStats(reqs: Int(row[0]), input: row[1], output: row[2], cacheCreate: row[3], cacheRead: row[4])
     }
 
-    private func metaGet(_ key: String) -> String {
+    /// internal 供测试验证 per-uid meta 记账
+    func metaGet(_ key: String) -> String {
         var stmt: OpaquePointer?
         guard let db = handle, sqlite3_prepare_v2(db, "SELECT value FROM meta WHERE key = ?", -1, &stmt, nil) == SQLITE_OK else {
             return ""
@@ -829,7 +872,8 @@ final class StatsStore: @unchecked Sendable {
         return ""
     }
 
-    private func metaSet(_ key: String, value: String) {
+    /// internal 供测试验证 per-uid meta 记账
+    func metaSet(_ key: String, value: String) {
         var stmt: OpaquePointer?
         guard let db = handle, sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", -1, &stmt, nil) == SQLITE_OK else {
             return
