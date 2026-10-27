@@ -456,15 +456,20 @@ final class StatsStore: @unchecked Sendable {
                 if config.id == "trae" {
                     traeEnabled = config.enabled
                     let newCredential = (config.credential ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    // 换凭据只清 JWT 缓存（新 cookie 需要重新换签，旧 JWT 未过期前会拉旧账号数据）。
-                    // 游标与明细按 uid 记账、永不删除：同账号换 cookie 指纹不变、游标保留；
-                    // 跨账号指纹必变、uid 重新认领后自然走 90 天全量，明细 UPSERT 幂等无重复。
-                    if newCredential != traeCredential {
+                    // 换凭据只清 JWT 缓存（新 cookie 需要重新换签，旧 JWT 未过期前会拉旧账号
+                    // 数据）。按"身份指纹"比较而非原始串：启动首帧（旧值为空）与同账号换
+                    // 粘贴格式都不清缓存。游标与明细按 uid 记账、永不删除：同账号换 cookie
+                    // 指纹不变、游标保留；跨账号指纹必变、uid 重新认领后自然 90 天全量。
+                    if !newCredential.isEmpty, !traeCredential.isEmpty,
+                       TraeSync.credentialIdentity(newCredential)
+                           != TraeSync.credentialIdentity(traeCredential) {
                         metaSet("trae_auth", value: "")
                     }
                     traeCredential = newCredential
                     let newCredential2 = (config.credential2 ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    if newCredential2 != traeCredential2 {
+                    if !newCredential2.isEmpty, !traeCredential2.isEmpty,
+                       TraeSync.credentialIdentity(newCredential2)
+                           != TraeSync.credentialIdentity(traeCredential2) {
                         metaSet("trae_auth_2", value: "")
                     }
                     traeCredential2 = newCredential2
