@@ -228,14 +228,14 @@ final class InsightsRenderTests: XCTestCase {
         let cal = Calendar.current
         let base = Int(cal.startOfDay(for: Date()).timeIntervalSince1970)
         func at(_ h: Int, _ m: Int, _ s: Int) -> Int { base + h * 3600 + m * 60 + s }
-        let rows: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] = [
-            (at(20, 26, 50), "GLM", "zcode", 0, 0, 0),
-            (at(19, 42, 10), "GLM", "zcode", 520_000, 0, 0),
-            (at(19, 41, 23), "GLM", "zcode", 520_000, 0, 0),
-            (at(12, 57, 54), "GLM", "zcode", 460_000, 0, 0),
-            (at(12, 39, 26), "GLM", "zcode", 450_000, 0, 0),
-            (at(11, 42, 38), "GLM", "zcode", 420_000, 0, 0),
-            (at(11, 40, 0), "GLM", "zcode", 420_000, 0, 0),
+        let rows: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)] = [
+            (at(20, 26, 50), "GLM", "zcode", 0, 0, 0, 0),
+            (at(19, 42, 10), "GLM", "zcode", 520_000, 0, 0, 0),
+            (at(19, 41, 23), "GLM", "zcode", 520_000, 0, 0, 0),
+            (at(12, 57, 54), "GLM", "zcode", 460_000, 0, 0, 0),
+            (at(12, 39, 26), "GLM", "zcode", 450_000, 0, 0, 0),
+            (at(11, 42, 38), "GLM", "zcode", 420_000, 0, 0, 0),
+            (at(11, 40, 0), "GLM", "zcode", 420_000, 0, 0, 0),
         ]
         let lines = TimelinePage.buildLines(rows)
 
@@ -253,14 +253,14 @@ final class InsightsRenderTests: XCTestCase {
 
         // 数据行顺序保持 DESC、总数一致
         let dataRows = lines.compactMap { line -> Int? in
-            if case .row(let time, _, _, _, _, _) = line { return time }
+            if case .row(let time, _, _, _, _, _, _) = line { return time }
             return nil
         }
         XCTAssertEqual(dataRows, rows.map(\.time), "顺序必须保持 DESC 且不串行")
 
         // 每行紧随其组头之后
         for (i, line) in lines.enumerated() {
-            if case .row(let time, _, _, _, _, _) = line {
+            if case .row(let time, _, _, _, _, _, _) = line {
                 let h = cal.component(.hour, from: Date(timeIntervalSince1970: TimeInterval(time)))
                 if case .header(let hh, _, _)? = i > 0 ? lines[i - 1] : nil {
                     XCTAssertEqual(hh, h, "行必须紧跟自己的组头")

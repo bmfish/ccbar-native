@@ -142,7 +142,7 @@ struct CCSwitchAdapter: SourceAdapter {
         SELECT 'cc-switch' AS source, app_type, model, input_tokens, output_tokens,
                cache_read_tokens, cache_creation_tokens, 0 AS reasoning_tokens,
                CAST(total_cost_usd AS REAL) AS total_cost_usd, 0.0 AS credits,
-               created_at, 1 AS request_count
+               created_at, 1 AS request_count, '' AS account
         FROM \(alias).proxy_request_logs
         WHERE created_at >= \(todayStartEpoch)
         """
@@ -196,7 +196,7 @@ struct ZCodeAdapter: SourceAdapter {
                0 AS cache_read_tokens,
                0 AS cache_creation_tokens,
                reasoning_tokens, 0.0 AS total_cost_usd, 0.0 AS credits,
-               started_at / 1000 AS created_at, 1 AS request_count
+               started_at / 1000 AS created_at, 1 AS request_count, '' AS account
         FROM \(alias).model_usage
         WHERE status != 'running'
           AND started_at >= \(todayStartEpoch) * 1000
@@ -405,6 +405,7 @@ final class StatsStore: @unchecked Sendable {
             total_cost_usd REAL NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL,
             request_count INTEGER NOT NULL DEFAULT 1,
+            account TEXT NOT NULL DEFAULT '',
             PRIMARY KEY (source, request_id)
         )
         """) else {
@@ -416,6 +417,8 @@ final class StatsStore: @unchecked Sendable {
         exec("CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_log(model, created_at)")
         // v1.8 新增 credits 列（Trae 积分口径，其他源为 0）。老库 ALTER 迁移，列已存在则静默跳过。
         exec("ALTER TABLE usage_log ADD COLUMN credits REAL NOT NULL DEFAULT 0")
+        // 多账号归属列：Trae 行写入所属账号 uid，其他源与历史行为空（不可追溯，不参与分账号统计）
+        exec("ALTER TABLE usage_log ADD COLUMN account TEXT NOT NULL DEFAULT ''")
         exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
 
         // 每日聚合缓存：区间/总量/按月查询直接读它，不再扫明细。
@@ -531,7 +534,7 @@ final class StatsStore: @unchecked Sendable {
         var parts = ["""
         SELECT source, app_type, model, input_tokens, output_tokens,
                cache_read_tokens, cache_creation_tokens, reasoning_tokens,
-               total_cost_usd, credits, created_at, request_count
+               total_cost_usd, credits, created_at, request_count, account
         FROM usage_log
         """]
         for adapter in attachedAdapters {
@@ -728,7 +731,7 @@ final class StatsStore: @unchecked Sendable {
         }
         switch outcome {
         case .success(let rows, let consumed, let total, let truncated):
-            upsertTraeRows(rows)
+            upsertTraeRows(rows, account: resolvedUID)
             // 今日行进 usage_log 由视图实时可见，daily_agg 只结算完整日（≤昨天）
             refreshDailyAgg(fromEpoch: fromEpoch, toEpoch: Self.localMidnight(0, now: now))
             // 仅完整成功才推进水位：窗口仍截断（单日超限/拆分深度用尽）时保留原起点，
@@ -772,9 +775,10 @@ final class StatsStore: @unchecked Sendable {
     }
 
     /// Trae 明细入库：会话级 UPSERT（同一 session 用量随对话推进增长，覆盖旧值）。
+    /// account 为所属账号 uid（多账号归属；空 = 历史行/uid 未解出）。
     /// 与其他源的 INSERT OR IGNORE 不同——Trae 行是"会话聚合快照"而非不可变流水。
     /// internal 供测试验证 upsert 语义。
-    func upsertTraeRows(_ rows: [TraeRow]) {
+    func upsertTraeRows(_ rows: [TraeRow], account: String = "") {
         guard let db = handle, !rows.isEmpty else { return }
         exec("BEGIN IMMEDIATE")
         var stmt: OpaquePointer?
@@ -782,8 +786,8 @@ final class StatsStore: @unchecked Sendable {
         INSERT INTO usage_log
             (source, request_id, app_type, model, input_tokens, output_tokens,
              cache_read_tokens, cache_creation_tokens, reasoning_tokens,
-             total_cost_usd, credits, created_at, request_count)
-        VALUES ('trae', ?, 'trae', ?, ?, ?, ?, ?, 0, ?, ?, ?, 1)
+             total_cost_usd, credits, created_at, request_count, account)
+        VALUES ('trae', ?, 'trae', ?, ?, ?, ?, ?, 0, ?, ?, ?, 1, ?)
         ON CONFLICT(source, request_id) DO UPDATE SET
             model=excluded.model,
             input_tokens=excluded.input_tokens,
@@ -792,7 +796,8 @@ final class StatsStore: @unchecked Sendable {
             cache_creation_tokens=excluded.cache_creation_tokens,
             total_cost_usd=excluded.total_cost_usd,
             credits=excluded.credits,
-            created_at=excluded.created_at
+            created_at=excluded.created_at,
+            account=excluded.account
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             exec("ROLLBACK")
@@ -810,6 +815,7 @@ final class StatsStore: @unchecked Sendable {
             sqlite3_bind_double(stmt, 7, row.costUsd)
             sqlite3_bind_double(stmt, 8, row.credits)
             sqlite3_bind_int64(stmt, 9, row.epoch)
+            sqlite3_bind_text(stmt, 10, account, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
             if sqlite3_step(stmt) != SQLITE_DONE {
                 print("[ccBar] Trae 行入库失败: \(row.requestID)")
             }
@@ -1842,25 +1848,38 @@ final class StatsStore: @unchecked Sendable {
     }
 
     /// 今日请求流水（最新在前）：时间 / 模型 / 来源 / token / 费用 / 积分（仅 trae 有值）
-    func queryTodayTimeline(limit: Int = 800) -> [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] {
+    /// uid → 槽位映射（1/2；未认领的 uid 不在表内）
+    private func slotByUIDMap() -> [String: Int] {
+        var map: [String: Int] = [:]
+        let uid1 = metaGet("trae_uid")
+        if !uid1.isEmpty { map[uid1] = 1 }
+        let uid2 = metaGet("trae_uid_2")
+        if !uid2.isEmpty { map[uid2] = 2 }
+        return map
+    }
+
+    func queryTodayTimeline(limit: Int = 800) -> [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)] {
         lock.lock(); defer { lock.unlock() }
         guard handle != nil else { return [] }
-        var result: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] = []
+        let slotMap = slotByUIDMap()
+        var result: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)] = []
         forEachRow("""
         SELECT created_at, model, source,
                COALESCE(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens, 0),
-               COALESCE(total_cost_usd, 0), COALESCE(credits, 0)
+               COALESCE(total_cost_usd, 0), COALESCE(credits, 0), COALESCE(account, '')
         FROM usage_all
         WHERE created_at >= ?
         ORDER BY created_at DESC LIMIT \(max(1, limit))
         """, binds: [Self.localMidnight(0)]) { stmt in
             let model = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? "-" : String(cString: sqlite3_column_text(stmt, 1))
+            let accountUID = String(cString: sqlite3_column_text(stmt, 6))
             result.append((time: Int(sqlite3_column_int64(stmt, 0)),
                            model: model,
                            source: String(cString: sqlite3_column_text(stmt, 2)),
                            token: sqlite3_column_int64(stmt, 3),
                            cost: sqlite3_column_double(stmt, 4),
-                           credits: sqlite3_column_double(stmt, 5)))
+                           credits: sqlite3_column_double(stmt, 5),
+                           account: slotMap[accountUID] ?? 0))
         }
         return result
     }
@@ -1905,29 +1924,54 @@ final class StatsStore: @unchecked Sendable {
     }
 
     /// 指定日期（本地 0 点起 24 小时）的逐笔流水，时间 DESC。今日走实时视图，历史走已同步的 usage_log
-    func queryTimeline(day: Date, limit: Int = 800) -> [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] {
+    func queryTimeline(day: Date, limit: Int = 800) -> [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)] {
         let cal = Calendar.current
         if cal.isDateInToday(day) { return queryTodayTimeline(limit: limit) }
         lock.lock(); defer { lock.unlock() }
         guard handle != nil else { return [] }
+        let slotMap = slotByUIDMap()
         let start = Int64(cal.startOfDay(for: day).timeIntervalSince1970)
-        var result: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] = []
+        var result: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)] = []
         forEachRow("""
         SELECT created_at, model, source,
                COALESCE(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens, 0),
-               COALESCE(total_cost_usd, 0), COALESCE(credits, 0)
+               COALESCE(total_cost_usd, 0), COALESCE(credits, 0), COALESCE(account, '')
         FROM usage_log
         WHERE created_at >= \(start) AND created_at < \(start + 86_400)
         ORDER BY created_at DESC LIMIT \(max(1, limit))
         """) { stmt in
             let model = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? "-" : String(cString: sqlite3_column_text(stmt, 1))
+            let accountUID = String(cString: sqlite3_column_text(stmt, 6))
             result.append((time: Int(sqlite3_column_int64(stmt, 0)),
                            model: model,
                            source: String(cString: sqlite3_column_text(stmt, 2)),
                            token: sqlite3_column_int64(stmt, 3),
                            cost: sqlite3_column_double(stmt, 4),
-                           credits: sqlite3_column_double(stmt, 5)))
+                           credits: sqlite3_column_double(stmt, 5),
+                           account: slotMap[accountUID] ?? 0))
         }
         return result
+    }
+
+    /// 今日各账号积分（按槽位，零填充）：来自 usage_log 的 account 归属列。
+    /// 历史行 account 为空不参与；未配置账号返回空数组。
+    func queryTodayCreditsByAccount() -> [(slot: Int, credits: Double)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        let slotMap = slotByUIDMap()
+        guard !slotMap.isEmpty else { return [] }
+        var creditsBySlot: [Int: Double] = [:]
+        forEachRow("""
+        SELECT COALESCE(account, ''), COALESCE(SUM(credits), 0)
+        FROM usage_log
+        WHERE source = 'trae' AND created_at >= \(Self.localMidnight(0)) AND COALESCE(account, '') != ''
+        GROUP BY account
+        """) { stmt in
+            let uid = String(cString: sqlite3_column_text(stmt, 0))
+            if let slot = slotMap[uid] {
+                creditsBySlot[slot, default: 0] += sqlite3_column_double(stmt, 1)
+            }
+        }
+        return slotMap.values.sorted().map { (slot: $0, credits: creditsBySlot[$0] ?? 0) }
     }
 }

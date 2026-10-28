@@ -149,7 +149,7 @@ final class InsightsViewModel: ObservableObject {
     @Published var channelPoints: [ChannelPoint] = []
     @Published var todaySources: [SourceStat] = []
     // 流水
-    @Published var timeline: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] = []
+    @Published var timeline: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)] = []
     @Published var timelineDay: Date = Calendar.current.startOfDay(for: Date())
     // 积分页（Trae 口径）
     @Published var creditsToday = 0.0
@@ -169,6 +169,7 @@ final class InsightsViewModel: ObservableObject {
     @Published var creditsPeakLabel = ""
     @Published var creditsEnt: (consumed: Double, total: Double)?
     @Published var creditsAccounts: [(slot: Int, consumed: Double, total: Double)] = []
+    @Published var todayCreditsByAccount: [(slot: Int, credits: Double)] = []
     // 费用页月度预算
     @Published var costMtd = 0.0
     @Published var monthDaysElapsed = 1
@@ -261,7 +262,7 @@ final class InsightsViewModel: ObservableObject {
         var dayTokensAll: [(date: String, token: Int64)] = []
         var channelPoints: [ChannelPoint] = []
         var todaySources: [SourceStat] = []
-        var timeline: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] = []
+        var timeline: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)] = []
         var timelineDay: Date = Calendar.current.startOfDay(for: Date())
         var costMtd = 0.0
         var monthDaysElapsed = 1
@@ -299,6 +300,8 @@ final class InsightsViewModel: ObservableObject {
         var creditsEnt: (consumed: Double, total: Double)?
         /// 分账号余额（Trae1/Trae2），仅多账号时有意义
         var creditsAccounts: [(slot: Int, consumed: Double, total: Double)] = []
+        /// 今日各账号积分（按槽位，零填充）
+        var todayCreditsByAccount: [(slot: Int, credits: Double)] = []
     }
 
     private nonisolated func compute(store: StatsStore, timelineDay: Date,
@@ -480,6 +483,7 @@ final class InsightsViewModel: ObservableObject {
         }
         s.creditsEnt = store.traeEntSummary()
         s.creditsAccounts = store.traeEntAccounts()
+        s.todayCreditsByAccount = store.queryTodayCreditsByAccount()
         return s
     }
 
@@ -546,6 +550,7 @@ final class InsightsViewModel: ObservableObject {
         creditsPeakLabel = s.creditsPeakLabel
         creditsEnt = s.creditsEnt
         creditsAccounts = s.creditsAccounts
+        todayCreditsByAccount = s.todayCreditsByAccount
     }
 
     /// 今日会话统计：相邻请求间隔 > 30 分钟切新会话，返回（会话数, 平均时长分钟, 最长时长分钟）
@@ -2582,6 +2587,23 @@ struct CreditsPage: View {
                     deltaBadge(delta(vm.creditsToday, vm.creditsPrevDay))
                         .fixedSize()
                 }
+                // 多账号：今日积分按账号拆分（色点与余额卡一致）
+                if vm.todayCreditsByAccount.count > 1 {
+                    HStack(spacing: 12) {
+                        ForEach(vm.todayCreditsByAccount, id: \.slot) { acc in
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(Color(nsColor: acc.slot == 1
+                                                ? Design.successColor : .controlAccentColor))
+                                    .frame(width: 5, height: 5)
+                                Text(formatCredits(acc.credits))
+                                    .foregroundColor(Color(nsColor: Design.textSecondary))
+                            }
+                        }
+                        Spacer()
+                    }
+                    .font(.system(size: 9).monospacedDigit())
+                }
                 MiniSparkline(values: vm.creditsTodayHourly.map { Int64($0.rounded()) },
                               color: Design.successColor)
                     .frame(height: 52)
@@ -2868,18 +2890,18 @@ struct TimelinePage: View {
     /// 内容会串组错位（20:26 出现在 12:00 组里）——改单层扁平结构后不可能再错。
     enum TimelineLine: Identifiable {
         case header(hour: Int, count: Int, credits: Double)
-        case row(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)
+        case row(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)
 
         var id: String {
             switch self {
             case .header(let hour, _, _): return "h-\(hour)"
-            case .row(let time, _, _, _, _, _): return "t-\(time)"
+            case .row(let time, _, _, _, _, _, _): return "t-\(time)"
             }
         }
     }
 
     /// 纯函数：DESC 行序列 → 组头+数据行扁平序列（组头出现在每组最新一行前）
-    static func buildLines(_ rows: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)]) -> [TimelineLine] {
+    static func buildLines(_ rows: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)]) -> [TimelineLine] {
         let cal = Calendar.current
         let hours = rows.map { cal.component(.hour, from: Date(timeIntervalSince1970: TimeInterval($0.time))) }
         var counts: [Int: Int] = [:]
@@ -2897,13 +2919,14 @@ struct TimelinePage: View {
                 last = h
             }
             out.append(.row(time: row.time, model: row.model, source: row.source,
-                            token: row.token, cost: row.cost, credits: row.credits))
+                            token: row.token, cost: row.cost, credits: row.credits,
+                            account: row.account))
         }
         return out
     }
 
     /// 过滤后的流水（渠道/模型），顺序保持 DESC
-    private var filtered: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)] {
+    private var filtered: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)] {
         vm.timeline.filter { row in
             (sourceFilter == "all" || row.source == sourceFilter) &&
             (modelFilter == "all" || row.model == modelFilter)
@@ -3186,8 +3209,8 @@ struct TimelinePage: View {
                                 .padding(.horizontal, 8)
                                 .padding(.top, 12)
                                 .padding(.bottom, 4)
-                            case .row(let time, let model, let source, let token, let cost, let credits):
-                                timelineRow((time, model, source, token, cost, credits))
+                            case .row(let time, let model, let source, let token, let cost, let credits, let account):
+                                timelineRow((time, model, source, token, cost, credits, account))
                             }
                         }
                         if filtered.count > visibleCount {
@@ -3213,7 +3236,7 @@ struct TimelinePage: View {
         }
     }
 
-    private func timelineRow(_ row: (time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double)) -> some View {
+    private func timelineRow(_ row: (time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)) -> some View {
         let t = Date(timeIntervalSince1970: TimeInterval(row.time))
         let tfmt = DateFormatter()
         tfmt.dateFormat = "HH:mm:ss"
@@ -3232,6 +3255,13 @@ struct TimelinePage: View {
                 .foregroundColor(Color(nsColor: Design.textPrimary))
                 .lineLimit(1)
                 .truncationMode(.middle)
+            // 多账号：色点标记归属账号（与余额卡同色系；历史行 account=0 不标）
+            if vm.creditsAccounts.count > 1, row.account > 0 {
+                Circle()
+                    .fill(Color(nsColor: row.account == 1
+                                ? Design.successColor : .controlAccentColor))
+                    .frame(width: 5, height: 5)
+            }
             if isAnomaly {
                 Text(L("异常"))
                     .font(.system(size: 9, weight: .semibold))
