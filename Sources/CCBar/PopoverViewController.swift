@@ -70,8 +70,8 @@ final class PopoverViewModel: ObservableObject {
     @Published var monthDelta: Double?
     /// 历史总量卡：近30天占比
     @Published var totalShare: Double?
-    /// 今日会话摘要（Hero 卡脚注）
-    @Published var sessionSummary: String?
+    /// 今日各账号积分（双账号且余额总额非 0 时非空；页脚拆分用）
+    @Published var creditsByAccount: [(slot: Int, credits: Double)] = []
 
     /// 问候语：初始化时随机一次，之后每次打开弹窗重新抽（rollGreeting）
     @Published var greeting: String
@@ -104,7 +104,7 @@ final class PopoverViewModel: ObservableObject {
         if let e = c.getCachedTodayExtras() {
             todayHourly = Self.hourPoints(from: e.hourly)
             todayCredits = e.credits
-            sessionSummary = e.sessionSummary
+            creditsByAccount = e.creditsByAccount
         }
         // 昨日/周/月/历史 sparkline、环比、占比读每日缓存
         if let e = c.getCachedTrendExtras() {
@@ -300,13 +300,23 @@ struct PopoverRootView: View {
                         .padding(.top, 2)
                 }
 
-                if let summary = vm.sessionSummary {
-                    Text(summary)
-                        .font(.system(size: 9))
-                        .foregroundColor(Color(nsColor: Design.textMuted))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                if let prediction = vm.predictionText {
+                // 页脚：双账号显示各账号今日积分拆分；单账号回落"按当前速率"预测；今日会话小字已移除
+                if vm.creditsByAccount.count > 1 {
+                    HStack(spacing: 12) {
+                        ForEach(vm.creditsByAccount, id: \.slot) { acc in
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(Color(nsColor: acc.slot == 1
+                                                ? Design.successColor : .controlAccentColor))
+                                    .frame(width: 5, height: 5)
+                                Text(SettingsViewModel.fmtCredits(acc.credits))
+                                    .foregroundColor(Color(nsColor: Design.textSecondary))
+                            }
+                        }
+                        Spacer()
+                    }
+                    .font(.system(size: 9).monospacedDigit())
+                } else if let prediction = vm.predictionText {
                     Text(prediction)
                         .font(.system(size: 10))
                         .foregroundColor(Color(nsColor: Design.textMuted))

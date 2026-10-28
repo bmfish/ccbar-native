@@ -168,7 +168,8 @@ class Settings {
 struct TodayExtras {
     var hourly: [Int: Int64] = [:]
     var credits: Double = 0
-    var sessionSummary: String?
+    /// 今日各账号积分（按槽位；仅双账号且余额总额非 0 时非空）
+    var creditsByAccount: [(slot: Int, credits: Double)] = []
 }
 
 /// 趋势卡的历史类数据：每日只算一次（首个 updateData 或跨天），与 Windows 版一致

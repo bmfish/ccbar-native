@@ -480,18 +480,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         }
     }
 
-    /// 弹窗今日区数据（逐时 / 积分 / 会话脚注）；含 SQLite 查询，必须在后台队列调用
+    /// 弹窗今日区数据（逐时 / 积分 / 多账号拆分）；含 SQLite 查询，必须在后台队列调用。
+    /// 多账号拆分仅在双账号已认领且余额总额非 0 时提供（单账号不显示，见 Hero 卡页脚）。
     static func makeTodayExtras(store: StatsStore) -> TodayExtras {
-        let times = store.queryTodayRequestTimes()
-        var summary: String?
-        if !times.isEmpty {
-            let (count, avgMin, longestMin) = InsightsViewModel.sessionStats(fromTimes: times)
-            summary = L("今日会话") + " \(count) " + L("个") + " · "
-                + String(format: L("平均 %d 分钟 · 最长 %d 分钟"), avgMin, longestMin)
-        }
+        var accounts = store.queryTodayCreditsByAccount()
+        if let ent = store.traeEntSummary(), ent.total <= 0 { accounts = [] }
         return TodayExtras(hourly: store.queryHourHistogram(days: 0),
                            credits: store.queryTodayCredits(),
-                           sessionSummary: summary)
+                           creditsByAccount: accounts)
     }
 
     // MARK: - Trae 后台同步（独立队列）
