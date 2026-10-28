@@ -238,8 +238,8 @@ final class StatsStore: @unchecked Sendable {
     private var traeCredential = ""
     /// Trae 第二账号凭据（可选）。两槽各自换签、各自按 uid 记游标，明细同表 UPSERT 合计
     private var traeCredential2 = ""
-    /// Trae 节流：上次成功同步的时刻（in-memory 即可，重启后立即同步一次无妨）
-    private var lastTraeSyncAt: TimeInterval = 0
+    /// Trae 节流：各槽上次同步时刻（按槽独立，避免槽 1 每轮先跑把槽 2 吞掉；in-memory 即可，重启后立即同步一次无妨）
+    private var lastTraeSyncAt: [Int: TimeInterval] = [:]
     /// Trae 同步最小间隔（秒）：云端计费接口要克制，默认 15 分钟（后台定时跟随）。
     /// 弹窗打开属于用户主动查看，走更短的 interactive 间隔
     static let traeSyncMinInterval: TimeInterval = 900
@@ -638,7 +638,7 @@ final class StatsStore: @unchecked Sendable {
     /// 点弹窗（interactive）不受静默限制，随时可查。
     /// force=true（设置页"立即同步"）：跳过静默与节流，用户明确操作即时生效。
     /// 返回是否真的发起了同步；调用方据此决定要不要补查今日（静默/无凭据/节流时跳过）。
-    /// 多账号：槽 1 用主凭据，槽 2 用 credential2（空则跳过）；两槽共用节流时钟，串行执行。
+    /// 多账号：槽 1 用主凭据，槽 2 用 credential2（空则跳过）；节流时钟按槽独立，串行执行。
     @discardableResult
     func syncTraeIfNeeded(now: Date = Date(), interactive: Bool = false, force: Bool = false) -> Bool {
         lock.lock()
@@ -671,7 +671,7 @@ final class StatsStore: @unchecked Sendable {
         guard !credential.isEmpty else { return false }
         let minInterval = interactive ? Self.traeInteractiveMinInterval : Self.traeSyncMinInterval
         lock.lock()
-        let delta = now.timeIntervalSince1970 - lastTraeSyncAt
+        let delta = now.timeIntervalSince1970 - (lastTraeSyncAt[slot] ?? 0)
         lock.unlock()
         guard force || delta >= minInterval else { return false }
 
@@ -717,7 +717,7 @@ final class StatsStore: @unchecked Sendable {
         // 入库 + 状态（锁内）。节流时间戳在所有出口都推进：
         // 失败/过期也占掉节流窗口，防止弹窗反复开关时把请求打爆（下次后台周期自然重试）
         lock.lock(); defer { lock.unlock() }
-        lastTraeSyncAt = now.timeIntervalSince1970
+        lastTraeSyncAt[slot] = now.timeIntervalSince1970
         metaSet(authKey, value: Self.traeAuthToMeta(newAuth))
         // uid 认领：换签成功即解出账号 uid 并与凭据指纹绑定（uid 未变则无需重写）。
         let resolvedUID = TraeSync.jwtUID(newAuth.jwt) ?? uid

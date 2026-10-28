@@ -431,9 +431,11 @@ enum TraeSync {
         // 库内统一 Anthropic 口径（input=净输入，三项相加=总 prompt），否则合计会重复计算缓存。
         let gross = extra?.input_token ?? 0
         let cached = extra?.cache_read_token ?? 0
+        // 模型名缺失/空白统一兜底，避免入库出现空模型条目（与 Windows 版对齐）
+        let rawModel = s.model_name?.trimmingCharacters(in: .whitespaces) ?? ""
         return TraeRow(
             sessionID: sid,
-            model: s.model_name ?? "unknown",
+            model: rawModel.isEmpty ? "unknown" : rawModel,
             input: max(0, gross - cached),
             output: extra?.output_token ?? 0,
             cacheRead: extra?.cache_read_token ?? 0,
