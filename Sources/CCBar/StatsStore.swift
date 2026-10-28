@@ -840,6 +840,22 @@ final class StatsStore: @unchecked Sendable {
         return perUID > 0 ? (consumed, total) : nil
     }
 
+    /// 多账号余额明细（按槽位排序，仅含已拉到账单的账号）：Trae1/Trae2 各自的 consumed/total。
+    /// uid 来自各槽认领记录（trae_uid / trae_uid_2），账单在 trae_ent_<uid>。
+    func traeEntAccounts() -> [(slot: Int, consumed: Double, total: Double)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var result: [(slot: Int, consumed: Double, total: Double)] = []
+        for (slot, uidKey) in [(1, "trae_uid"), (2, "trae_uid_2")] {
+            let uid = metaGet(uidKey)
+            guard !uid.isEmpty else { continue }
+            let parts = metaGet("trae_ent_\(uid)").split(separator: "|")
+            guard parts.count == 2, let c = Double(parts[0]), let t = Double(parts[1]) else { continue }
+            result.append((slot: slot, consumed: c, total: t))
+        }
+        return result
+    }
+
     static func traeAuthFromMeta(_ raw: String) -> TraeAuth {
         guard let data = raw.data(using: .utf8),
               let auth = try? JSONDecoder().decode(TraeAuth.self, from: data) else { return TraeAuth() }

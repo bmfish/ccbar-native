@@ -168,6 +168,7 @@ final class InsightsViewModel: ObservableObject {
     @Published var creditsPeak = 0.0
     @Published var creditsPeakLabel = ""
     @Published var creditsEnt: (consumed: Double, total: Double)?
+    @Published var creditsAccounts: [(slot: Int, consumed: Double, total: Double)] = []
     // 费用页月度预算
     @Published var costMtd = 0.0
     @Published var monthDaysElapsed = 1
@@ -296,6 +297,8 @@ final class InsightsViewModel: ObservableObject {
         var creditsPeak = 0.0
         var creditsPeakLabel = ""
         var creditsEnt: (consumed: Double, total: Double)?
+        /// 分账号余额（Trae1/Trae2），仅多账号时有意义
+        var creditsAccounts: [(slot: Int, consumed: Double, total: Double)] = []
     }
 
     private nonisolated func compute(store: StatsStore, timelineDay: Date,
@@ -476,6 +479,7 @@ final class InsightsViewModel: ObservableObject {
             s.creditsPeakLabel = mf.string(from: peak.day)
         }
         s.creditsEnt = store.traeEntSummary()
+        s.creditsAccounts = store.traeEntAccounts()
         return s
     }
 
@@ -541,6 +545,7 @@ final class InsightsViewModel: ObservableObject {
         creditsPeak = s.creditsPeak
         creditsPeakLabel = s.creditsPeakLabel
         creditsEnt = s.creditsEnt
+        creditsAccounts = s.creditsAccounts
     }
 
     /// 今日会话统计：相邻请求间隔 > 30 分钟切新会话，返回（会话数, 平均时长分钟, 最长时长分钟）
@@ -2683,6 +2688,27 @@ struct CreditsPage: View {
                         }
                         .font(.system(size: 9).monospacedDigit())
                         .foregroundColor(Color(nsColor: Design.textMuted))
+                        // 多账号：分账号余额拆分（Trae1/Trae2），单账号时顶部大数已表达，不重复
+                        if vm.creditsAccounts.count > 1 {
+                            VStack(spacing: 3) {
+                                ForEach(vm.creditsAccounts, id: \.slot) { acc in
+                                    HStack(spacing: 6) {
+                                        Circle()
+                                            .fill(Color(nsColor: acc.slot == 1
+                                                        ? Design.successColor : .controlAccentColor))
+                                            .frame(width: 5, height: 5)
+                                        Text("Trae \(acc.slot)")
+                                            .foregroundColor(Color(nsColor: Design.textSecondary))
+                                        Spacer()
+                                        Text(L("剩余") + " "
+                                             + formatCredits(max(acc.total - acc.consumed, 0))
+                                             + " / " + formatCredits(acc.total))
+                                    }
+                                    .font(.system(size: 9).monospacedDigit())
+                                    .foregroundColor(Color(nsColor: Design.textMuted))
+                                }
+                            }
+                        }
                     }
                     Spacer(minLength: 4)
                     Text(daysLeft.map {
