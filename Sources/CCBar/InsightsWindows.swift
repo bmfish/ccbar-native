@@ -2688,7 +2688,7 @@ struct CreditsPage: View {
                         }
                         .font(.system(size: 9).monospacedDigit())
                         .foregroundColor(Color(nsColor: Design.textMuted))
-                        // 多账号：分账号余额拆分（Trae1/Trae2），单账号时顶部大数已表达，不重复
+                        // 多账号：分账号余额拆分（色点区分槽位），单账号时顶部大数已表达，不重复
                         if vm.creditsAccounts.count > 1 {
                             VStack(spacing: 3) {
                                 ForEach(vm.creditsAccounts, id: \.slot) { acc in
@@ -2697,8 +2697,6 @@ struct CreditsPage: View {
                                             .fill(Color(nsColor: acc.slot == 1
                                                         ? Design.successColor : .controlAccentColor))
                                             .frame(width: 5, height: 5)
-                                        Text("Trae \(acc.slot)")
-                                            .foregroundColor(Color(nsColor: Design.textSecondary))
                                         Spacer()
                                         Text(L("剩余") + " "
                                              + formatCredits(max(acc.total - acc.consumed, 0))
