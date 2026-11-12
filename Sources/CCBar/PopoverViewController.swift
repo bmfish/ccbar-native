@@ -145,12 +145,6 @@ final class PopoverViewModel: ObservableObject {
         return (Double(cur) - Double(p)) / Double(p) * 100
     }
 
-    /// 按已跑时长把今日用量折算到 24:00
-    var predictionText: String? {
-        guard let t = today, let h = workHours, h > 0.2 else { return nil }
-        let predicted = Double(t.total) / (h * 3600) * 86_400
-        return String(format: L("按当前速率到 24:00 约 %@"), Design.formatTokens(Int64(predicted)))
-    }
 }
 
 // MARK: - 宿主控制器（保持类名，AppDelegate 无感切换）
@@ -316,11 +310,6 @@ struct PopoverRootView: View {
                         Spacer()
                     }
                     .font(.system(size: 9).monospacedDigit())
-                } else if let prediction = vm.predictionText {
-                    Text(prediction)
-                        .font(.system(size: 10))
-                        .foregroundColor(Color(nsColor: Design.textMuted))
-                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .padding(.vertical, 9)

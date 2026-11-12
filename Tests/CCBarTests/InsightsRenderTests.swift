@@ -7,31 +7,6 @@ import SwiftUI
 @MainActor
 final class InsightsRenderTests: XCTestCase {
 
-    func testWeeklyReportGuard() throws {
-        // 二维码必须能出图（分享卡页脚用）
-        let qr = QRCodeMaker.image(for: "https://github.com/bmfish/ccbar-native", pointSize: 46)
-        XCTAssertNotNil(qr)
-        XCTAssertEqual(qr?.size.width, 46)
-
-        // 分享卡整卡离屏渲染必须出真实内容（防 ImageRenderer 式黑图）
-        let card = weeklyShareCard(
-            dateRange: "9月28日 ~ 10月4日", total: 123_000_000, reqs: 2345,
-            peak: 50_000_000,
-            trend: (0..<7).map { ChartEntry(label: "09-\($0)", value: Int64($0 + 1) * 100) })
-        let png = ShareCardRenderer.pngData(card, width: 460)
-        XCTAssertNotNil(png)
-        XCTAssertGreaterThan(png?.count ?? 0, 5000, "渲染出的 PNG 太小，疑似黑图/空白")
-        try png?.write(to: URL(fileURLWithPath: "/tmp/insights-page-weekly.png"))   // 本地目检用
-
-        // 窗口口径：周一生成上周一~周日（7..1），周二预览上一个完整周（8..2）
-        let monWindow = WeeklyReport.lastWeekWindow(now: Date(timeIntervalSince1970: 1_791_187_200))
-        XCTAssertEqual(monWindow.from, 7)
-        XCTAssertEqual(monWindow.to, 1)
-        let tueWindow = WeeklyReport.lastWeekWindow(now: Date(timeIntervalSince1970: 1_791_273_600))   // 2026-10-06（周二）
-        XCTAssertEqual(tueWindow.from, 8)
-        XCTAssertEqual(tueWindow.to, 2)
-    }
-
     func testPopoverHourlyAndRender() throws {
         // hourPoints：掐头（首个有数据的整点起线）+ 尾部补到当天最后、空洞补零
         var hist: [Int: Int64] = [0: 50, 23: 100]
@@ -290,7 +265,6 @@ final class InsightsRenderTests: XCTestCase {
         let pages: [(String, AnyView, CGFloat)] = [
             ("cost", AnyView(CostPage(vm: vm)), 700),
             ("insights", AnyView(InsightsPageView(vm: vm)), 1350),
-            ("share", AnyView(SharePage(vm: vm)), 1050),
             ("channels", AnyView(ChannelsPage(vm: vm)), 1250),
             ("timeline", AnyView(TimelinePage(vm: vm)), 500),
             ("credits", AnyView(CreditsPage(vm: vm)), 760),

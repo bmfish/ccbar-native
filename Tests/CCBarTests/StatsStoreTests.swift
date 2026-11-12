@@ -257,12 +257,6 @@ final class StatsStoreTests: XCTestCase {
         XCTAssertEqual(yst?.cacheRead, 500)
         XCTAssertEqual(yst?.cacheCreate, 100)
 
-        // 月度进度：mtd 至少含今日实时，天数口径合法
-        let mp = store.queryMonthProgress()
-        XCTAssertGreaterThanOrEqual(mp.mtd, 360)
-        XCTAssertGreaterThanOrEqual(mp.daysElapsed, 1)
-        XCTAssertTrue((28...31).contains(mp.daysInMonth))
-
         // 近 30 天使用量最大的模型
         let top = store.queryTopModel(days: 30)
         XCTAssertEqual(top?.model, "test-model")
@@ -335,15 +329,6 @@ final class StatsStoreTests: XCTestCase {
         XCTAssertEqual(store.queryWindowStats(daysAgoFrom: 3, daysAgoTo: 1)?.reqs, 2)
         // 窗口外（5 天前）不计入
         XCTAssertEqual(store.queryWindowStats(daysAgoFrom: 6, daysAgoTo: 4)?.total, 2000)
-
-        // 窗口日序列：日期升序、只含窗口内有数据的日期
-        let daily = store.queryDailyTokensBetween(daysAgoFrom: 5, daysAgoTo: 1)
-        XCTAssertEqual(daily.map(\.date), [
-            StatsStore.dayString(fromEpoch: StatsStore.localMidnight(5)),
-            StatsStore.dayString(fromEpoch: StatsStore.localMidnight(3)),
-            StatsStore.dayString(fromEpoch: StatsStore.localMidnight(1)),
-        ])
-        XCTAssertEqual(daily.map(\.token), [2000, 300, 30000])
     }
 
     func testModelMergeAndDBMerge() throws {

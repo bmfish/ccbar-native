@@ -1542,25 +1542,6 @@ final class StatsStore: @unchecked Sendable {
         return result
     }
 
-    /// 本月进度：月初至昨日累计 + 今日实时、已过天数、当月总天数
-    func queryMonthProgress() -> (mtd: Int64, daysElapsed: Int, daysInMonth: Int) {
-        lock.lock(); defer { lock.unlock() }
-        guard handle != nil else { return (0, 0, 30) }
-        let cal = Calendar.current
-        let now = Date()
-        let comps = cal.dateComponents([.year, .month], from: now)
-        let first = cal.date(from: comps)!
-        guard let nextMonth = cal.date(byAdding: .month, value: 1, to: first),
-              let lastDay = cal.date(byAdding: .day, value: -1, to: nextMonth) else { return (0, 0, 30) }
-        let fmt = Self.dayFormatter
-        let monthStats = dailyAggSum(fromDay: fmt.string(from: first),
-                                     toDay: fmt.string(from: lastDay)) ?? Self.zeroStats
-        let today = todayLive(now: now) ?? Self.zeroStats
-        let daysElapsed = max(cal.component(.day, from: now), 1)
-        let daysInMonth = cal.range(of: .day, in: .month, for: now)?.count ?? 30
-        return (monthStats.total + today.total, daysElapsed, daysInMonth)
-    }
-
     /// 模型编年史：每个模型的首用/末用 epoch 与总 token，按首用时间升序（全量不截断，模型数通常几十以内）
     func queryModelHistory() -> [(model: String, firstEpoch: Int64, lastEpoch: Int64, token: Int64)] {
         lock.lock(); defer { lock.unlock() }
@@ -1697,22 +1678,6 @@ final class StatsStore: @unchecked Sendable {
             refreshDailyAgg(fromEpoch: mn, toEpoch: mx + 86_400)
         }
         return (read, inserted)
-    }
-
-    /// 任意历史窗口（daysAgoFrom ~ daysAgoTo，均含）的日 token 序列，日期升序（不含今日实时）
-    func queryDailyTokensBetween(daysAgoFrom: Int, daysAgoTo: Int) -> [(date: String, token: Int64)] {
-        lock.lock(); defer { lock.unlock() }
-        guard handle != nil else { return [] }
-        var result: [(date: String, token: Int64)] = []
-        let from = Self.dayString(fromEpoch: Self.localMidnight(daysAgoFrom))
-        let to = Self.dayString(fromEpoch: Self.localMidnight(daysAgoTo))
-        forEachRowText("""
-        SELECT date, COALESCE(SUM(input + output + cache_create + cache_read), 0)
-        FROM daily_agg WHERE date >= '\(from)' AND date <= '\(to)' GROUP BY date ORDER BY date
-        """) { stmt in
-            result.append((String(cString: sqlite3_column_text(stmt, 0)), sqlite3_column_int64(stmt, 1)))
-        }
-        return result
     }
 
     /// 任意历史窗口（daysAgoFrom ~ daysAgoTo，均含）的完整统计，不含今日实时
