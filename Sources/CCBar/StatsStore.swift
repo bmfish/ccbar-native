@@ -648,10 +648,12 @@ final class StatsStore: @unchecked Sendable {
         let credential = traeCredential
         let credential2 = traeCredential2
         lock.unlock()
-        let primary = syncSlot(credential: credential, slot: 1,
+        // 客户端凭据自动发现（双客户端 storage.json；uid 去重）。文件小，读一次全槽共用
+        let clientAccounts = TraeClientCredentials.discover(now: now)
+        let primary = syncSlot(credential: credential, slot: 1, clientAccounts: clientAccounts,
                                now: now, interactive: interactive, force: force)
-        if !credential2.isEmpty {
-            _ = syncSlot(credential: credential2, slot: 2,
+        if !credential2.isEmpty || clientAccounts.count >= 2 {
+            _ = syncSlot(credential: credential2, slot: 2, clientAccounts: clientAccounts,
                          now: now, interactive: interactive, force: force)
         }
         return primary
@@ -659,19 +661,65 @@ final class StatsStore: @unchecked Sendable {
 
     /// 槽内 uid 记忆：uid 与凭据指纹绑定。同账号换 cookie 指纹不变 → 游标延续；
     /// 跨账号指纹必变 → uid 视为未知，走 90 天全量（UPSERT 幂等，无重复风险）。
+    /// 客户端通道（uid_cred = "client:<uid>"）uid 即身份，与手动凭据无关地保持稳定。
     private func slotUID(_ slot: Int, credential: String) -> String {
         let suffix = slot == 2 ? "_2" : ""
         let saved = metaGet("trae_uid\(suffix)")
         let savedCred = metaGet("trae_uid_cred\(suffix)")
+        if !saved.isEmpty, savedCred == "client:\(saved)" { return saved }
         guard !saved.isEmpty, savedCred == TraeSync.credentialIdentity(credential) else { return "" }
         return saved
     }
 
+    /// 槽位 ↔ 客户端账号绑定（须持锁）：已绑 uid 优先；未绑则认领一个未被另一槽占用的账号。
+    /// 只有一个客户端账号且已被槽 1 认领时，槽 2 返回 nil（回落手动凭据，避免双槽同账号重复拉）。
+    private func bindClientAccount(slot: Int, accounts: [ClientTraeAccount]) -> ClientTraeAccount? {
+        guard !accounts.isEmpty else { return nil }
+        let suffix = slot == 2 ? "_2" : ""
+        for key in ["trae_client_uid\(suffix)", "trae_uid\(suffix)"] {
+            let saved = metaGet(key)
+            if !saved.isEmpty, let acc = accounts.first(where: { $0.uid == saved }) { return acc }
+        }
+        let other = metaGet(slot == 2 ? "trae_client_uid" : "trae_client_uid_2")
+        let otherLegacy = metaGet(slot == 2 ? "trae_uid" : "trae_uid_2")
+        guard let acc = accounts.first(where: { $0.uid != other && $0.uid != otherLegacy }) else { return nil }
+        metaSet("trae_client_uid\(suffix)", value: acc.uid)
+        return acc
+    }
+
+    /// 客户端凭据通道：取可用 JWT（storage.json 新鲜 JWT → meta 续签缓存 → RT+DeviceProof 自续签）
+    /// 后拉一轮。authExpired = RT 也救不回来（客户端休眠过久），由调用方降级/提示。
+    private func runClientChannel(account: ClientTraeAccount, fromEpoch: Int64, toEpoch: Int64,
+                                  fetchEnt: Bool, earlyStopBefore: Int64?, now: Date) -> TraeSyncOutcome {
+        let nowEpoch = Int64(now.timeIntervalSince1970)
+        var jwt = account.jwt
+        var jwtExp = account.jwtExp
+        let cachedJWT = metaGet("trae_client_jwt_\(account.uid)")
+        let cachedExp = Int64(metaGet("trae_client_jwt_exp_\(account.uid)")) ?? 0
+        if cachedExp > jwtExp, !cachedJWT.isEmpty { jwt = cachedJWT; jwtExp = cachedExp }
+        if jwtExp <= nowEpoch + 120 {
+            guard let fresh = TraeClientCredentials.refresh(account: account, now: now) else {
+                return .authExpired
+            }
+            jwt = fresh.jwt
+            lock.lock()
+            metaSet("trae_client_jwt_\(account.uid)", value: fresh.jwt)
+            metaSet("trae_client_jwt_exp_\(account.uid)", value: String(fresh.jwtExp))
+            if let rt = fresh.refreshToken, !rt.isEmpty {
+                metaSet("trae_client_rt_\(account.uid)", value: rt)
+            }
+            lock.unlock()
+            ccLog("Trae 客户端凭据续签成功（uid \(account.uid)，客户端休眠自救）")
+        }
+        return TraeSync.run(jwt: jwt, fromEpoch: fromEpoch, toEpoch: toEpoch,
+                            fetchEnt: fetchEnt, earlyStopBefore: earlyStopBefore)
+    }
+
     /// 单账号同步：网络与解析复用 TraeSync，游标（水位/数据水位/余额）全部按 uid 记账，明细永不删除。
-    private func syncSlot(credential: String, slot: Int,
+    private func syncSlot(credential: String, slot: Int, clientAccounts: [ClientTraeAccount] = [],
                           now: Date, interactive: Bool, force: Bool) -> Bool {
         guard force || interactive || !Self.inNightSilence(now) else { return false }
-        guard !credential.isEmpty else { return false }
+        guard !credential.isEmpty || !clientAccounts.isEmpty else { return false }
         let minInterval = interactive ? Self.traeInteractiveMinInterval : Self.traeSyncMinInterval
         lock.lock()
         let delta = now.timeIntervalSince1970 - (lastTraeSyncAt[slot] ?? 0)
@@ -691,6 +739,8 @@ final class StatsStore: @unchecked Sendable {
         let dataWatermark = uid.isEmpty ? 0 : (Int64(metaGet("trae_data_watermark_\(uid)")) ?? 0)
         let auth = Self.traeAuthFromMeta(metaGet(authKey))
         let lastEntAt = Double(metaGet(entAtKey)) ?? 0
+        // 客户端账号绑定（读写绑定键须持锁；文件 IO 已在 syncTraeIfNeeded 完成）
+        let clientAcc = bindClientAccount(slot: slot, accounts: clientAccounts)
         lock.unlock()
         let fetchEnt = now.timeIntervalSince1970 - lastEntAt >= Self.traeEntMinInterval
 
@@ -709,12 +759,24 @@ final class StatsStore: @unchecked Sendable {
         let cutoff = dataWatermark - TraeAPI.earlyStopOverlapSeconds
         let earlyStopBefore: Int64? = dataWatermark > 0 && cutoff > fromEpoch ? cutoff : nil
 
-        // 网络（锁外）
+        // 网络（锁外）。凭据解析顺序：客户端通道（storage.json 自动发现）→ sessionid 链
         let startedAt = Date()
-        let (outcome, newAuth) = TraeSync.run(credential: credential, auth: auth,
+        var clientBound = false
+        var clientUID = ""
+        var outcome: TraeSyncOutcome
+        var newAuth: TraeAuth
+        if let acc = clientAcc {
+            clientBound = true
+            clientUID = acc.uid
+            outcome = runClientChannel(account: acc, fromEpoch: fromEpoch, toEpoch: toEpoch,
+                                       fetchEnt: fetchEnt, earlyStopBefore: earlyStopBefore, now: now)
+            newAuth = auth
+        } else {
+            (outcome, newAuth) = TraeSync.run(credential: credential, auth: auth,
                                               fromEpoch: fromEpoch, toEpoch: toEpoch,
                                               fetchEnt: fetchEnt,
                                               earlyStopBefore: earlyStopBefore)
+        }
         let elapsed = Date().timeIntervalSince(startedAt)
 
         // 入库 + 状态（锁内）。节流时间戳在所有出口都推进：
@@ -722,12 +784,16 @@ final class StatsStore: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         lastTraeSyncAt[slot] = now.timeIntervalSince1970
         metaSet(authKey, value: Self.traeAuthToMeta(newAuth))
-        // uid 认领：换签成功即解出账号 uid 并与凭据指纹绑定（uid 未变则无需重写）。
-        let resolvedUID = TraeSync.jwtUID(newAuth.jwt) ?? uid
+        // uid 认领：客户端通道 uid 即身份（JWT data.id）；sessionid 链由换签 JWT 解出并与凭据指纹绑定。
+        var resolvedUID = clientUID
+        if !clientBound {
+            resolvedUID = TraeSync.jwtUID(newAuth.jwt) ?? uid
+        }
         if !resolvedUID.isEmpty, resolvedUID != uid {
             metaSet(slot == 2 ? "trae_uid_2" : "trae_uid", value: resolvedUID)
             metaSet(slot == 2 ? "trae_uid_cred_2" : "trae_uid_cred",
-                    value: TraeSync.credentialIdentity(credential))
+                    value: clientBound ? "client:\(resolvedUID)"
+                        : TraeSync.credentialIdentity(credential))
         }
         switch outcome {
         case .success(let rows, let consumed, let total, let truncated):
@@ -761,12 +827,15 @@ final class StatsStore: @unchecked Sendable {
                 metaSet("trae_ent_\(resolvedUID)", value: "\(c)|\(t)")
                 metaSet(entAtKey, value: String(Int(now.timeIntervalSince1970)))
             }
-            sourceStatus[statusKey] = truncated ? "同步完成（窗口不完整，将续补）" : "已连接"
+            sourceStatus[statusKey] = truncated ? "同步完成（窗口不完整，将续补）"
+                : (clientBound ? "已连接（客户端凭据）" : "已连接")
         case .notConfigured:
             sourceStatus[statusKey] = "未配置登录"
         case .authExpired:
-            ccLog("Trae 槽\(slot) 登录已过期")
-            sourceStatus[statusKey] = "登录已过期，请重新提供 sessionid 或 X-Cloudide-Session"
+            ccLog("Trae 槽\(slot) 登录已过期\(clientBound ? "（客户端凭据）" : "")")
+            sourceStatus[statusKey] = clientBound
+                ? "客户端凭据已过期，请打开一次 Trae 客户端"
+                : "登录已过期，请重新提供 sessionid 或 X-Cloudide-Session"
         case .failed(let msg):
             ccLog("Trae 槽\(slot) 同步失败: \(msg)")
             sourceStatus[statusKey] = "同步失败：\(msg)"

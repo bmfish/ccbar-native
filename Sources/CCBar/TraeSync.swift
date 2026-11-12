@@ -154,10 +154,37 @@ enum TraeSync {
         case .failed(let msg): return (.failed(msg), auth)
         }
 
-        // ---- 2. 拉取会话明细（分页；窗口截断时二分补齐）----
-        // 缓存的 JWT 可能被服务端提前作废（如用户在别处重新登录，exp 未到但 1001），
-        // 此时强制清掉换一张再试一次，而不是把 cookie 误判成过期
+        // ---- 2/3. 拉取会话明细 + 积分汇总（1001 时强制换签重试一次）----
         var jwt2 = jwt
+        var outcome = fetchOutcome(jwt: jwt2, fromEpoch: fromEpoch, toEpoch: toEpoch,
+                                   fetchEnt: fetchEnt, earlyStopBefore: earlyStopBefore)
+        if case .authExpired = outcome {
+            // 强制换签（清 JWT；Session 也不行时 ensureJWT 内部会走 Login 重造）
+            auth.jwt = ""
+            auth.jwtExp = 0
+            switch ensureJWT(passportCookie: parsed.passportCookie, auth: &auth) {
+            case .success(let fresh):
+                jwt2 = fresh
+                outcome = fetchOutcome(jwt: jwt2, fromEpoch: fromEpoch, toEpoch: toEpoch,
+                                       fetchEnt: fetchEnt, earlyStopBefore: earlyStopBefore)
+            case .notConfigured, .authExpired: return (.authExpired, auth)
+            case .failed(let msg): return (.failed(msg), auth)
+            }
+        }
+        return (outcome, auth)
+    }
+
+    /// 用现成 JWT 完成一轮拉取（会话明细 + 积分汇总）。
+    /// 客户端凭据通道入口：JWT 由调用方保证新鲜；1001 → .authExpired 由调用方续签/降级。
+    static func run(jwt: String, fromEpoch: Int64, toEpoch: Int64, fetchEnt: Bool = true,
+                    earlyStopBefore: Int64? = nil) -> TraeSyncOutcome {
+        fetchOutcome(jwt: jwt, fromEpoch: fromEpoch, toEpoch: toEpoch,
+                     fetchEnt: fetchEnt, earlyStopBefore: earlyStopBefore)
+    }
+
+    /// 拉取核心：会话明细（分页/拆分/提前停）+ 官方账单口径积分汇总（失败不致命）
+    private static func fetchOutcome(jwt jwt2: String, fromEpoch: Int64, toEpoch: Int64,
+                                     fetchEnt: Bool, earlyStopBefore: Int64?) -> TraeSyncOutcome {
         let rows: [TraeRow]
         var truncated = false
         let fetchAll: () -> SessionsOutcome = {
@@ -171,27 +198,12 @@ enum TraeSync {
             rows = r
             truncated = wasTruncated
         case .failed(let msg):
-            return (.failed(msg), auth)
+            return .failed(msg)
         case .authExpired:
-            // 强制换签（清 JWT；Session 也不行时 ensureJWT 内部会走 Login 重造）
-            auth.jwt = ""
-            auth.jwtExp = 0
-            switch ensureJWT(passportCookie: parsed.passportCookie, auth: &auth) {
-            case .success(let fresh):
-                jwt2 = fresh
-            case .notConfigured, .authExpired: return (.authExpired, auth)
-            case .failed(let msg): return (.failed(msg), auth)
-            }
-            switch fetchAll() {
-            case .success(let r, let wasTruncated):
-                rows = r
-                truncated = wasTruncated
-            case .authExpired: return (.authExpired, auth)
-            case .failed(let msg): return (.failed(msg), auth)
-            }
+            return .authExpired
         }
 
-        // ---- 3. 积分汇总（官方账单口径；失败不致命，按小时节流由调用方控制）----
+        // 积分汇总（官方账单口径；失败不致命，按小时节流由调用方控制）
         var consumed: Double?
         var total: Double?
         if fetchEnt {
@@ -204,8 +216,7 @@ enum TraeSync {
                 total = s.total_amount
             }
         }
-
-        return (.success(rows: rows, consumed: consumed, total: total, truncated: truncated), auth)
+        return .success(rows: rows, consumed: consumed, total: total, truncated: truncated)
     }
 
     enum SessionsOutcome {
