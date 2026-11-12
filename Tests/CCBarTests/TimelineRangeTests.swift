@@ -35,22 +35,24 @@ final class TimelineRangeTests: XCTestCase {
         store.refreshDailyAgg(fromEpoch: StatsStore.localMidnight(3), toEpoch: StatsStore.localMidnight(0))
     }
 
-    func testDailyPresetAggregatesByHour() {
+    /// 单日预设（手动翻日）按小时聚合，同时加载逐笔供点开小时用
+    func testSingleDayPresetAggregatesByHour() {
         seed()
         let vm = InsightsViewModel()
         let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
-        vm.applyTimelinePreset(.daily, day: yesterday, store: store)
+        vm.applyTimelinePreset(.custom, day: yesterday, store: store)
 
-        XCTAssertEqual(vm.timelinePreset, .daily)
-        XCTAssertTrue(vm.timelinePreset.isSingleDay, "每日是单日视图")
+        XCTAssertEqual(vm.timelinePreset, .custom)
+        XCTAssertTrue(vm.timelinePreset.isSingleDay, "单日视图")
         // 昨日只有 01:00 一笔
         XCTAssertEqual(vm.timelineHourly.count, 1)
         XCTAssertEqual(vm.timelineHourly.first?.hour, 1)
         XCTAssertEqual(vm.timelineHourly.first?.reqs, 1)
         XCTAssertEqual(vm.timelineHourly.first?.credits ?? 0, 1.5, accuracy: 1e-9)
         XCTAssertEqual(vm.timelineHourly.first?.token, 15)
-        // 每日视图不加载逐笔明细
-        XCTAssertTrue(vm.timeline.isEmpty)
+        // 逐笔明细随单日一起加载（点击小时才展示），默认全部折叠
+        XCTAssertEqual(vm.timeline.count, 1)
+        XCTAssertTrue(vm.timelineExpandedHours.isEmpty)
         XCTAssertTrue(vm.timelineDaily.isEmpty)
     }
 
@@ -64,6 +66,12 @@ final class TimelineRangeTests: XCTestCase {
         // 今日小时聚合同时可用（1 点、2 点各一笔）
         XCTAssertEqual(vm.timelineHourly.map(\.hour), [1, 2])
         XCTAssertEqual(vm.timelineHourly.reduce(0) { $0 + $1.credits }, 3.5, accuracy: 1e-9)
+        // 小时默认全折叠，点击展开/收起
+        XCTAssertTrue(vm.timelineExpandedHours.isEmpty)
+        vm.toggleTimelineHour(1)
+        XCTAssertEqual(vm.timelineExpandedHours, [1])
+        vm.toggleTimelineHour(1)
+        XCTAssertTrue(vm.timelineExpandedHours.isEmpty)
     }
 
     func testD30PresetUsesDayDimension() {
@@ -82,8 +90,8 @@ final class TimelineRangeTests: XCTestCase {
         XCTAssertEqual(todayRows.first?.reqs, 2)
         XCTAssertEqual(todayRows.first?.credits ?? 0, 3.5, accuracy: 1e-9)
         XCTAssertEqual(todayRows.first?.token, 180)
-        // 默认展开最近一天
-        XCTAssertEqual(vm.timelineExpandedDays, [today])
+        // 多日默认全折叠
+        XCTAssertTrue(vm.timelineExpandedDays.isEmpty)
     }
 
     func testD7AndAllPresetsCoverSameDailyData() {

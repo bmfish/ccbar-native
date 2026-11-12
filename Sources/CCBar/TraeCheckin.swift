@@ -129,11 +129,15 @@ enum TraeCheckin {
             return TraeCheckinStatus(enable: false, checkedIn: false, credits: 0, extraCredits: 0,
                                      code: nil, message: fallbackMessage)
         }
+        // 2026-11 实证：真实"今日已签"标志是 did_checked_in；checked_in 并不可靠
+        // （见过 checked_in=false + did_checked_in=true，此时 claim 返回 9095 已签到）
         let checkedIn = (obj["checked_in"] as? Bool)
             ?? ((obj["checked_in"] as? Int).map { $0 != 0 }) ?? false
+        let didCheckedIn = (obj["did_checked_in"] as? Bool)
+            ?? ((obj["did_checked_in"] as? Int).map { $0 != 0 }) ?? false
         return TraeCheckinStatus(
             enable: (obj["enable"] as? Bool) ?? false,
-            checkedIn: checkedIn,
+            checkedIn: checkedIn || didCheckedIn,
             credits: (obj["credits"] as? Double) ?? ((obj["credits"] as? Int).map(Double.init)) ?? 0,
             extraCredits: (obj["extra_credits"] as? Double)
                 ?? ((obj["extra_credits"] as? Int).map(Double.init)) ?? 0,

@@ -653,8 +653,8 @@ final class StatsStore: @unchecked Sendable {
 
     /// Trae 用量同步。网络在锁外跑（最长 ~15s×3），入库短临界区。
     /// AppDelegate 定时调用；interactive=true 用于用户点开弹窗的主动刷新（间隔更短）。
-    /// 夜间静默（0:00–9:00 本地时间）只限定时器驱动：定时器不同步、签到也不跑，
-    /// 凌晨会话由 9 点后第一次同步的"水位-2 天"窗口覆盖，不会丢数；
+    /// 夜间静默（0:00–9:00 本地时间）只限定时器驱动：定时器不同步；签到另有起始小时设置，
+    /// 凌晨会话由首次同步的"水位-2 天"窗口覆盖，不会丢数；
     /// 点弹窗（interactive）不受静默限制，随时可查。
     /// force=true（设置页"立即同步"）：跳过静默与节流，用户明确操作即时生效。
     /// 返回是否真的发起了同步；调用方据此决定要不要补查今日（静默/无凭据/节流时跳过）。
@@ -906,11 +906,13 @@ final class StatsStore: @unchecked Sendable {
     // MARK: - Trae 每日签到（水位节流 + 失败重试 + 记录）
 
     /// 每日签到：水位 trae_checkin_day_<uid>，失败记 trae_checkin_fail_<uid>（1 小时内不重试，不占水位）。
-    /// 自动路径只跑 09:00 后（老规矩：夜间静默不签）且受设置开关控制；interactive/force 绕过。
+    /// 自动路径只跑设置的小时（默认 09:00）之后且受开关控制；interactive/force 绕过。
+    /// 奖励数取 status 的 credits + extra_credits（claim 成功响应本身不带金额）。
     @discardableResult
     func traeCheckinIfNeeded(now: Date = Date(), interactive: Bool = false, force: Bool = false) -> Bool {
         if !force, UserDefaults.standard.object(forKey: "traeCheckinEnabled") as? Bool == false { return false }
-        if !force, !interactive, Calendar.current.component(.hour, from: now) < 9 { return false }
+        let startHour = (UserDefaults.standard.object(forKey: "traeCheckinHour") as? Int) ?? 9
+        if !force, !interactive, Calendar.current.component(.hour, from: now) < startHour { return false }
         let accounts = TraeClientCredentials.discover(now: now)
         guard !accounts.isEmpty else { return false }
         let today = Self.dayFormatter.string(from: now)
@@ -936,8 +938,19 @@ final class StatsStore: @unchecked Sendable {
                 acted = true
                 continue
             }
+            // 今日奖励金额（status 给出；claim 响应没有金额字段）
+            let reward = st.credits + st.extraCredits
             if st.checkedIn {
                 lock.lock(); metaSet("trae_checkin_day_\(acc.uid)", value: today); lock.unlock()
+                // 当日首次确认已签（可能由客户端完成）：补记一笔真实奖励，避免流水全是 +0
+                if done != today {
+                    appendCheckinLog(uid: acc.uid, ok: true, credits: reward,
+                                     message: st.message.isEmpty ? "今日已签" : st.message)
+                    ccLog("Trae 签到 uid \(acc.uid): 今日已签，奖励 +\(reward)")
+                } else {
+                    // 旧版 claim 无金额可解析，当日记录可能记成 +0；手动触发时按 status 修正
+                    fixupCheckinLog(uid: acc.uid, day: today, credits: reward)
+                }
                 continue
             }
             let cl = TraeCheckin.claim(jwt: acc.jwt, uid: acc.uid, deviceID: acc.deviceID)
@@ -949,8 +962,8 @@ final class StatsStore: @unchecked Sendable {
                 metaSet("trae_checkin_fail_\(acc.uid)", value: String(nowEpoch))
             }
             lock.unlock()
-            appendCheckinLog(uid: acc.uid, ok: cl.ok, credits: cl.credits, message: cl.message)
-            ccLog("Trae 签到 uid \(acc.uid): \(cl.ok ? "成功 +\(cl.credits)" : "失败 \(cl.message)")")
+            appendCheckinLog(uid: acc.uid, ok: cl.ok, credits: cl.ok ? reward : 0, message: cl.message)
+            ccLog("Trae 签到 uid \(acc.uid): \(cl.ok ? "成功 +\(reward)" : "失败 \(cl.message)")")
             acted = true
         }
         return acted
@@ -982,6 +995,32 @@ final class StatsStore: @unchecked Sendable {
         if log.count > 50 { log = Array(log.suffix(50)) }
         if let data = try? JSONSerialization.data(withJSONObject: log) {
             metaSet("trae_checkin_log", value: String(data: data, encoding: .utf8) ?? "[]")
+        }
+    }
+
+    /// 修正当日签到记录：旧版 status 未识别 did_checked_in，会重复 claim 并记成 +0。
+    /// 保留当日最后一条成功记录并按 status 金额补上奖励，删掉同日重复的 +0 成功记录。
+    private func fixupCheckinLog(uid: String, day: String, credits: Double) {
+        lock.lock(); defer { lock.unlock() }
+        let raw = metaGet("trae_checkin_log")
+        guard !raw.isEmpty, let data = raw.data(using: .utf8),
+              var log = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+        let todayIdx = log.indices.filter { i in
+            guard (log[i]["uid"] as? String) == uid, (log[i]["ok"] as? Bool) == true,
+                  let t = log[i]["t"] as? Int else { return false }
+            return Self.dayFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(t))) == day
+        }
+        guard let keep = todayIdx.last else { return }
+        var changed = false
+        if credits > 0, ((log[keep]["credits"] as? Double) ?? 0) == 0 {
+            log[keep]["credits"] = credits
+            changed = true
+        }
+        let dupes = todayIdx.dropLast().filter { ((log[$0]["credits"] as? Double) ?? 0) == 0 }
+        for i in dupes.sorted(by: >) { log.remove(at: i) }
+        if !dupes.isEmpty { changed = true }
+        if changed, let out = try? JSONSerialization.data(withJSONObject: log) {
+            metaSet("trae_checkin_log", value: String(data: out, encoding: .utf8) ?? "[]")
         }
     }
 
