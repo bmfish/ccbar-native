@@ -54,6 +54,8 @@ final class PopoverViewModel: ObservableObject {
     @Published var todayHourly: [HourPoint] = []
     /// 今日积分消耗（Trae 口径；今天没有积分使用时为 0，不显示）
     @Published var todayCredits: Double = 0
+    /// 今日签到获得的积分（>0 时在今日卡显示「已签 ✓ +N」徽标）
+    @Published var todayCheckinCredits: Double = 0
     /// 趋势卡积分小字（trae 口径；0 不显示）
     @Published var yesterdayCredits: Double = 0
     @Published var weekCredits: Double = 0
@@ -105,6 +107,7 @@ final class PopoverViewModel: ObservableObject {
             todayHourly = Self.hourPoints(from: e.hourly)
             todayCredits = e.credits
             creditsByAccount = e.creditsByAccount
+            todayCheckinCredits = e.checkinCredits
         }
         // 昨日/周/月/历史 sparkline、环比、占比读每日缓存
         if let e = c.getCachedTrendExtras() {
@@ -274,6 +277,15 @@ struct PopoverRootView: View {
                         Text("\(SettingsViewModel.fmtCredits(vm.todayCredits)) " + L("积分"))
                             .font(.system(size: 11, weight: .medium).monospacedDigit())
                             .foregroundColor(Color(nsColor: Design.textSecondary))
+                    }
+                    // 今日签到徽标（签到成功过才出现，不占常驻位置）
+                    if vm.todayCheckinCredits > 0 {
+                        Text("✓ +\(SettingsViewModel.fmtCredits(vm.todayCheckinCredits))")
+                            .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                            .foregroundColor(Color(nsColor: Design.successColor))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color(nsColor: Design.successColor).opacity(0.14)))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -170,6 +170,8 @@ struct TodayExtras {
     var credits: Double = 0
     /// 今日各账号积分（按槽位；仅双账号且余额总额非 0 时非空）
     var creditsByAccount: [(slot: Int, credits: Double)] = []
+    /// 今日签到获得积分（>0 时弹窗显示「已签 ✓ +N」徽标）
+    var checkinCredits: Double = 0
 }
 
 /// 趋势卡的历史类数据：每日只算一次（首个 updateData 或跨天），与 Windows 版一致

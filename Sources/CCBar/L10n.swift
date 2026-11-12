@@ -287,6 +287,13 @@ let L10nEN: [String: String] = [
     "本月消耗": "Spent this month",
     "本月净额": "Net this month",
     "当前余额": "Balance",
+    // 获得来源 / 到期提醒
+    "获得来源": "Gain sources",
+    "每日签到": "Daily check-in",
+    "暂无获得记录：签到成功后逐笔列在这里": "No gains yet: check-in rewards will be listed here",
+    "暂无临期积分": "No credits expiring soon",
+    "14 天内有权益包到期时在这里提醒": "Packs expiring within 14 days appear here",
+    "「%@」包 · %@ 失效": "\"%@\" pack · expires %@",
     "未发现客户端账号：打开一次 Trae 客户端并登录即可自动接入；也可在设置中手动粘贴凭据": "No client account found: open and log in to the Trae client once to connect automatically, or paste credentials manually in Settings",
     "今日积分": "Today",
     "积分余额（官方账单）": "Credit Balance (official)",

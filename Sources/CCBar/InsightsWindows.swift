@@ -168,6 +168,10 @@ final class InsightsViewModel: ObservableObject {
     // 积分账本四口径（余额在 creditsEnt；本月获得 = 签到记录聚合）
     @Published var creditsMonthConsume = 0.0
     @Published var creditsMonthGain = 0.0
+    /// 获得来源（近 30 天签到记录，时间倒序）
+    @Published var creditGains: [(t: Int, label: String, credits: Double)] = []
+    /// 最近到期的权益包（14 天内；积分页高亮卡）
+    @Published var expiringPack: (name: String, remaining: Double, days: Int)?
     @Published var creditsEnt: (consumed: Double, total: Double)?
     @Published var creditsAccounts: [(slot: Int, consumed: Double, total: Double)] = []
     @Published var todayCreditsByAccount: [(slot: Int, credits: Double)] = []
@@ -341,6 +345,8 @@ final class InsightsViewModel: ObservableObject {
         var creditsPeakLabel = ""
         var creditsMonthConsume = 0.0
         var creditsMonthGain = 0.0
+        var creditGains: [(t: Int, label: String, credits: Double)] = []
+        var expiringPack: (name: String, remaining: Double, days: Int)?
         var creditsEnt: (consumed: Double, total: Double)?
         /// 分账号余额（Trae1/Trae2），仅多账号时有意义
         var creditsAccounts: [(slot: Int, consumed: Double, total: Double)] = []
@@ -510,6 +516,30 @@ final class InsightsViewModel: ObservableObject {
                 rec["ok"] as? Bool == true && (rec["t"] as? Int ?? 0) >= Int(monthStartEpoch)
             }
             .reduce(0.0) { $0 + ($1["credits"] as? Double ?? 0) }
+        // 获得来源（近 30 天）：签到记录逐笔列出（真实事件，不伪造权益包发放）
+        let gainCutoff = Int(Date().timeIntervalSince1970) - 30 * 86_400
+        s.creditGains = store.checkinLog()
+            .filter { rec in
+                rec["ok"] as? Bool == true && (rec["t"] as? Int ?? 0) >= gainCutoff
+            }
+            .compactMap { rec -> (t: Int, label: String, credits: Double)? in
+                guard let t = rec["t"] as? Int else { return nil }
+                let uid = rec["uid"] as? String ?? ""
+                let label = L("每日签到") + (uid.isEmpty ? "" : " · \(uid.prefix(4))")
+                return (t: t, label: label, credits: rec["credits"] as? Double ?? 0)
+            }
+            .sorted { $0.t > $1.t }
+        // 最近到期权益包（14 天内，跨账号取最紧急的一个）
+        let nowEpoch = Int(Date().timeIntervalSince1970)
+        for acc in TraeClientCredentials.discover() {
+            for pack in store.traePacksForUID(acc.uid) {
+                let days = Int(ceil(Double(pack.expire - Int64(nowEpoch)) / 86_400))
+                guard days <= 14 else { continue }
+                if s.expiringPack == nil || days < s.expiringPack!.days {
+                    s.expiringPack = (name: pack.name, remaining: pack.remaining ?? 0, days: max(days, 1))
+                }
+            }
+        }
         s.creditsAccounts = store.traeEntAccounts()
         s.todayCreditsByAccount = store.queryTodayCreditsByAccount()
         return s
@@ -566,6 +596,8 @@ final class InsightsViewModel: ObservableObject {
         creditsPeakLabel = s.creditsPeakLabel
         creditsMonthConsume = s.creditsMonthConsume
         creditsMonthGain = s.creditsMonthGain
+        creditGains = s.creditGains
+        expiringPack = s.expiringPack
         creditsEnt = s.creditsEnt
         creditsAccounts = s.creditsAccounts
         todayCreditsByAccount = s.todayCreditsByAccount
@@ -2419,6 +2451,12 @@ struct CreditsPage: View {
                     ledgerCard(L("当前余额"), remaining, color: Design.dataHighlightColor)
                 }
 
+                // 获得来源（近 30 天签到）+ 到期提醒
+                HStack(alignment: .top, spacing: 14) {
+                    gainsCard
+                    expiringCard.frame(width: 300)
+                }
+
                 HStack(spacing: 14) {
                     creditsStatCard(L("近 7 天"), vm.credits7, prev: vm.creditsPrev7,
                                     series: Array(vm.creditsDaily.suffix(7)),
@@ -2448,6 +2486,88 @@ struct CreditsPage: View {
     private var dailyAvg: Double { vm.credits30 / 30 }
 
     /// 账本四口径小卡
+    /// 获得来源卡（近 30 天签到记录逐笔；无记录时给引导）
+    private var gainsCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(L("获得来源") + "（" + L("近 30 天") + "）")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+                .padding(.bottom, 6)
+            if vm.creditGains.isEmpty {
+                Text(L("暂无获得记录：签到成功后逐笔列在这里"))
+                    .font(.system(size: 12))
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(Array(vm.creditGains.prefix(8).enumerated()), id: \.offset) { _, gain in
+                    HStack(spacing: 10) {
+                        Text(Self.gainDateText(gain.t))
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundColor(Color(nsColor: Design.textMuted))
+                            .frame(width: 72, alignment: .leading)
+                        Text(gain.label)
+                            .font(.system(size: 12))
+                            .foregroundColor(Color(nsColor: Design.textPrimary))
+                        Spacer()
+                        Text("+\(SettingsViewModel.fmtCredits(gain.credits))")
+                            .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                            .foregroundColor(Color(nsColor: Design.successColor))
+                    }
+                    .padding(.vertical, 5)
+                    .overlay(alignment: .top) {
+                        Rectangle().fill(Color(nsColor: Design.separatorColor)).frame(height: 1)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .fill(Color(nsColor: Design.cardFillDark)))
+        .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .strokeBorder(Color(nsColor: Design.cardBorderDark), lineWidth: 0.5))
+    }
+
+    /// 到期提醒高亮卡（14 天内最近到期的权益包；无则是静默占位）
+    private var expiringCard: some View {
+        Group {
+            if let pack = vm.expiringPack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("⏳ " + String(format: L("%d 天后到期 %.0f 积分"), pack.days, pack.remaining))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Color(nsColor: Design.successColor))
+                    Text(String(format: L("「%@」包 · %@ 失效"),
+                                pack.name,
+                                Self.gainDateText(Int(Date().timeIntervalSince1970) + (pack.days - 1) * 86_400)))
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(L("暂无临期积分"))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                    Text(L("14 天内有权益包到期时在这里提醒"))
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .fill(Color(nsColor: Design.successColor).opacity(vm.expiringPack == nil ? 0.04 : 0.10)))
+        .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .strokeBorder(Color(nsColor: vm.expiringPack == nil
+                                ? Design.cardBorderDark : Design.successColor), lineWidth: 1))
+    }
+
+    private static func gainDateText(_ epoch: Int) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "MM-dd"
+        return f.string(from: Date(timeIntervalSince1970: TimeInterval(epoch)))
+    }
+
     private func ledgerCard(_ title: String, _ value: Double, color: NSColor, prefix: String = "") -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)

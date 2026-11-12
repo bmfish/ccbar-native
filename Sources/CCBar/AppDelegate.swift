@@ -490,9 +490,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     static func makeTodayExtras(store: StatsStore) -> TodayExtras {
         var accounts = store.queryTodayCreditsByAccount()
         if let ent = store.traeEntSummary(), ent.total <= 0 { accounts = [] }
+        let dayStart = Int(StatsStore.localMidnight(0))
+        let checkin = store.checkinLog()
+            .filter { $0["ok"] as? Bool == true && ($0["t"] as? Int ?? 0) >= dayStart }
+            .reduce(0.0) { $0 + ($1["credits"] as? Double ?? 0) }
         return TodayExtras(hourly: store.queryHourHistogram(days: 0),
                            credits: store.queryTodayCredits(),
-                           creditsByAccount: accounts)
+                           creditsByAccount: accounts,
+                           checkinCredits: checkin)
     }
 
     // MARK: - Trae 后台同步（独立队列）
