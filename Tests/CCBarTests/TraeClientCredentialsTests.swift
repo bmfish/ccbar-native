@@ -27,7 +27,7 @@ final class TraeClientCredentialsTests: XCTestCase {
     private static func tcEncrypt(_ plaintext: String) -> String {
         let random = (0..<32).map { _ in UInt8.random(in: 0...255) }
         let pepper = zip(TraeClientCredentials.woeT, TraeClientCredentials.voeT).map { $0 ^ $1 }
-        let h1 = sha512(Data(random) + Data(pepper))
+        let h1 = sha512(Data(random))          // n = SHA512(random) || pepper
         let c = sha512(h1 + Data(pepper))
         let key = Array(c[0..<16]), iv = Array(c[16..<32])
         let body = Array(plaintext.utf8)

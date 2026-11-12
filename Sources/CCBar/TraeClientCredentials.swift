@@ -218,8 +218,8 @@ enum TraeClientCredentials {
         let random = Array(bytes[6..<38])
         let cipher = Array(bytes[38...])
         let pepper = zip(woeT, voeT).map { $0 ^ $1 }
-        // deriveKeys：SHA512(random) || pepper → SHA512 → 前 32B 切 key/iv
-        let h1 = Self.sha512(Data(random) + Data(pepper))
+        // deriveKeys：n = SHA512(random) || pepper → c = SHA512(n) → 前 32B 切 key/iv
+        let h1 = Self.sha512(Data(random))
         let c = Self.sha512(h1 + Data(pepper))
         let key = Array(c[0..<16]), iv = Array(c[16..<32])
         let padded = try Self.aesCBCDecrypt(key: key, iv: iv, data: cipher)

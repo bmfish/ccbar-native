@@ -789,12 +789,22 @@ final class StatsStore: @unchecked Sendable {
         if !clientBound {
             resolvedUID = TraeSync.jwtUID(newAuth.jwt) ?? uid
         }
-        if !resolvedUID.isEmpty, resolvedUID != uid {
-            metaSet(slot == 2 ? "trae_uid_2" : "trae_uid", value: resolvedUID)
-            metaSet(slot == 2 ? "trae_uid_cred_2" : "trae_uid_cred",
-                    value: clientBound ? "client:\(resolvedUID)"
-                        : TraeSync.credentialIdentity(credential))
+        let uidKey = slot == 2 ? "trae_uid_2" : "trae_uid"
+        let credKey = slot == 2 ? "trae_uid_cred_2" : "trae_uid_cred"
+        if clientBound {
+            // 客户端通道：凭据指纹恒为 client:<uid>，通道切换时必须翻转（uid 未变也要写）
+            if !resolvedUID.isEmpty,
+               resolvedUID != uid || metaGet(credKey) != "client:\(resolvedUID)" {
+                metaSet(uidKey, value: resolvedUID)
+                metaSet(credKey, value: "client:\(resolvedUID)")
+            }
+        } else if !resolvedUID.isEmpty, resolvedUID != uid {
+            metaSet(uidKey, value: resolvedUID)
+            metaSet(credKey, value: TraeSync.credentialIdentity(credential))
         }
+        // 本轮使用的凭据通道（设置页/账号卡展示来源用）
+        metaSet(slot == 2 ? "trae_channel_2" : "trae_channel",
+                value: clientBound ? "client" : "sessionid")
         switch outcome {
         case .success(let rows, let consumed, let total, let truncated):
             upsertTraeRows(rows, account: resolvedUID)
