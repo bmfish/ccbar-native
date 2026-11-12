@@ -12,6 +12,7 @@ import UniformTypeIdentifiers
 // MARK: - 页面定义
 
 enum InsightsPage: String, CaseIterable, Identifiable {
+    case checkin   = "签到"
     case insights   = "洞察"
     case credits    = "积分"
     case timeline   = "流水"
@@ -23,6 +24,7 @@ enum InsightsPage: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
+        case .checkin: return "checkmark.seal"
         case .insights: return "sparkles"
         case .credits: return "bolt.circle"
         case .timeline: return "list.bullet.rectangle"
@@ -166,6 +168,10 @@ final class InsightsViewModel: ObservableObject {
     @Published var creditsEnt: (consumed: Double, total: Double)?
     @Published var creditsAccounts: [(slot: Int, consumed: Double, total: Double)] = []
     @Published var todayCreditsByAccount: [(slot: Int, credits: Double)] = []
+    // 签到页（Trae 账号卡 + 签到开关 + 记录）
+    @Published var checkinAccounts: [CheckinAccountInfo] = []
+    @Published var checkinLog: [(t: Int, uid: String, ok: Bool, credits: Double, msg: String)] = []
+    @Published var checkinBusy = false
     // 费用页月度预算
     @Published var costMtd = 0.0
     @Published var monthDaysElapsed = 1
@@ -221,6 +227,54 @@ final class InsightsViewModel: ObservableObject {
         let day = Calendar.current.startOfDay(for: day)
         timelineDay = day
         timeline = store.queryTimeline(day: day)
+    }
+
+    /// 签到页账号卡
+    struct CheckinAccountInfo: Identifiable, Equatable {
+        let uid: String
+        let app: String
+        let jwtDays: Int
+        let balance: Double?
+        let checkedToday: Bool
+        var id: String { uid }
+        var maskedUID: String {
+            guard uid.count > 8 else { return uid }
+            return "\(uid.prefix(4))****\(uid.suffix(4))"
+        }
+    }
+
+    /// 签到页数据：客户端账号发现（文件小，主线程读无压力）+ meta 水位/记录
+    func loadCheckinState() {
+        let now = Date()
+        let store = AppDelegate.shared?.store
+        checkinAccounts = TraeClientCredentials.discover(now: now).map { acc in
+            CheckinAccountInfo(
+                uid: acc.uid,
+                app: acc.sourceApp,
+                jwtDays: max(0, Int((Double(acc.jwtExp) - now.timeIntervalSince1970) / 86400)),
+                balance: store?.traeEntForUID(acc.uid).map { $0.total - $0.consumed },
+                checkedToday: store?.checkinDoneToday(uid: acc.uid, now: now) ?? false)
+        }
+        checkinLog = (store?.checkinLog() ?? []).compactMap { dict in
+            guard let t = dict["t"] as? Int, let uid = dict["uid"] as? String else { return nil }
+            return (t: t, uid: uid,
+                    ok: dict["ok"] as? Bool ?? false,
+                    credits: dict["credits"] as? Double ?? 0,
+                    msg: dict["msg"] as? String ?? "")
+        }.sorted { $0.t < $1.t }
+    }
+
+    /// 立即签到（force：绕过时钟门/开关/水位，逐账号 status→claim）后刷新
+    func checkinNow() {
+        guard !checkinBusy else { return }
+        checkinBusy = true
+        Task.detached { [weak self] in
+            AppDelegate.shared?.store.traeCheckinIfNeeded(interactive: true, force: true)
+            await MainActor.run { [weak self] in
+                self?.loadCheckinState()
+                self?.checkinBusy = false
+            }
+        }
     }
 
     private struct Snapshot {
@@ -614,6 +668,7 @@ struct InsightsRootView: View {
     @ViewBuilder
     private var detail: some View {
         switch pageBinding.wrappedValue {
+        case .checkin: TraeCheckinPage(vm: vm)
         case .cost: CostPage(vm: vm)
         case .insights: InsightsPageView(vm: vm)
         case .channels: ChannelsPage(vm: vm)
@@ -1737,6 +1792,148 @@ enum ShareCardRenderer {
     }
 }
 
+
+// MARK: - 签到页（Trae 账号卡 + 签到）
+
+struct TraeCheckinPage: View {
+    @ObservedObject var vm: InsightsViewModel
+    @AppStorage("traeCheckinEnabled") private var checkinEnabled = true
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                sectionTitle(L("Trae 账号"))
+                if vm.checkinAccounts.isEmpty {
+                    hintCard(L("未发现客户端账号：打开一次 Trae 客户端并登录即可自动接入；也可在设置中手动粘贴凭据"))
+                }
+                ForEach(vm.checkinAccounts) { acc in
+                    accountCard(acc)
+                }
+
+                Divider().overlay(Color.white.opacity(0.12))
+
+                sectionTitle(L("签到"))
+                HStack(spacing: 12) {
+                    Toggle(L("每日自动签到"), isOn: $checkinEnabled)
+                        .toggleStyle(.switch)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(Color(nsColor: Design.textPrimary))
+                    Text(L("每早 9 点后自动 · 失败 1 小时内重试"))
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                    Spacer()
+                    Button(vm.checkinBusy ? L("签到中…") : L("立即签到")) { vm.checkinNow() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(vm.checkinBusy || vm.checkinAccounts.isEmpty)
+                }
+
+                if !vm.checkinLog.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(vm.checkinLog.suffix(12).reversed().enumerated()), id: \.offset) { _, rec in
+                            HStack(spacing: 10) {
+                                Text(Self.timeText(rec.t))
+                                    .font(.system(size: 11).monospacedDigit())
+                                    .foregroundColor(Color(nsColor: Design.textMuted))
+                                    .frame(width: 120, alignment: .leading)
+                                Text(rec.uid)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(Color(nsColor: Design.textSecondary))
+                                    .lineLimit(1)
+                                Spacer()
+                                if rec.ok {
+                                    Text(String(format: L("+%.0f 积分"), rec.credits))
+                                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                                        .foregroundColor(Color(nsColor: Design.successColor))
+                                } else {
+                                    Text(rec.msg)
+                                        .font(.system(size: 11))
+                                        .foregroundColor(Color(nsColor: Design.warningColor))
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                    }
+                    .padding(12)
+                    .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+                        .fill(Color(nsColor: Design.cardFillDark)))
+                    .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+                        .strokeBorder(Color(nsColor: Design.cardBorderDark), lineWidth: 0.5))
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .onAppear { vm.loadCheckinState() }
+    }
+
+    private func sectionTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(Color(nsColor: Design.textMuted))
+    }
+
+    private func hintCard(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundColor(Color(nsColor: Design.textMuted))
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+                .fill(Color(nsColor: Design.cardFillDark)))
+            .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+                .strokeBorder(Color(nsColor: Design.cardBorderDark), lineWidth: 0.5))
+    }
+
+    private func accountCard(_ acc: InsightsViewModel.CheckinAccountInfo) -> some View {
+        HStack(spacing: 14) {
+            Circle()
+                .fill(Color(nsColor: Design.successColor))
+                .frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(acc.maskedUID)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Color(nsColor: Design.textPrimary))
+                Text("\(acc.app) · " + L("客户端凭据 · 自动续签"))
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+            }
+            Spacer()
+            if let balance = acc.balance {
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(L("余额"))
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                    Text(SettingsViewModel.fmtCredits(balance))
+                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                        .foregroundColor(Color(nsColor: Design.dataHighlightColor))
+                }
+            }
+            badge(text: acc.checkedToday ? L("今日已签 ✓") : L("今日未签"),
+                  positive: acc.checkedToday)
+            badge(text: String(format: L("JWT 余 %d 天"), acc.jwtDays), positive: acc.jwtDays >= 3)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .fill(Color(nsColor: Design.cardFillDark)))
+        .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .strokeBorder(Color(nsColor: Design.cardBorderDark), lineWidth: 0.5))
+    }
+
+    private func badge(text: String, positive: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(Color(nsColor: positive ? Design.successColor : Design.warningColor))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Color(nsColor: positive ? Design.successColor : Design.warningColor).opacity(0.12)))
+    }
+
+    private static func timeText(_ epoch: Int) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "MM-dd HH:mm"
+        return f.string(from: Date(timeIntervalSince1970: TimeInterval(epoch)))
+    }
+}
 
 // MARK: - 渠道页
 

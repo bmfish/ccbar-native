@@ -100,6 +100,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         let defaults = UserDefaults.standard
         let today = StatsStore.shortDateFormatter.string(from: Date())
 
+        // meta 孤儿键清理（账号移除后的签到水位/续签缓存），轻量，随日家务跑
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            self?.store.pruneTraeMetaOrphans()
+        }
+
         if defaults.string(forKey: "lastAutoBackupDate") != today {
             let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("ccbar/backups", isDirectory: true)
@@ -499,6 +504,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         traeQueue.async { [weak self] in
             guard let self else { return }
             let didSync = self.store.syncTraeIfNeeded(interactive: interactive)
+            // 每日签到：自动路径内部有 09:00 门 + 水位；手动触发（弹窗打开）绕过时钟门
+            self.store.traeCheckinIfNeeded(interactive: interactive)
             // 只有真的拉过 Trae 才补查；无凭据/静默/节流时不重复查今日
             guard interactive, didSync else { return }
             self.queryQueue.async { [weak self] in

@@ -853,6 +853,125 @@ final class StatsStore: @unchecked Sendable {
         return true
     }
 
+    /// 指定 uid 的官方账单口径（consumed, total）——签到页账号卡余额展示
+    func traeEntForUID(_ uid: String) -> (consumed: Double, total: Double)? {
+        lock.lock(); defer { lock.unlock() }
+        let raw = metaGet("trae_ent_\(uid)")
+        let parts = raw.split(separator: "|")
+        guard parts.count == 2, let c = Double(parts[0]), let t = Double(parts[1]) else { return nil }
+        return (c, t)
+    }
+
+    // MARK: - Trae 每日签到（水位节流 + 失败重试 + 记录）
+
+    /// 每日签到：水位 trae_checkin_day_<uid>，失败记 trae_checkin_fail_<uid>（1 小时内不重试，不占水位）。
+    /// 自动路径只跑 09:00 后（老规矩：夜间静默不签）且受设置开关控制；interactive/force 绕过。
+    @discardableResult
+    func traeCheckinIfNeeded(now: Date = Date(), interactive: Bool = false, force: Bool = false) -> Bool {
+        if !force, UserDefaults.standard.object(forKey: "traeCheckinEnabled") as? Bool == false { return false }
+        if !force, !interactive, Calendar.current.component(.hour, from: now) < 9 { return false }
+        let accounts = TraeClientCredentials.discover(now: now)
+        guard !accounts.isEmpty else { return false }
+        let today = Self.dayFormatter.string(from: now)
+        let nowEpoch = Int(now.timeIntervalSince1970)
+        var acted = false
+        for acc in accounts {
+            lock.lock()
+            let done = metaGet("trae_checkin_day_\(acc.uid)")
+            let failAt = Double(metaGet("trae_checkin_fail_\(acc.uid)")) ?? 0
+            lock.unlock()
+            if done == today, !force { continue }
+            if !force, failAt > 0, Double(nowEpoch) - failAt < 3600 { continue }
+            // JWT 过期不硬签：同步链会走续签/降级，签到等下一轮（避免用死 JWT 打签到网关）
+            guard acc.jwtExp > nowEpoch + 120 else { continue }
+            let st = TraeCheckin.status(jwt: acc.jwt, uid: acc.uid, deviceID: acc.deviceID)
+            if st.code == 0, !st.checkedIn, !st.enable {
+                continue   // 服务端活动未开启：静默跳过，不计失败
+            }
+            guard st.code == 0 || st.checkedIn else {
+                appendCheckinLog(uid: acc.uid, ok: false, credits: 0, message: st.message)
+                lock.lock(); metaSet("trae_checkin_fail_\(acc.uid)", value: String(nowEpoch)); lock.unlock()
+                ccLog("Trae 签到 uid \(acc.uid) 预检失败: \(st.message)")
+                acted = true
+                continue
+            }
+            if st.checkedIn {
+                lock.lock(); metaSet("trae_checkin_day_\(acc.uid)", value: today); lock.unlock()
+                continue
+            }
+            let cl = TraeCheckin.claim(jwt: acc.jwt, uid: acc.uid, deviceID: acc.deviceID)
+            lock.lock()
+            if cl.ok {
+                metaSet("trae_checkin_day_\(acc.uid)", value: today)
+                metaSet("trae_checkin_fail_\(acc.uid)", value: "")
+            } else {
+                metaSet("trae_checkin_fail_\(acc.uid)", value: String(nowEpoch))
+            }
+            lock.unlock()
+            appendCheckinLog(uid: acc.uid, ok: cl.ok, credits: cl.credits, message: cl.message)
+            ccLog("Trae 签到 uid \(acc.uid): \(cl.ok ? "成功 +\(cl.credits)" : "失败 \(cl.message)")")
+            acted = true
+        }
+        return acted
+    }
+
+    /// 签到状态（UI 账号卡用）：今日是否已签
+    func checkinDoneToday(uid: String, now: Date = Date()) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return metaGet("trae_checkin_day_\(uid)") == Self.dayFormatter.string(from: now)
+    }
+
+    /// 签到记录（时间升序读取，UI 倒序展示）
+    func checkinLog() -> [[String: Any]] {
+        lock.lock(); defer { lock.unlock() }
+        let raw = metaGet("trae_checkin_log")
+        guard !raw.isEmpty, let data = raw.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return arr
+    }
+
+    private func appendCheckinLog(uid: String, ok: Bool, credits: Double, message: String) {
+        lock.lock(); defer { lock.unlock() }
+        var log: [[String: Any]] = []
+        let raw = metaGet("trae_checkin_log")
+        if !raw.isEmpty, let data = raw.data(using: .utf8),
+           let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] { log = arr }
+        log.append(["t": Int(Date().timeIntervalSince1970), "uid": uid, "ok": ok,
+                    "credits": credits, "msg": message])
+        if log.count > 50 { log = Array(log.suffix(50)) }
+        if let data = try? JSONSerialization.data(withJSONObject: log) {
+            metaSet("trae_checkin_log", value: String(data: data, encoding: .utf8) ?? "[]")
+        }
+    }
+
+    /// 清理 meta 孤儿键：账号已从客户端移除后，其签到水位/续签缓存键永久残留（每日家务调用）
+    func pruneTraeMetaOrphans() {
+        let known = Set(TraeClientCredentials.discover().map(\.uid))
+            .union([metaGet("trae_uid"), metaGet("trae_uid_2")].filter { !$0.isEmpty })
+        lock.lock(); defer { lock.unlock() }
+        guard let db = handle else { return }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT key FROM meta", -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        let prefixes = ["trae_checkin_day_", "trae_checkin_fail_",
+                        "trae_client_jwt_", "trae_client_jwt_exp_", "trae_client_rt_"]
+        var orphans: [String] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let c = sqlite3_column_text(stmt, 0) else { continue }
+            let key = String(cString: c)
+            for prefix in prefixes where key.hasPrefix(prefix) {
+                let uid = String(key.dropFirst(prefix.count))
+                if !uid.isEmpty, !known.contains(uid) { orphans.append(key) }
+            }
+        }
+        for key in orphans {
+            exec("DELETE FROM meta WHERE key = '\(key.replacingOccurrences(of: "'", with: "''"))'")
+        }
+        // 老版签到水位（无 uid 后缀）一并清掉
+        exec("DELETE FROM meta WHERE key IN ('trae_checkin_day', 'trae_checkin_fail')")
+        if !orphans.isEmpty { ccLog("Trae meta 孤儿键清理 \(orphans.count) 个") }
+    }
+
     /// Trae 明细入库：会话级 UPSERT（同一 session 用量随对话推进增长，覆盖旧值）。
     /// account 为所属账号 uid（多账号归属；空 = 历史行/uid 未解出）。
     /// 与其他源的 INSERT OR IGNORE 不同——Trae 行是"会话聚合快照"而非不可变流水。
