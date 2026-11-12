@@ -262,6 +262,36 @@ final class TraeSyncTests: XCTestCase {
         XCTAssertEqual(stats?.cacheRead, 90)
     }
 
+    // MARK: 流水页按日聚合（大区间日折叠数据源）
+
+    func testTimelineDailyAggregation() {
+        store.rebuild(configs: [SourceConfig(id: "trae", enabled: true, dbPath: "")])
+        let todayEpoch = StatsStore.localMidnight(0) + 3600
+        let yestEpoch = StatsStore.localMidnight(1) + 3600
+        store.upsertTraeRows([
+            TraeRow(sessionID: "a", model: "m", input: 100, output: 50, cacheRead: 0, cacheWrite: 0,
+                    costUsd: 0, credits: 2.5, epoch: todayEpoch),
+            TraeRow(sessionID: "b", model: "m", input: 10, output: 5, cacheRead: 0, cacheWrite: 0,
+                    costUsd: 0, credits: 1.5, epoch: yestEpoch),
+        ])
+        // 昨日走 daily_agg（完整日），今日走实时段
+        store.refreshDailyAgg(fromEpoch: StatsStore.localMidnight(2), toEpoch: StatsStore.localMidnight(0))
+
+        let today = StatsStore.dayString(fromEpoch: StatsStore.localMidnight(0))
+        let yesterday = StatsStore.dayString(fromEpoch: StatsStore.localMidnight(1))
+        let rows = store.queryTimelineDaily(fromDay: yesterday, toDay: today)
+
+        XCTAssertEqual(rows.count, 2, "两天各一行（单渠道 trae）")
+        XCTAssertEqual(rows.map(\.date), [today, yesterday], "日期倒序")
+        XCTAssertTrue(rows.allSatisfy { $0.source == "trae" })
+        let todayRow = rows.first { $0.date == today }
+        XCTAssertEqual(todayRow?.reqs, 1)
+        XCTAssertEqual(todayRow?.token, 150)
+        XCTAssertEqual(todayRow?.credits ?? 0, 2.5, accuracy: 1e-9)
+        let yestRow = rows.first { $0.date == yesterday }
+        XCTAssertEqual(yestRow?.credits ?? 0, 1.5, accuracy: 1e-9)
+    }
+
     // MARK: 积分聚合（SUM 口径：会话快照覆盖式入库，SUM 不重复计数）
 
     func testCreditsQueries() {

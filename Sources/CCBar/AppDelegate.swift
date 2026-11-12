@@ -900,15 +900,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         showInsights(page: nil)
     }
 
-    /// 底部「流水」入口：打开洞察中心并直接定位到流水页
+    /// 底部「流水」入口：打开洞察中心并直接定位到流水页（沿用上次区间）
     @objc func openTimeline() {
         showInsights(page: .timeline)
     }
 
-    /// page 非空时写入页签记忆键，SwiftUI 侧的 @AppStorage 会自动切页
-    func showInsights(page: InsightsPage?) {
+    /// page 非空时写入页签记忆键，SwiftUI 侧的 @AppStorage 会自动切页；
+    /// timelinePreset 非空时同时写入流水页区间预设（今日/昨日/d7/d30/all）
+    func showInsights(page: InsightsPage?, timelinePreset: String? = nil) {
         if let page {
             UserDefaults.standard.set(page.rawValue, forKey: "insightsLastPage")
+        }
+        if let timelinePreset {
+            UserDefaults.standard.set(timelinePreset, forKey: "timelinePreset")
         }
         closePopover()
         if insightsWindow == nil {
@@ -920,22 +924,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// 近 7 天 → 洞察 · 流水 · 近7天（日折叠）
     @objc func openDetail() {
-        closePopover()
-        if detailWindow == nil {
-            detailWindow = DetailWindowController()
-            detailWindow?.onDateChange = { [weak self] newWeekStart in
-                self?.openWeekDetail(for: newWeekStart)
-            }
-        }
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let weekday = calendar.component(.weekday, from: today)
-        let weekStart = calendar.date(byAdding: .day, value: -(weekday - 2), to: today)!
-        detailWindow?.reloadData(db: db, weekStart: weekStart)
-        detailWindow?.showWindow(nil)
-        detailWindow?.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        showInsights(page: .timeline, timelinePreset: "d7")
     }
 
     func openWeekDetail(for weekStart: Date) {
@@ -951,29 +942,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// 近 30 天 → 洞察 · 流水 · 近30天
     @objc func openMonthDetail() {
-        closePopover()
-        if monthWindow == nil {
-            monthWindow = MonthDetailWindowController()
-        }
-        monthWindow?.db = db
-        monthWindow?.currentMonth = Date()
-        monthWindow?.reloadData()
-        monthWindow?.showWindow(nil)
-        monthWindow?.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        showInsights(page: .timeline, timelinePreset: "d30")
     }
 
-    /// 历史总量（按月汇总）
+    /// 历史总量 → 洞察 · 流水 · 全部
     @objc func openAllTimeDetail() {
-        closePopover()
-        if allTimeWindow == nil {
-            allTimeWindow = AllTimeDetailWindowController()
-        }
-        allTimeWindow?.reloadData(db: db, today: store.queryDayStats(days: 0))
-        allTimeWindow?.showWindow(nil)
-        allTimeWindow?.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        showInsights(page: .timeline, timelinePreset: "all")
     }
 
     func openModelDetail(for date: Date) {
@@ -1009,13 +985,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// 今日 → 洞察 · 流水 · 今日（逐小时 + 逐笔）
     @objc func openHourlyDetailToday() {
-        openHourlyDetail(for: Date())
+        showInsights(page: .timeline, timelinePreset: "today")
     }
 
+    /// 昨日 → 洞察 · 流水 · 昨日
     @objc func openHourlyDetailYesterday() {
-        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
-        openHourlyDetail(for: yesterday)
+        showInsights(page: .timeline, timelinePreset: "yesterday")
     }
 
     /// 净输入 Top 会话（近 7 天，"钱烧在哪"排行）

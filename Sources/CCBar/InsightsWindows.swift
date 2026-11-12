@@ -35,6 +35,31 @@ enum InsightsPage: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - 流水页区间预设（弹窗入口写 UserDefaults "timelinePreset"）
+
+enum TimelinePreset: String, CaseIterable, Identifiable {
+    case today, yesterday, d7, d30, all, custom
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .today: return L("今日")
+        case .yesterday: return L("昨日")
+        case .d7: return L("近7天")
+        case .d30: return L("近30天")
+        case .all: return L("全部")
+        case .custom: return L("单日")
+        }
+    }
+
+    /// 单日视图（按小时分组）；多日走日折叠
+    var isSingleDay: Bool { self == .today || self == .yesterday || self == .custom }
+
+    /// 区间型预设（页内切换用的五个胶囊）
+    static let ranged: [TimelinePreset] = [.today, .yesterday, .d7, .d30, .all]
+}
+
 // MARK: - 视图模型
 
 struct ChannelPoint: Identifiable {
@@ -149,6 +174,13 @@ final class InsightsViewModel: ObservableObject {
     // 流水
     @Published var timeline: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)] = []
     @Published var timelineDay: Date = Calendar.current.startOfDay(for: Date())
+    // 流水页区间模式（单日走 timeline，多日走 timelineDaily 日折叠）
+    @Published var timelinePreset: TimelinePreset = .today
+    @Published var timelineDaily: [(date: String, source: String, reqs: Int, token: Int64, credits: Double)] = []
+    @Published var timelineExpandedDays: Set<String> = []
+    @Published var timelineDayDetails: [String: [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)]] = [:]
+    /// 「全部」区间每次加载的日数（滚动加载更早）
+    @Published var timelineDaysLimit = 90
     // 积分页（Trae 口径）
     @Published var creditsToday = 0.0
     @Published var credits7 = 0.0
@@ -228,12 +260,83 @@ final class InsightsViewModel: ObservableObject {
                       defaultTokenPrice: AppDelegate.shared?.settings.defaultTokenPrice ?? 0))
     }
 
-    /// 流水页切日期：只重查流水，其余字段不动（一次性全量加载的增量通道）
-    func loadTimeline(day: Date) {
+    /// 流水页切日期：只重查流水，其余字段不动（一次性全量加载的增量通道）。
+    /// 手动翻日（‹ / 日历）盖掉区间预设，归为单日自定义。
+    func loadTimeline(day: Date, preset: TimelinePreset? = nil) {
         guard let store = AppDelegate.shared?.store else { return }
         let day = Calendar.current.startOfDay(for: day)
         timelineDay = day
+        timelinePreset = preset ?? .custom
         timeline = store.queryTimeline(day: day)
+    }
+
+    /// 应用区间预设（弹窗入口 / 页内胶囊共用）
+    func applyTimelinePreset(_ preset: TimelinePreset) {
+        timelinePreset = preset
+        timelineExpandedDays = []
+        timelineDayDetails = [:]
+        switch preset {
+        case .today:
+            loadTimeline(day: Date(), preset: .today)
+        case .yesterday:
+            let y = Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date()
+            loadTimeline(day: y, preset: .yesterday)
+        case .custom:
+            loadTimeline(day: timelineDay, preset: .custom)
+        case .d7, .d30, .all:
+            loadTimelineRange()
+        }
+    }
+
+    /// 多日区间：按日聚合（daily_agg + 今日实时），默认展开最近一天
+    func loadTimelineRange() {
+        guard let store = AppDelegate.shared?.store else { return }
+        let now = Date()
+        let toDay = StatsStore.dayString(fromEpoch: StatsStore.localMidnight(0, now: now))
+        let fromDay: String
+        switch timelinePreset {
+        case .d7: fromDay = StatsStore.dayString(fromEpoch: StatsStore.localMidnight(6, now: now))
+        case .d30: fromDay = StatsStore.dayString(fromEpoch: StatsStore.localMidnight(29, now: now))
+        default: fromDay = "0000-01-01"
+        }
+        var rows = store.queryTimelineDaily(fromDay: fromDay, toDay: toDay)
+        if timelinePreset == .all {
+            // 只取有数据的最近 N 天（按去重日期截断，再保留这些日期的全部渠道行）
+            let days = Array(Set(rows.map(\.date))).sorted(by: >).prefix(timelineDaysLimit)
+            let keep = Set(days)
+            rows = rows.filter { keep.contains($0.date) }
+        }
+        timelineDaily = rows.sorted { $0.date > $1.date }
+        timelineExpandedDays = []
+        timelineDayDetails = [:]
+        if let firstDate = timelineDaily.first?.date {
+            timelineExpandedDays = [firstDate]
+            loadTimelineDayDetail(firstDate)
+        }
+    }
+
+    /// 展开/收起某日（展开时懒加载该日逐笔明细）
+    func toggleTimelineDay(_ date: String) {
+        if timelineExpandedDays.contains(date) {
+            timelineExpandedDays.remove(date)
+        } else {
+            timelineExpandedDays.insert(date)
+            loadTimelineDayDetail(date)
+        }
+    }
+
+    private func loadTimelineDayDetail(_ date: String) {
+        guard timelineDayDetails[date] == nil, let store = AppDelegate.shared?.store else { return }
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        guard let day = fmt.date(from: date) else { return }
+        timelineDayDetails[date] = store.queryTimeline(day: day)
+    }
+
+    /// 「全部」区间滚动加载更早
+    func loadMoreTimelineDays() {
+        timelineDaysLimit += 90
+        loadTimelineRange()
     }
 
     /// 签到页账号卡
@@ -2935,6 +3038,8 @@ struct TimelinePage: View {
     @State private var showCalendar = false
     /// 首屏最多渲染的行数，底部按钮可继续展开
     @State private var visibleCount = 40
+    /// 区间预设（弹窗入口写入；@AppStorage 驱动页内切换）
+    @AppStorage("timelinePreset") private var presetRaw = "today"
 
     /// 流水页行模型：组头与数据行拍平成单一序列。
     /// 曾用嵌套 ForEach（外层 id=hour、内层 id=offset），30 秒刷新时行视图按位置复用，
@@ -3021,17 +3126,239 @@ struct TimelinePage: View {
         max(dayTotals.credits * 0.1, 5)
     }
 
+    // MARK: - 多日区间（日折叠）
+
+    /// 渠道筛选后的按日汇总（日组头数字随筛选重算；模型筛选只作用于展开明细）
+    private var filteredDaily: [(date: String, reqs: Int, token: Int64, credits: Double)] {
+        var byDate: [String: (Int, Int64, Double)] = [:]
+        for row in vm.timelineDaily where sourceFilter == "all" || row.source == sourceFilter {
+            var cur = byDate[row.date] ?? (0, 0, 0)
+            cur.0 += row.reqs
+            cur.1 += row.token
+            cur.2 += row.credits
+            byDate[row.date] = cur
+        }
+        return byDate.map { (date: $0.key, reqs: $0.value.0, token: $0.value.1, credits: $0.value.2) }
+            .sorted { $0.date > $1.date }
+    }
+
+    private var rangeTotals: (reqs: Int, token: Int64, credits: Double) {
+        let rows = filteredDaily
+        return (rows.reduce(0) { $0 + $1.reqs },
+                rows.reduce(0) { $0 + $1.token },
+                rows.reduce(0) { $0 + $1.credits })
+    }
+
+    /// 某日展开后的明细（应用渠道/模型筛选）
+    private func dayDetailRows(_ date: String)
+        -> [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)] {
+        (vm.timelineDayDetails[date] ?? []).filter { row in
+            (sourceFilter == "all" || row.source == sourceFilter) &&
+            (modelFilter == "all" || row.model == modelFilter)
+        }
+    }
+
+    /// 多日区间的筛选条：渠道 + 导出按日汇总（模型筛选需展开明细，不在此呈现）
+    private var multiFiltersBar: some View {
+        HStack(spacing: 8) {
+            Picker("", selection: $sourceFilter) {
+                ForEach(multiSourceOptions, id: \.self) { option in
+                    Text(option == "all" ? L("全部渠道") : (AppDelegate.shared?.sourceDisplayName(option) ?? option))
+                        .tag(option)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 120)
+            Text(L("日汇总来自每日聚合；展开某天查看逐笔明细"))
+                .font(.system(size: 10))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+            Spacer()
+            Button { exportRangeCSV() } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "square.and.arrow.down").font(.system(size: 10, weight: .semibold))
+                    Text(L("导出")).font(.system(size: 11, weight: .medium))
+                }
+                .foregroundColor(Color(nsColor: Design.textSecondary))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Capsule().fill(Color(nsColor: Design.cardFillDark)))
+                .overlay(Capsule().stroke(Color(nsColor: Design.cardBorderDark)))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var multiSourceOptions: [String] {
+        ["all"] + Set(vm.timelineDaily.map(\.source)).sorted()
+    }
+
+    private var multiDayList: some View {
+        Group {
+            if filteredDaily.isEmpty {
+                VStack(spacing: 8) {
+                    mutedHint(L("该区间暂无请求"))
+                    Text(L("去干活吧，流水会记住每一笔 💪"))
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(filteredDaily, id: \.date) { day in
+                            dayHeaderRow(day)
+                            if vm.timelineExpandedDays.contains(day.date) {
+                                let rows = dayDetailRows(day.date)
+                                if rows.isEmpty {
+                                    Text(L("该日暂无请求"))
+                                        .font(.system(size: 11))
+                                        .foregroundColor(Color(nsColor: Design.textMuted))
+                                        .padding(.horizontal, 24)
+                                        .padding(.vertical, 6)
+                                } else {
+                                    let threshold = max(day.credits * 0.1, 5)
+                                    ForEach(Self.buildLines(rows)) { line in
+                                        lineView(line, anomalyThreshold: threshold, dayCredits: day.credits)
+                                    }
+                                }
+                            }
+                        }
+                        if vm.timelinePreset == .all {
+                            Button { vm.loadMoreTimelineDays() } label: {
+                                Text(L("加载更早") + " 90 " + L("天"))
+                                    .font(.system(size: 11))
+                                    .foregroundColor(Color(nsColor: Design.textSecondary))
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 6)
+                                    .background(Capsule().fill(Color(nsColor: Design.cardFillDark)))
+                                    .overlay(Capsule().stroke(Color(nsColor: Design.cardBorderDark)))
+                            }
+                            .buttonStyle(.plain)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 14)
+                        }
+                    }
+                    .padding(.bottom, 12)
+                }
+            }
+        }
+    }
+
+    /// 日组头：日期 + 当日汇总，点击展开/收起逐笔明细
+    private func dayHeaderRow(_ day: (date: String, reqs: Int, token: Int64, credits: Double)) -> some View {
+        let expanded = vm.timelineExpandedDays.contains(day.date)
+        return Button {
+            vm.toggleTimelineDay(day.date)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+                    .frame(width: 10)
+                Text(dayTitle(day.date))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Color(nsColor: Design.textPrimary))
+                Spacer()
+                Text("\(day.reqs) " + L("次") + " · " + formatCredits(day.credits) + " " + L("积分")
+                     + " · " + Design.formatTokens(day.token) + " tokens")
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+            .background(RoundedRectangle(cornerRadius: 6)
+                .fill(Color(nsColor: expanded ? Design.cardFillDark : .clear)))
+        }
+        .buttonStyle(.plain)
+        .padding(.top, expanded ? 8 : 2)
+    }
+
+    /// "2026-11-12" → 今天 / 昨天 / "M月d日 周三"
+    private func dayTitle(_ date: String) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        guard let d = fmt.date(from: date) else { return date }
+        let cal = Calendar.current
+        if cal.isDateInToday(d) { return L("今天") }
+        if cal.isDateInYesterday(d) { return L("昨天") }
+        let out = DateFormatter()
+        out.dateFormat = "M月d日"
+        let weekday = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][cal.component(.weekday, from: d) - 1]
+        return out.string(from: d) + " " + L(weekday)
+    }
+
+    /// 区间按日汇总导出 CSV（date / 次数 / 积分 / tokens）
+    private func exportRangeCSV() {
+        var csv = "\u{FEFF}" + [L("日期"), L("次数"), L("积分"), "Tokens"].joined(separator: ",") + "\n"
+        for day in filteredDaily {
+            csv += [day.date, "\(day.reqs)", formatCredits(day.credits), "\(day.token)"]
+                .joined(separator: ",") + "\n"
+        }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "ccbar-timeline-\(vm.timelinePreset.rawValue).csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? csv.write(to: url, atomically: true, encoding: .utf8)
+    }
+
     var body: some View {
         VStack(spacing: 10) {
             pageHeader
-            filtersBar
-            tableHeader
-            detailList
+            rangeBar
+            if vm.timelinePreset.isSingleDay {
+                filtersBar
+                tableHeader
+                detailList
+            } else {
+                multiFiltersBar
+                multiDayList
+            }
         }
         .padding(.top, 2)
+        .onAppear { syncPreset() }
+        .onChange(of: presetRaw) { _ in syncPreset() }
         .onChange(of: vm.timelineDay) { _ in visibleCount = 40 }
         .onChange(of: sourceFilter) { _ in visibleCount = 40 }
         .onChange(of: modelFilter) { _ in visibleCount = 40 }
+    }
+
+    /// 读 UserDefaults 预设并应用（弹窗入口改键 → 页内自动跟随）
+    private func syncPreset() {
+        vm.applyTimelinePreset(TimelinePreset(rawValue: presetRaw) ?? .today)
+    }
+
+    /// 区间胶囊：今日 / 昨日 / 近7天 / 近30天 / 全部
+    private var rangeBar: some View {
+        HStack(spacing: 6) {
+            presetPill(.today)
+            presetPill(.yesterday)
+            presetPill(.d7)
+            presetPill(.d30)
+            presetPill(.all)
+            Spacer()
+        }
+    }
+
+    private func presetPill(_ preset: TimelinePreset) -> some View {
+        let selected = vm.timelinePreset == preset
+        return Button {
+            if presetRaw == preset.rawValue { syncPreset() } else { presetRaw = preset.rawValue }
+        } label: {
+            Text(preset.label)
+                .font(.system(size: 11, weight: selected ? .semibold : .medium))
+                .foregroundColor(Color(nsColor: selected ? Design.brandColor : Design.textSecondary))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(selected
+                    ? Color(nsColor: Design.brandColor).opacity(0.14)
+                    : Color(nsColor: Design.cardFillDark)))
+                .overlay(Capsule().stroke(selected
+                    ? Color(nsColor: Design.brandColor).opacity(0.5)
+                    : Color(nsColor: Design.cardBorderDark)))
+        }
+        .buttonStyle(.plain)
     }
 
     /// 页头：标题 + 当日合计 + 较昨日
@@ -3046,13 +3373,25 @@ struct TimelinePage: View {
                     .foregroundColor(Color(nsColor: Design.textMuted))
             }
             Spacer()
-            if isToday, vm.creditsPrevDay > 0, dayTotals.credits > 0 {
+            if vm.timelinePreset == .today, vm.creditsPrevDay > 0, dayTotals.credits > 0 {
                 deltaBadge
             }
         }
     }
 
     private var headerSummary: String {
+        if !vm.timelinePreset.isSingleDay {
+            let label: String
+            switch vm.timelinePreset {
+            case .d7: label = L("近7天")
+            case .d30: label = L("近30天")
+            default: label = L("全部")
+            }
+            let totals = rangeTotals
+            return "\(label)\(L("合计")) \(formatCredits(totals.credits)) \(L("积分")) · "
+                + "\(Design.formatTokens(totals.token)) tokens · \(totals.reqs) \(L("次请求")) · "
+                + "\(filteredDaily.count) \(L("天"))"
+        }
         let label = L(isToday ? "今日合计" : "当日合计")
         let credits = formatCredits(dayTotals.credits)
         let tokens = Design.formatTokens(dayTotals.tokens)
@@ -3238,31 +3577,8 @@ struct TimelinePage: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(lines) { line in
-                            switch line {
-                            case .header(let hour, let count, let hourCredits):
-                                let share = dayTotals.credits > 0 ? hourCredits / dayTotals.credits : 0
-                                let featured = share >= 0.25 && hourCredits > 0
-                                HStack(spacing: 4) {
-                                    Text(String(format: "%02d:00 — %02d:00", hour, (hour + 1) % 24))
-                                        .font(.system(size: 10, weight: .semibold))
-                                        .foregroundColor(Color(nsColor: Design.textMuted))
-                                    Spacer()
-                                    Text("\(count) " + L("次") + " · " + formatCredits(hourCredits) + " " + L("积分"))
-                                        .font(.system(size: 10).monospacedDigit())
-                                        .foregroundColor(Color(nsColor: featured ? Design.warningColor
-                                                                   : Design.textMuted))
-                                    if featured {
-                                        Text("· " + L("占今日") + " \(Int((share * 100).rounded()))%")
-                                            .font(.system(size: 10).monospacedDigit())
-                                            .foregroundColor(Color(nsColor: Design.warningColor))
-                                    }
-                                }
-                                .padding(.horizontal, 8)
-                                .padding(.top, 12)
-                                .padding(.bottom, 4)
-                            case .row(let time, let model, let source, let token, let cost, let credits, let account):
-                                timelineRow((time, model, source, token, cost, credits, account))
-                            }
+                            lineView(line, anomalyThreshold: anomalyThreshold,
+                                     dayCredits: dayTotals.credits)
                         }
                         if filtered.count > visibleCount {
                             Button {
@@ -3287,7 +3603,38 @@ struct TimelinePage: View {
         }
     }
 
-    private func timelineRow(_ row: (time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)) -> some View {
+    /// 单行渲染（小时组头 / 明细行），单日与多日展开共用
+    @ViewBuilder
+    private func lineView(_ line: TimelineLine, anomalyThreshold: Double, dayCredits: Double) -> some View {
+        switch line {
+        case .header(let hour, let count, let hourCredits):
+            let share = dayCredits > 0 ? hourCredits / dayCredits : 0
+            let featured = share >= 0.25 && hourCredits > 0
+            HStack(spacing: 4) {
+                Text(String(format: "%02d:00 — %02d:00", hour, (hour + 1) % 24))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(Color(nsColor: Design.textMuted))
+                Spacer()
+                Text("\(count) " + L("次") + " · " + formatCredits(hourCredits) + " " + L("积分"))
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundColor(Color(nsColor: featured ? Design.warningColor : Design.textMuted))
+                if featured {
+                    Text("· " + L("占今日") + " \(Int((share * 100).rounded()))%")
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundColor(Color(nsColor: Design.warningColor))
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
+        case .row(let time, let model, let source, let token, let cost, let credits, let account):
+            timelineRow((time, model, source, token, cost, credits, account),
+                        anomalyThreshold: anomalyThreshold)
+        }
+    }
+
+    private func timelineRow(_ row: (time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int),
+                             anomalyThreshold: Double) -> some View {
         let t = Date(timeIntervalSince1970: TimeInterval(row.time))
         let tfmt = DateFormatter()
         tfmt.dateFormat = "HH:mm:ss"

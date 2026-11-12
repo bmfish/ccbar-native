@@ -123,15 +123,19 @@ struct TraeEntPack: Decodable {
     let expire_time: Int64?
     let status: Int?
     let is_hide: Bool?
-    let quota: TraeEntPackQuota?
+    let entitlement_base_info: TraeEntPackBase?
     let usage: TraeEntPackUsage?
+
+    struct TraeEntPackBase: Decodable {
+        let quota: TraeEntPackQuota?
+    }
 
     struct TraeEntPackQuota: Decodable { let credits_limit: Double? }
     struct TraeEntPackUsage: Decodable { let used_credits_amount: Double? }
 
-    /// 剩余 = 额度 - 已用（usage 空对象 = 未使用全额可得）
+    /// 剩余 = 额度 - 已用（quota 在 entitlement_base_info 信封内；usage 空 = 未使用）
     var remaining: Double? {
-        guard let limit = quota?.credits_limit else { return nil }
+        guard let limit = entitlement_base_info?.quota?.credits_limit else { return nil }
         let used = usage?.used_credits_amount ?? 0
         return max(limit - used, 0)
     }

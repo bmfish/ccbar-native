@@ -2147,6 +2147,47 @@ final class StatsStore: @unchecked Sendable {
     }
 
     /// 指定日期（本地 0 点起 24 小时）的逐笔流水，时间 DESC。今日走实时视图，历史走已同步的 usage_log
+    /// 流水页按日聚合（完整日读 daily_agg，今日实时补），按 (date, source) 返回。
+    /// 供大区间日折叠视图：日汇总与渠道筛选都基于它，无需展开明细。
+    func queryTimelineDaily(fromDay: String, toDay: String)
+        -> [(date: String, source: String, reqs: Int, token: Int64, credits: Double)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var out: [String: (date: String, source: String, reqs: Int, token: Int64, credits: Double)] = [:]
+        forEachRow("""
+        SELECT date, source, COALESCE(SUM(reqs),0),
+               COALESCE(SUM(input + output + cache_create + cache_read),0),
+               COALESCE(SUM(credits),0)
+        FROM daily_agg WHERE date >= '\(fromDay)' AND date <= '\(toDay)'
+        GROUP BY date, source
+        """) { stmt in
+            let date = String(cString: sqlite3_column_text(stmt, 0))
+            let source = String(cString: sqlite3_column_text(stmt, 1))
+            out["\(date)|\(source)"] = (date: date, source: source,
+                                         reqs: Int(sqlite3_column_int64(stmt, 2)),
+                                         token: sqlite3_column_int64(stmt, 3),
+                                         credits: sqlite3_column_double(stmt, 4))
+        }
+        // 今日（daily_agg 不含今天）
+        let today = Self.dayString(fromEpoch: Self.localMidnight(0))
+        if today >= fromDay, today <= toDay {
+            forEachRow("""
+            SELECT source, COALESCE(SUM(request_count),0),
+                   COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens),0),
+                   COALESCE(SUM(credits),0)
+            FROM usage_all WHERE created_at >= ? AND created_at < ?
+            GROUP BY source
+            """, binds: [Self.localMidnight(0), Self.localMidnight(-1)]) { stmt in
+                let source = String(cString: sqlite3_column_text(stmt, 0))
+                out["\(today)|\(source)"] = (date: today, source: source,
+                                              reqs: Int(sqlite3_column_int64(stmt, 1)),
+                                              token: sqlite3_column_int64(stmt, 2),
+                                              credits: sqlite3_column_double(stmt, 3))
+            }
+        }
+        return out.values.sorted { $0.date > $1.date }
+    }
+
     func queryTimeline(day: Date, limit: Int = 800) -> [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)] {
         let cal = Calendar.current
         if cal.isDateInToday(day) { return queryTodayTimeline(limit: limit) }
