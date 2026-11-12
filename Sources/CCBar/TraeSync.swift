@@ -114,6 +114,27 @@ struct TraeGroupDetail: Decodable {
 struct TraeEntUsageResponse: Decodable {
     let code: Int?
     let usage_summary: TraeUsageSummary?
+    let user_entitlement_pack_list: [TraeEntPack]?
+}
+
+/// 权益包（积分账本"获得/到期"口径：签到奖励、活动福利包等）
+struct TraeEntPack: Decodable {
+    let display_desc: String?
+    let expire_time: Int64?
+    let status: Int?
+    let is_hide: Bool?
+    let quota: TraeEntPackQuota?
+    let usage: TraeEntPackUsage?
+
+    struct TraeEntPackQuota: Decodable { let credits_limit: Double? }
+    struct TraeEntPackUsage: Decodable { let used_credits_amount: Double? }
+
+    /// 剩余 = 额度 - 已用（usage 空对象 = 未使用全额可得）
+    var remaining: Double? {
+        guard let limit = quota?.credits_limit else { return nil }
+        let used = usage?.used_credits_amount ?? 0
+        return max(limit - used, 0)
+    }
 }
 
 struct TraeUsageSummary: Decodable {
@@ -124,6 +145,10 @@ struct TraeUsageSummary: Decodable {
 // MARK: - 同步引擎（纯函数式：网络 + 解析，不碰存储）
 
 enum TraeSync {
+
+    /// 本轮 ent_usage 拉到的权益包快照（uid → JSON），由调用方入库 meta
+    ///（fetchOutcome 无存储依赖，靠这个出口交还；键随下轮覆盖）
+    nonisolated(unsafe) static var entPacksCache: [String: String] = [:]
 
     /// 完整同步一次。auth 由调用方加载/保存（StatsStore 持锁读写 meta）。
     /// fetchEnt=false 时跳过积分账单（它 1 小时刷一次就够，减少无谓请求）。
@@ -214,6 +239,20 @@ enum TraeSync {
                let s = resp.usage_summary {
                 consumed = s.consumed_amount
                 total = s.total_amount
+                // 权益包快照落 meta（积分页/签到页"获得来源/即将到期"数据源）
+                let packs = (resp.user_entitlement_pack_list ?? []).filter {
+                    $0.is_hide != true && $0.status == 0 && ($0.expire_time ?? 0) > Int64(Date().timeIntervalSince1970)
+                }.compactMap { p -> [String: Any]? in
+                    guard let name = p.display_desc, let expire = p.expire_time else { return nil }
+                    var dict: [String: Any] = ["name": name, "expire": expire]
+                    if let remaining = p.remaining { dict["remaining"] = remaining }
+                    return dict
+                }
+                if let packData = try? JSONSerialization.data(withJSONObject: packs),
+                   let json = String(data: packData, encoding: .utf8),
+                   let packUID = TraeSync.jwtUID(jwt2), !packUID.isEmpty {
+                    TraeSync.entPacksCache[packUID] = json
+                }
             }
         }
         return .success(rows: rows, consumed: consumed, total: total, truncated: truncated)

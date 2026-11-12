@@ -435,6 +435,8 @@ final class StatsStore: @unchecked Sendable {
             PRIMARY KEY (date, source)
         )
         """)
+        // v2 积分账本：daily_agg 结算 credits，积分聚合不再全表扫 usage_all
+        exec("ALTER TABLE daily_agg ADD COLUMN credits REAL NOT NULL DEFAULT 0")
         if metaGet("daily_agg_full") == "" {
             // daily_agg 只结算完整日（≤昨天）；今天由查询侧实时补，否则热力图等按日去重会撞 key
             exec("""
@@ -447,6 +449,19 @@ final class StatsStore: @unchecked Sendable {
             GROUP BY 1, 2
             """)
             metaSet("daily_agg_full", value: "1")
+        }
+        // v2 积分账本：历史行回填 credits（一次全量，只结算完整日）
+        if metaGet("daily_agg_credits") == "" {
+            exec("""
+            INSERT OR REPLACE INTO daily_agg (date, source, reqs, input, output, cache_create, cache_read, credits)
+            SELECT date(created_at, 'unixepoch', 'localtime'), source,
+                   SUM(request_count), SUM(input_tokens), SUM(output_tokens),
+                   SUM(cache_creation_tokens), SUM(cache_read_tokens), SUM(credits)
+            FROM usage_log
+            WHERE date(created_at, 'unixepoch', 'localtime') < date('now', 'localtime')
+            GROUP BY 1, 2
+            """)
+            metaSet("daily_agg_credits", value: "1")
         }
 
         // ATTACH 各数据源并记录连接状态（供设置页展示）
@@ -608,12 +623,14 @@ final class StatsStore: @unchecked Sendable {
     }
 
     /// 重算 [fromEpoch, toEpoch) 窗口的每日聚合（数据源：usage_log 明细，OR REPLACE 自愈式覆盖）
-    private func refreshDailyAgg(fromEpoch: Int64, toEpoch: Int64) {
+    /// 重算 [fromEpoch, toEpoch) 窗口的每日聚合（数据源：usage_log 明细，OR REPLACE 自愈式覆盖）。
+    /// internal 供测试注入窗口。
+    func refreshDailyAgg(fromEpoch: Int64, toEpoch: Int64) {
         exec("""
-        INSERT OR REPLACE INTO daily_agg (date, source, reqs, input, output, cache_create, cache_read)
+        INSERT OR REPLACE INTO daily_agg (date, source, reqs, input, output, cache_create, cache_read, credits)
         SELECT date(created_at, 'unixepoch', 'localtime'), source,
                SUM(request_count), SUM(input_tokens), SUM(output_tokens),
-               SUM(cache_creation_tokens), SUM(cache_read_tokens)
+               SUM(cache_creation_tokens), SUM(cache_read_tokens), SUM(credits)
         FROM usage_log
         WHERE created_at >= \(fromEpoch) AND created_at < \(toEpoch)
         GROUP BY 1, 2
@@ -783,6 +800,11 @@ final class StatsStore: @unchecked Sendable {
         // 失败/过期也占掉节流窗口，防止弹窗反复开关时把请求打爆（下次后台周期自然重试）
         lock.lock(); defer { lock.unlock() }
         lastTraeSyncAt[slot] = now.timeIntervalSince1970
+        // 权益包快照入库（ent_usage 每小时拉取时顺带刷新；uid 由 JWT 解出）
+        for (uid, json) in TraeSync.entPacksCache where !uid.isEmpty {
+            metaSet("trae_ent_packs_\(uid)", value: json)
+        }
+        TraeSync.entPacksCache.removeAll()
         metaSet(authKey, value: Self.traeAuthToMeta(newAuth))
         // uid 认领：客户端通道 uid 即身份（JWT data.id）；sessionid 链由换签 JWT 解出并与凭据指纹绑定。
         var resolvedUID = clientUID
@@ -860,6 +882,25 @@ final class StatsStore: @unchecked Sendable {
         let parts = raw.split(separator: "|")
         guard parts.count == 2, let c = Double(parts[0]), let t = Double(parts[1]) else { return nil }
         return (c, t)
+    }
+
+    /// 权益包快照（未过期；remaining = 额度 - 已用）
+    struct EntPackInfo: Equatable {
+        let name: String
+        let remaining: Double?
+        let expire: Int64
+    }
+
+    func traePacksForUID(_ uid: String) -> [EntPackInfo] {
+        lock.lock(); defer { lock.unlock() }
+        let raw = metaGet("trae_ent_packs_\(uid)")
+        guard !raw.isEmpty, let data = raw.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return arr.compactMap { dict in
+            guard let name = dict["name"] as? String, let expire = dict["expire"] as? Int64 else { return nil }
+            let remaining = dict["remaining"] as? Double
+            return EntPackInfo(name: name, remaining: remaining, expire: expire)
+        }.sorted { $0.expire < $1.expire }
     }
 
     // MARK: - Trae 每日签到（水位节流 + 失败重试 + 记录）
@@ -1523,52 +1564,72 @@ final class StatsStore: @unchecked Sendable {
         return result
     }
 
+    /// daily_agg 区间积分（v2 起结算 credits 列；区间按完整日，不含今日）
+    private func dailyAggCredits(fromDay: String, toDay: String) -> Double {
+        guard handle != nil else { return 0 }
+        var sum = 0.0
+        forEachRow("SELECT COALESCE(SUM(credits), 0) FROM daily_agg WHERE date >= '\(fromDay)' AND date <= '\(toDay)'") { stmt in
+            sum = sqlite3_column_double(stmt, 0)
+        }
+        return sum
+    }
+
+    /// 今日实时积分（usage_all 今日段）
+    private func todayCreditsLive(now: Date) -> Double {
+        var sum = 0.0
+        forEachRow("SELECT COALESCE(SUM(credits), 0) FROM usage_all WHERE created_at >= ? AND created_at < ?",
+                   binds: [Self.localMidnight(0, now: now), Self.localMidnight(-1, now: now)]) { stmt in
+            sum = sqlite3_column_double(stmt, 0)
+        }
+        return sum
+    }
+
     /// 今日积分消耗（SUM(credits)；Trae 行有值，其他源恒为 0。
     /// Trae 是会话级累计快照 + UPSERT 覆盖，SUM 不会重复计数）
     func queryTodayCredits() -> Double {
         lock.lock(); defer { lock.unlock() }
-        guard handle != nil else { return 0 }
-        var sum = 0.0
-        forEachRow("SELECT COALESCE(SUM(credits), 0) FROM usage_all WHERE created_at >= ?",
-                   binds: [Self.localMidnight(0)]) { stmt in
-            sum = sqlite3_column_double(stmt, 0)
-        }
-        return sum
+        return todayCreditsLive(now: Date())
+    }
+
+    /// 本月积分消耗 MTD（月初 0 点起，含今日实时）
+    func queryCreditsMonthMTD(now: Date = Date()) -> Double {
+        lock.lock(); defer { lock.unlock() }
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.year, .month], from: now)
+        guard let first = cal.date(from: comps) else { return 0 }
+        let from = Self.dayFormatter.string(from: first)
+        let to = Self.dayString(fromEpoch: Self.localMidnight(1, now: now))
+        return dailyAggCredits(fromDay: from, toDay: to) + todayCreditsLive(now: now)
     }
 
     /// 指定单日积分（daysAgo=0 今日，1 昨日…），供弹窗趋势卡积分小字
     func queryCreditsDay(daysAgo: Int) -> Double {
         lock.lock(); defer { lock.unlock() }
-        guard handle != nil else { return 0 }
-        var sum = 0.0
-        forEachRow("SELECT COALESCE(SUM(credits), 0) FROM usage_all WHERE created_at >= ? AND created_at < ?",
-                   binds: [Self.localMidnight(daysAgo), Self.localMidnight(daysAgo - 1)]) { stmt in
-            sum = sqlite3_column_double(stmt, 0)
-        }
-        return sum
+        if daysAgo == 0 { return todayCreditsLive(now: Date()) }
+        let day = Self.dayString(fromEpoch: Self.localMidnight(daysAgo))
+        return dailyAggCredits(fromDay: day, toDay: day)
     }
 
-    /// 历史总积分（全量 SUM）
+    /// 历史总积分：daily_agg 全量 + 今日实时（不再全表扫 usage_all）
     func queryCreditsTotal() -> Double {
         lock.lock(); defer { lock.unlock() }
-        guard handle != nil else { return 0 }
-        var sum = 0.0
-        forEachRow("SELECT COALESCE(SUM(credits), 0) FROM usage_all") { stmt in
-            sum = sqlite3_column_double(stmt, 0)
-        }
-        return sum
+        return dailyAggCredits(fromDay: "0000-01-01", toDay: "9999-12-31") + todayCreditsLive(now: Date())
     }
 
     /// 近 N 天（含今天）积分消耗，0 天即今日
     func queryCreditsSum(days: Int) -> Double {
         lock.lock(); defer { lock.unlock() }
-        guard handle != nil else { return 0 }
-        var sum = 0.0
-        forEachRow("SELECT COALESCE(SUM(credits), 0) FROM usage_all WHERE created_at >= ?",
-                   binds: [Self.nearWindowStart(days)]) { stmt in
-            sum = sqlite3_column_double(stmt, 0)
-        }
-        return sum
+        let now = Date()
+        if days <= 1 { return days == 0 ? todayCreditsLive(now: now) : queryCreditsDayLocked(1, now: now) }
+        let from = Self.dayString(fromEpoch: Self.nearWindowStart(days, now: now))
+        let to = Self.dayString(fromEpoch: Self.localMidnight(1, now: now))
+        return dailyAggCredits(fromDay: from, toDay: to) + todayCreditsLive(now: now)
+    }
+
+    /// 无锁版单日积分（供 queryCreditsSum 内部复用；调用方须持锁）
+    private func queryCreditsDayLocked(_ daysAgo: Int, now: Date) -> Double {
+        let day = Self.dayString(fromEpoch: Self.localMidnight(daysAgo, now: now))
+        return dailyAggCredits(fromDay: day, toDay: day)
     }
 
     /// 近 N 天（含今天）逐小时积分分布，返回 24 个桶
@@ -1591,16 +1652,15 @@ final class StatsStore: @unchecked Sendable {
         return out
     }
 
-    /// 指定天数区间（daysAgoFrom 更早、daysAgoTo 更近，含端点）内的积分合计
+    /// 指定天数区间（daysAgoFrom 更早、daysAgoTo 更近）内的积分合计。
+    /// 语义保持与旧 usage_all 版一致：[localMidnight(daysAgoFrom), localMidnight(daysAgoTo-1))
+    /// 即覆盖 daysAgoFrom .. daysAgoTo-2 这些完整日（区间均不含今日实时）。
     func queryCreditsRange(daysAgoFrom: Int, daysAgoTo: Int) -> Double {
         lock.lock(); defer { lock.unlock() }
-        guard handle != nil else { return 0 }
-        var sum = 0.0
-        forEachRow("SELECT COALESCE(SUM(credits), 0) FROM usage_all WHERE created_at >= ? AND created_at < ?",
-                   binds: [Self.localMidnight(daysAgoFrom), Self.localMidnight(daysAgoTo - 1)]) { stmt in
-            sum = sqlite3_column_double(stmt, 0)
-        }
-        return sum
+        guard daysAgoTo - 2 >= daysAgoFrom else { return 0 }
+        let from = Self.dayString(fromEpoch: Self.localMidnight(daysAgoFrom))
+        let to = Self.dayString(fromEpoch: Self.localMidnight(daysAgoTo - 2))
+        return dailyAggCredits(fromDay: from, toDay: to)
     }
 
     /// 近 N 天（含今天）每日积分曲线，日期升序（可能有空洞，调用方补零）

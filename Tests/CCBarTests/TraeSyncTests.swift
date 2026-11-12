@@ -274,6 +274,8 @@ final class TraeSyncTests: XCTestCase {
             TraeRow(sessionID: "s2", model: "m", input: 10, output: 5, cacheRead: 0, cacheWrite: 0,
                     costUsd: 0, credits: 1.5, epoch: yestEpoch),
         ])
+        // v2 起昨日积分走 daily_agg（credits 列），先按生产流程结算窗口聚合
+        store.refreshDailyAgg(fromEpoch: StatsStore.localMidnight(2), toEpoch: StatsStore.localMidnight(0))
         XCTAssertEqual(store.queryTodayCredits(), 2.5, accuracy: 1e-9)
         XCTAssertEqual(store.queryCreditsDay(daysAgo: 0), 2.5, accuracy: 1e-9, "今日积分小字")
         XCTAssertEqual(store.queryCreditsDay(daysAgo: 1), 1.5, accuracy: 1e-9, "昨日积分小字")

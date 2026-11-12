@@ -165,6 +165,9 @@ final class InsightsViewModel: ObservableObject {
     @Published var todayActiveMin = 0
     @Published var creditsPeak = 0.0
     @Published var creditsPeakLabel = ""
+    // 积分账本四口径（余额在 creditsEnt；本月获得 = 签到记录聚合）
+    @Published var creditsMonthConsume = 0.0
+    @Published var creditsMonthGain = 0.0
     @Published var creditsEnt: (consumed: Double, total: Double)?
     @Published var creditsAccounts: [(slot: Int, consumed: Double, total: Double)] = []
     @Published var todayCreditsByAccount: [(slot: Int, credits: Double)] = []
@@ -236,6 +239,8 @@ final class InsightsViewModel: ObservableObject {
         let jwtDays: Int
         let balance: Double?
         let checkedToday: Bool
+        /// 最近一个 14 天内到期的权益包（提示先用）
+        let expiring: String?
         var id: String { uid }
         var maskedUID: String {
             guard uid.count > 8 else { return uid }
@@ -248,12 +253,23 @@ final class InsightsViewModel: ObservableObject {
         let now = Date()
         let store = AppDelegate.shared?.store
         checkinAccounts = TraeClientCredentials.discover(now: now).map { acc in
-            CheckinAccountInfo(
+            let packs = store?.traePacksForUID(acc.uid) ?? []
+            let soon = packs.first {
+                let days = Int(ceil(Double($0.expire - Int64(now.timeIntervalSince1970)) / 86400))
+                return days <= 14
+            }
+            let expiring: String? = soon.map {
+                let days = max(1, Int(ceil(Double($0.expire - Int64(now.timeIntervalSince1970)) / 86400)))
+                let credits = $0.remaining ?? 0
+                return String(format: L("%d 天后到期 %.0f 积分"), days, credits)
+            }
+            return CheckinAccountInfo(
                 uid: acc.uid,
                 app: acc.sourceApp,
                 jwtDays: max(0, Int((Double(acc.jwtExp) - now.timeIntervalSince1970) / 86400)),
                 balance: store?.traeEntForUID(acc.uid).map { $0.total - $0.consumed },
-                checkedToday: store?.checkinDoneToday(uid: acc.uid, now: now) ?? false)
+                checkedToday: store?.checkinDoneToday(uid: acc.uid, now: now) ?? false,
+                expiring: expiring)
         }
         checkinLog = (store?.checkinLog() ?? []).compactMap { dict in
             guard let t = dict["t"] as? Int, let uid = dict["uid"] as? String else { return nil }
@@ -323,6 +339,8 @@ final class InsightsViewModel: ObservableObject {
         var todayActiveMin = 0
         var creditsPeak = 0.0
         var creditsPeakLabel = ""
+        var creditsMonthConsume = 0.0
+        var creditsMonthGain = 0.0
         var creditsEnt: (consumed: Double, total: Double)?
         /// 分账号余额（Trae1/Trae2），仅多账号时有意义
         var creditsAccounts: [(slot: Int, consumed: Double, total: Double)] = []
@@ -483,6 +501,15 @@ final class InsightsViewModel: ObservableObject {
             s.creditsPeakLabel = mf.string(from: peak.day)
         }
         s.creditsEnt = store.traeEntSummary()
+        // 账本口径：本月消耗 = daily_agg MTD + 今日实时；本月获得 = 签到记录聚合（启用签到起记）
+        s.creditsMonthConsume = store.queryCreditsMonthMTD()
+        let monthStartEpoch = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date()))?
+            .timeIntervalSince1970 ?? 0
+        s.creditsMonthGain = store.checkinLog()
+            .filter { rec in
+                rec["ok"] as? Bool == true && (rec["t"] as? Int ?? 0) >= Int(monthStartEpoch)
+            }
+            .reduce(0.0) { $0 + ($1["credits"] as? Double ?? 0) }
         s.creditsAccounts = store.traeEntAccounts()
         s.todayCreditsByAccount = store.queryTodayCreditsByAccount()
         return s
@@ -537,6 +564,8 @@ final class InsightsViewModel: ObservableObject {
         todayActiveMin = s.todayActiveMin
         creditsPeak = s.creditsPeak
         creditsPeakLabel = s.creditsPeakLabel
+        creditsMonthConsume = s.creditsMonthConsume
+        creditsMonthGain = s.creditsMonthGain
         creditsEnt = s.creditsEnt
         creditsAccounts = s.creditsAccounts
         todayCreditsByAccount = s.todayCreditsByAccount
@@ -1908,6 +1937,14 @@ struct TraeCheckinPage: View {
                         .foregroundColor(Color(nsColor: Design.dataHighlightColor))
                 }
             }
+            if let expiring = acc.expiring {
+                Text(expiring)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Color.accentColor)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+            }
             badge(text: acc.checkedToday ? L("今日已签 ✓") : L("今日未签"),
                   positive: acc.checkedToday)
             badge(text: String(format: L("JWT 余 %d 天"), acc.jwtDays), positive: acc.jwtDays >= 3)
@@ -2372,6 +2409,16 @@ struct CreditsPage: View {
                     balanceCard.frame(width: 300)
                 }
 
+                // 账本四口径：获得（签到/权益包）· 消耗 · 净额
+                HStack(spacing: 14) {
+                    ledgerCard(L("本月获得"), vm.creditsMonthGain, color: Design.successColor, prefix: "+")
+                    ledgerCard(L("本月消耗"), vm.creditsMonthConsume, color: Design.warningColor)
+                    ledgerCard(L("本月净额"), vm.creditsMonthGain - vm.creditsMonthConsume,
+                               color: vm.creditsMonthGain - vm.creditsMonthConsume >= 0
+                                   ? Design.successColor : Design.errorColor, prefix: "+")
+                    ledgerCard(L("当前余额"), remaining, color: Design.dataHighlightColor)
+                }
+
                 HStack(spacing: 14) {
                     creditsStatCard(L("近 7 天"), vm.credits7, prev: vm.creditsPrev7,
                                     series: Array(vm.creditsDaily.suffix(7)),
@@ -2399,6 +2446,24 @@ struct CreditsPage: View {
     }
 
     private var dailyAvg: Double { vm.credits30 / 30 }
+
+    /// 账本四口径小卡
+    private func ledgerCard(_ title: String, _ value: Double, color: NSColor, prefix: String = "") -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 11))
+                .foregroundColor(Color(nsColor: Design.textMuted))
+            Text("\(prefix)\(SettingsViewModel.fmtCredits(value))")
+                .font(.system(size: 17, weight: .bold).monospacedDigit())
+                .foregroundColor(Color(nsColor: color))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .fill(Color(nsColor: Design.cardFillDark)))
+        .overlay(RoundedRectangle(cornerRadius: Design.cardCornerRadius)
+            .strokeBorder(Color(nsColor: Design.cardBorderDark), lineWidth: 0.5))
+    }
     private var sevenDayRate: Double { vm.credits7 / 7 }
     private var remaining: Double {
         guard let e = vm.creditsEnt else { return 0 }
