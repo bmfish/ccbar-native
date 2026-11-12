@@ -189,6 +189,12 @@ let L10nEN: [String: String] = [
     "筛选": "Filter",
     "全部渠道": "All Channels",
     // 流水页区间 / 日折叠
+    "每日": "Daily",
+    "时段": "Hour",
+    "次数": "Calls",
+    "占当日": "of day",
+    "占全天": "of day",
+    "按小时聚合，不展开逐笔": "Aggregated by hour, no per-session rows",
     "该区间暂无请求": "No requests in this range",
     "日汇总来自每日聚合；展开某天查看逐笔明细": "Daily totals from aggregates; expand a day for details",
     "加载更早": "Load earlier",

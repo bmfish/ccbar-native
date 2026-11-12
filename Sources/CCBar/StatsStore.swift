@@ -2188,6 +2188,34 @@ final class StatsStore: @unchecked Sendable {
         return out.values.sorted { $0.date > $1.date }
     }
 
+    /// 单日按小时聚合（时段 / 次数 / token / 积分），供「每日」视图直接看小时分布。
+    /// 统一走 usage_all（历史行 + 各源今日实时段 + Trae 今日行），与逐笔查询同源。
+    func queryHourlyTimeline(day: Date) -> [(hour: Int, reqs: Int, token: Int64, credits: Double)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        let cal = Calendar.current
+        let start = Int64(cal.startOfDay(for: day).timeIntervalSince1970)
+        let offset = Int64(TimeZone.current.secondsFromGMT())
+        var out = [(hour: Int, reqs: Int, token: Int64, credits: Double)]()
+        forEachRow("""
+        SELECT ((created_at + \(offset)) % 86400) / 3600 AS h,
+               COALESCE(SUM(request_count), 0),
+               COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0),
+               COALESCE(SUM(credits), 0)
+        FROM usage_all
+        WHERE created_at >= \(start) AND created_at < \(start + 86_400)
+        GROUP BY h ORDER BY h
+        """) { stmt in
+            let h = Int(sqlite3_column_int64(stmt, 0))
+            guard h >= 0, h < 24 else { return }
+            out.append((hour: h,
+                        reqs: Int(sqlite3_column_int64(stmt, 1)),
+                        token: sqlite3_column_int64(stmt, 2),
+                        credits: sqlite3_column_double(stmt, 3)))
+        }
+        return out
+    }
+
     func queryTimeline(day: Date, limit: Int = 800) -> [(time: Int, model: String, source: String, token: Int64, cost: Double, credits: Double, account: Int)] {
         let cal = Calendar.current
         if cal.isDateInToday(day) { return queryTodayTimeline(limit: limit) }
