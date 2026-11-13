@@ -28,6 +28,8 @@ struct TraeCheckinClaim {
     let code: Int?
     let credits: Double
     let message: String
+    /// 服务端返回「今日已经签到」：本次没有真正领取，不应再记一笔奖励
+    var already: Bool = false
 }
 
 // MARK: - 引擎（网络 + 解析，不碰存储）
@@ -121,7 +123,14 @@ enum TraeCheckin {
         let authRejected = message.lowercased().contains("not able to authenticate")
         let ok = (code == 0 || code == nil) && !authRejected
         return TraeCheckinClaim(ok: ok || alreadyChecked, code: code,
-                                credits: reward, message: message)
+                                credits: reward, message: message, already: alreadyChecked)
+    }
+
+    /// 当天签到分钟（0–59）：按账号 + 日期确定性派生，重启/多轮同步不会重掷
+    static func slotMinute(uid: String, day: String) -> Int {
+        let digest = SHA256.hash(data: Data("\(uid):\(day)".utf8))
+        let head = digest.prefix(4).reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+        return Int(head % 60)
     }
 
     private static func parse(_ data: Data?, fallbackMessage: String) -> TraeCheckinStatus {

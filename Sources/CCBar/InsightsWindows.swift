@@ -1974,6 +1974,11 @@ struct TraeCheckinPage: View {
     /// 自动签到的起始小时（默认 9 点，可手动调）
     @AppStorage("traeCheckinHour") private var checkinHour = 9
 
+    /// 全部账号今日均已签到：立即签到无意义，置灰
+    private var allCheckedToday: Bool {
+        !vm.checkinAccounts.isEmpty && vm.checkinAccounts.allSatisfy(\.checkedToday)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -2002,13 +2007,15 @@ struct TraeCheckinPage: View {
                     .pickerStyle(.menu)
                     .frame(width: 82)
                     .disabled(!checkinEnabled)
-                    Text(L("起自动 · 失败 1 小时内重试"))
+                    Text(L("起，随机分钟签到 · 失败 1 小时内重试"))
                         .font(.system(size: 11))
                         .foregroundColor(Color(nsColor: Design.textMuted))
                     Spacer()
-                    Button(vm.checkinBusy ? L("签到中…") : L("立即签到")) { vm.checkinNow() }
+                    Button(vm.checkinBusy ? L("签到中…") : (allCheckedToday ? L("今日已签到") : L("立即签到"))) {
+                        vm.checkinNow()
+                    }
                         .buttonStyle(.borderedProminent)
-                        .disabled(vm.checkinBusy || vm.checkinAccounts.isEmpty)
+                        .disabled(vm.checkinBusy || vm.checkinAccounts.isEmpty || allCheckedToday)
                 }
 
                 if !vm.checkinLog.isEmpty {

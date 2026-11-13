@@ -249,6 +249,8 @@ final class StatsStore: @unchecked Sendable {
     static let traeEntMinInterval: TimeInterval = 3600
 
     private let lock = NSLock()
+    /// 签到互斥：后台自动签到与手动「立即签到」可能并发，串行化避免重复 claim
+    private let checkinGate = NSLock()
 
     /// 测试注入自定义库路径；nil 用默认路径（Application Support/ccbar/ccbar.db）
     private let pathOverride: String?
@@ -906,24 +908,38 @@ final class StatsStore: @unchecked Sendable {
     // MARK: - Trae 每日签到（水位节流 + 失败重试 + 记录）
 
     /// 每日签到：水位 trae_checkin_day_<uid>，失败记 trae_checkin_fail_<uid>（1 小时内不重试，不占水位）。
-    /// 自动路径只跑设置的小时（默认 09:00）之后且受开关控制；interactive/force 绕过。
+    /// 自动签到在 [起始小时, +1 小时) 内按账号确定性随机一个分钟执行（避免整点准点签到）；
+    /// force（手动「立即签到」）绕过时间门与失败节流，但不绕过「今日已签」。
     /// 奖励数取 status 的 credits + extra_credits（claim 成功响应本身不带金额）。
     @discardableResult
     func traeCheckinIfNeeded(now: Date = Date(), interactive: Bool = false, force: Bool = false) -> Bool {
+        // 同一时刻只允许一个签到流程：后台自动与手动点击并发时不重复 claim
+        guard checkinGate.try() else { return false }
+        defer { checkinGate.unlock() }
+        return runTraeCheckin(now: now, interactive: interactive, force: force)
+    }
+
+    /// 签到执行体（调用方已持有 checkinGate）
+    private func runTraeCheckin(now: Date, interactive: Bool, force: Bool) -> Bool {
         if !force, UserDefaults.standard.object(forKey: "traeCheckinEnabled") as? Bool == false { return false }
-        let startHour = (UserDefaults.standard.object(forKey: "traeCheckinHour") as? Int) ?? 9
-        if !force, !interactive, Calendar.current.component(.hour, from: now) < startHour { return false }
+        let startHour = min(23, max(0, (UserDefaults.standard.object(forKey: "traeCheckinHour") as? Int) ?? 9))
         let accounts = TraeClientCredentials.discover(now: now)
         guard !accounts.isEmpty else { return false }
         let today = Self.dayFormatter.string(from: now)
         let nowEpoch = Int(now.timeIntervalSince1970)
+        let dayStart = Calendar.current.startOfDay(for: now).timeIntervalSince1970
         var acted = false
         for acc in accounts {
             lock.lock()
             let done = metaGet("trae_checkin_day_\(acc.uid)")
             let failAt = Double(metaGet("trae_checkin_fail_\(acc.uid)")) ?? 0
             lock.unlock()
-            if done == today, !force { continue }
+            // 今日已签（含客户端自动签到）不再请求：手动「立即签到」同样跳过，避免重复打签到网关
+            if done == today { continue }
+            // 当天随机分钟门（多账号各自不同；force 绕过）
+            let slot = dayStart + Double(startHour * 3600
+                + TraeCheckin.slotMinute(uid: acc.uid, day: today) * 60)
+            if !force, now.timeIntervalSince1970 < slot { continue }
             if !force, failAt > 0, Double(nowEpoch) - failAt < 3600 { continue }
             // JWT 过期不硬签：同步链会走续签/降级，签到等下一轮（避免用死 JWT 打签到网关）
             guard acc.jwtExp > nowEpoch + 120 else { continue }
@@ -942,17 +958,17 @@ final class StatsStore: @unchecked Sendable {
             let reward = st.credits + st.extraCredits
             if st.checkedIn {
                 lock.lock(); metaSet("trae_checkin_day_\(acc.uid)", value: today); lock.unlock()
-                // 当日首次确认已签（可能由客户端完成）：补记一笔真实奖励，避免流水全是 +0
-                if done != today {
-                    appendCheckinLog(uid: acc.uid, ok: true, credits: reward,
-                                     message: st.message.isEmpty ? "今日已签" : st.message)
-                    ccLog("Trae 签到 uid \(acc.uid): 今日已签，奖励 +\(reward)")
-                } else {
-                    // 旧版 claim 无金额可解析，当日记录可能记成 +0；手动触发时按 status 修正
-                    fixupCheckinLog(uid: acc.uid, day: today, credits: reward)
-                }
+                // 客户端已自行签到：补记一笔真实奖励（此时本地水位尚未标记今日）
+                recordCheckinOnce(uid: acc.uid, day: today, credits: reward,
+                                  message: st.message.isEmpty ? "今日已签" : st.message)
+                ccLog("Trae 签到 uid \(acc.uid): 今日已签，奖励 +\(reward)")
                 continue
             }
+            // status 期间可能已被另一轮/客户端签到：claim 前再核一次水位
+            lock.lock()
+            let recheck = metaGet("trae_checkin_day_\(acc.uid)") == today
+            lock.unlock()
+            if recheck { continue }
             let cl = TraeCheckin.claim(jwt: acc.jwt, uid: acc.uid, deviceID: acc.deviceID)
             lock.lock()
             if cl.ok {
@@ -962,8 +978,15 @@ final class StatsStore: @unchecked Sendable {
                 metaSet("trae_checkin_fail_\(acc.uid)", value: String(nowEpoch))
             }
             lock.unlock()
-            appendCheckinLog(uid: acc.uid, ok: cl.ok, credits: cl.ok ? reward : 0, message: cl.message)
-            ccLog("Trae 签到 uid \(acc.uid): \(cl.ok ? "成功 +\(reward)" : "失败 \(cl.message)")")
+            if cl.ok {
+                // 服务端返回「今日已签」时只补水位，不再重复记奖励
+                recordCheckinOnce(uid: acc.uid, day: today, credits: reward,
+                                  message: cl.message.isEmpty ? "今日已签" : cl.message)
+                ccLog("Trae 签到 uid \(acc.uid): \(cl.already ? "已签" : "成功") +\(reward)")
+            } else {
+                appendCheckinLog(uid: acc.uid, ok: false, credits: 0, message: cl.message)
+                ccLog("Trae 签到 uid \(acc.uid): 失败 \(cl.message)")
+            }
             acted = true
         }
         return acted
@@ -998,8 +1021,27 @@ final class StatsStore: @unchecked Sendable {
         }
     }
 
-    /// 修正当日签到记录：旧版 status 未识别 did_checked_in，会重复 claim 并记成 +0。
-    /// 保留当日最后一条成功记录并按 status 金额补上奖励，删掉同日重复的 +0 成功记录。
+    /// 今天是否已有该账号的成功签到记录（跨进程/多轮重复 claim 的兜底）
+    private func checkinLoggedToday(uid: String, day: String) -> Bool {
+        checkinLog().contains { rec in
+            guard (rec["ok"] as? Bool) == true, (rec["uid"] as? String) == uid,
+                  let t = rec["t"] as? Int else { return false }
+            return Self.dayFormatter.string(
+                from: Date(timeIntervalSince1970: TimeInterval(t))) == day
+        }
+    }
+
+    /// 成功记录只写一笔；已有记录时只按 status 修正金额（旧版 claim 无金额记成 +0）
+    private func recordCheckinOnce(uid: String, day: String, credits: Double, message: String) {
+        if checkinLoggedToday(uid: uid, day: day) {
+            fixupCheckinLog(uid: uid, day: day, credits: credits)
+        } else {
+            appendCheckinLog(uid: uid, ok: true, credits: credits, message: message)
+        }
+    }
+
+    /// 修正当日签到记录：保留当日最后一条成功记录并按 status 金额补上奖励，
+    /// 删掉同日重复的 +0 成功记录。
     private func fixupCheckinLog(uid: String, day: String, credits: Double) {
         lock.lock(); defer { lock.unlock() }
         let raw = metaGet("trae_checkin_log")

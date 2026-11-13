@@ -509,7 +509,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         traeQueue.async { [weak self] in
             guard let self else { return }
             let didSync = self.store.syncTraeIfNeeded(interactive: interactive)
-            // 每日签到：自动路径内部有起始小时门（默认 9 点）+ 水位；手动触发（弹窗打开）绕过时钟门
+            // 每日签到：自动路径按「起始小时 + 按账号派生的随机分钟」放行，受开关与水位约束
             self.store.traeCheckinIfNeeded(interactive: interactive)
             // 只有真的拉过 Trae 才补查；无凭据/静默/节流时不重复查今日
             guard interactive, didSync else { return }
