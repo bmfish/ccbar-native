@@ -671,7 +671,10 @@ final class StatsStore: @unchecked Sendable {
         let clientAccounts = TraeClientCredentials.discover(now: now)
         let primary = syncSlot(credential: credential, slot: 1, clientAccounts: clientAccounts,
                                now: now, interactive: interactive, force: force)
-        if !credential2.isEmpty || clientAccounts.count >= 2 {
+        // 槽 2 只要存在客户端账号就跑：用户登出其中一个客户端后只剩 1 个账号，
+        // 若该账号绑在槽 2 而槽 1 的旧绑定已失效，槽 1 认领不到它（认领会避开另一槽已占账号），
+        // 再按「账号数 ≥ 2」跳过槽 2 会让唯一活跃账号没人拉。
+        if !credential2.isEmpty || !clientAccounts.isEmpty {
             _ = syncSlot(credential: credential2, slot: 2, clientAccounts: clientAccounts,
                          now: now, interactive: interactive, force: force)
         }
@@ -761,6 +764,8 @@ final class StatsStore: @unchecked Sendable {
         // 客户端账号绑定（读写绑定键须持锁；文件 IO 已在 syncTraeIfNeeded 完成）
         let clientAcc = bindClientAccount(slot: slot, accounts: clientAccounts)
         lock.unlock()
+        // 既没认领到客户端账号、也没有手动凭据：无可拉取的账号，直接跳过（不占节流、不写通道状态）
+        guard clientAcc != nil || !credential.isEmpty else { return false }
         let fetchEnt = now.timeIntervalSince1970 - lastEntAt >= Self.traeEntMinInterval
 
         var fromEpoch: Int64
