@@ -811,6 +811,186 @@ html[data-lang="en"] .hero h1 {
   text-transform: uppercase;
 }
 
+/* Check-in highlight */
+
+.checkin-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 0.94fr) minmax(0, 1.06fr);
+  align-items: center;
+  gap: clamp(30px, 4.5vw, 60px);
+  padding: clamp(28px, 4.2vw, 52px);
+  overflow: hidden;
+  border: 1px solid rgba(167, 255, 196, 0.2);
+  border-radius: 30px;
+  background:
+    radial-gradient(720px 380px at 96% -4%, rgba(92, 255, 147, 0.14), transparent 64%),
+    radial-gradient(520px 360px at 0% 108%, rgba(36, 181, 255, 0.05), transparent 64%),
+    linear-gradient(150deg, rgba(18, 28, 23, 0.9), rgba(8, 12, 10, 0.95));
+  box-shadow: var(--shadow);
+}
+
+.checkin-grid::before {
+  content: "";
+  position: absolute;
+  top: -110px;
+  right: 12%;
+  width: 300px;
+  height: 300px;
+  border: 1px solid rgba(92, 255, 147, 0.09);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.checkin-copy {
+  position: relative;
+  z-index: 1;
+}
+
+.checkin-copy h2 {
+  margin-top: 14px;
+  font-size: clamp(34px, 4.6vw, 54px);
+  font-weight: 720;
+  line-height: 1.06;
+  letter-spacing: -0.05em;
+}
+
+.checkin-copy h2 em {
+  display: inline-block;
+  padding-bottom: 0.04em;
+  background: linear-gradient(98deg, #e4ffc9 4%, #6bff9b 52%, #2ee0b0 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-style: normal;
+  text-shadow: 0 0 60px rgba(92, 255, 147, 0.18);
+}
+
+.checkin-lead {
+  max-width: 520px;
+  margin-top: 18px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.72;
+}
+
+.checkin-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  max-width: 460px;
+  margin-top: 26px;
+}
+
+.checkin-stat {
+  padding: 13px 14px 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.024);
+}
+
+.checkin-stat strong {
+  display: block;
+  color: var(--green);
+  font-family: var(--mono);
+  font-size: 19px;
+  font-weight: 640;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.checkin-stat span {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted-2);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.checkin-points {
+  display: grid;
+  gap: 15px;
+  margin-top: 26px;
+  list-style: none;
+}
+
+.checkin-points li {
+  display: flex;
+  gap: 12px;
+}
+
+.checkin-dot {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  flex: none;
+  margin-top: 1px;
+  border: 1px solid rgba(92, 255, 147, 0.22);
+  border-radius: 50%;
+  background: rgba(92, 255, 147, 0.09);
+  color: var(--green);
+}
+
+.checkin-dot .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.checkin-point-body {
+  display: grid;
+  gap: 3px;
+}
+
+.checkin-point-body strong {
+  font-size: 14.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.checkin-point-body > span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.64;
+}
+
+.checkin-copy .text-link {
+  margin-top: 26px;
+}
+
+.checkin-shot {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.checkin-shot .shot-stage {
+  padding: 15px;
+  border-radius: 24px;
+}
+
+.checkin-shot .shot-frame {
+  height: auto;
+  padding: 9px;
+  border-radius: 16px;
+}
+
+.checkin-shot .shot-frame img {
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  border-radius: 10px;
+}
+
+.checkin-shot figcaption {
+  padding: 14px 8px 0;
+  color: var(--muted-2);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
 /* Screens */
 
 .shots-layout {
@@ -1216,6 +1396,13 @@ html[data-lang="en"] .hero h1 {
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 28px;
+}
+
+.download-note {
+  margin-top: 12px;
+  color: var(--muted-2);
+  font-size: 11.5px;
+  line-height: 1.6;
 }
 
 .download-specs {
@@ -1848,6 +2035,20 @@ code {
     grid-template-columns: 1fr;
   }
 
+  .checkin-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .checkin-stats {
+    max-width: none;
+  }
+
+  .checkin-shot {
+    width: 100%;
+    max-width: 720px;
+    margin: 6px auto 0;
+  }
+
   .shot-tabs {
     position: static;
     flex-direction: row;
@@ -2014,6 +2215,32 @@ code {
     border-radius: 14px;
   }
 
+  .checkin-grid {
+    padding: 22px;
+    border-radius: 22px;
+  }
+
+  .checkin-copy h2 {
+    font-size: clamp(30px, 9vw, 42px);
+  }
+
+  .checkin-frame {
+    height: auto;
+    padding: 7px;
+  }
+
+  .checkin-stat {
+    padding: 11px 12px 10px;
+  }
+
+  .checkin-stat strong {
+    font-size: 17px;
+  }
+
+  .checkin-stat span {
+    font-size: 10.5px;
+  }
+
   .pipeline {
     align-items: flex-start;
   }
@@ -2128,6 +2355,14 @@ code {
 
   .shot-frame {
     height: 340px;
+  }
+
+  .checkin-frame {
+    height: auto;
+  }
+
+  .checkin-grid {
+    padding: 20px 18px;
   }
 
   .demo-frame {
