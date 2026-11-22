@@ -39,6 +39,19 @@ struct SourceConfig: Codable {
     }
 }
 
+/// 菜单栏数值口径：Token 总量 / 今日积分
+enum MenuBarMetric: String, CaseIterable {
+    case tokens
+    case credits
+
+    var displayName: String {
+        switch self {
+        case .tokens: return L("Token")
+        case .credits: return L("积分")
+        }
+    }
+}
+
 class Settings {
     let defaults: UserDefaults
 
@@ -103,6 +116,12 @@ class Settings {
     var menuEmojiEnabled: Bool {
         get { defaults.object(forKey: "menuEmojiEnabled") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "menuEmojiEnabled") }
+    }
+
+    /// 菜单栏显示 Token 还是积分
+    var menuBarMetric: MenuBarMetric {
+        get { MenuBarMetric(rawValue: defaults.string(forKey: "menuBarMetric") ?? "") ?? .tokens }
+        set { defaults.set(newValue.rawValue, forKey: "menuBarMetric") }
     }
 
     /// 宽版弹窗
@@ -230,6 +249,8 @@ final class DataCache {
     private var trendExtras: TrendExtras?
     /// 今日区（逐时/积分/会话脚注）：每轮后台刷新更新
     private var todayExtras: TodayExtras?
+    /// 今日积分（菜单栏切到积分为独立轻量查询，避免为显示积分而算整套今日区）
+    private var todayCredits: Double?
     private var lastDailyCacheDate: String?
     private var lastModelCacheHour = -1
 
@@ -286,6 +307,12 @@ final class DataCache {
         return todayExtras
     }
 
+    /// 今日积分（菜单栏积分口径）
+    func getCachedTodayCredits() -> Double? {
+        lock.lock(); defer { lock.unlock() }
+        return todayCredits
+    }
+
     /// 历史区间（昨日/周/月/总量）每天重查一次
     func needsDailyCache() -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -309,7 +336,8 @@ final class DataCache {
         workHours: Double?,
         trendCredits: (yesterday: Double, week: Double, month: Double, total: Double)? = nil,
         trendExtras: TrendExtras? = nil,
-        todayExtras: TodayExtras? = nil
+        todayExtras: TodayExtras? = nil,
+        todayCredits: Double? = nil
     ) {
         lock.lock(); defer { lock.unlock() }
         self.todayStats = today
@@ -327,6 +355,7 @@ final class DataCache {
         }
         if let v = trendExtras { self.trendExtras = v }
         if let v = todayExtras { self.todayExtras = v }
+        if let v = todayCredits { self.todayCredits = v }
     }
 
     func markDailyCacheDone() {
@@ -361,6 +390,7 @@ final class DataCache {
         totalCredits = 0
         trendExtras = nil
         todayExtras = nil
+        todayCredits = nil
         lastDailyCacheDate = nil
         lastModelCacheHour = -1
     }

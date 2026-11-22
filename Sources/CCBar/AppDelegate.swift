@@ -346,6 +346,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             // 工时与今日区只有弹窗在用：关闭时不查，省掉每轮 800 行流水与逐时聚合
             let workHours = popoverShown ? self.store.queryWorkHours() : nil
             let todayExtras = popoverShown ? Self.makeTodayExtras(store: self.store) : nil
+            // 菜单栏切到积分时才额外查一次今日积分，不为此计算整套今日区
+            let todayCredits = todayExtras?.credits
+                ?? (self.settings.menuBarMetric == .credits ? self.store.queryTodayCredits() : nil)
 
             var modelBreakdown: [ModelStat]?
             if DataCache.shared.needsModelCache() {
@@ -404,7 +407,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                     workHours: workHours,
                     trendCredits: trendCredits,
                     trendExtras: trendExtras,
-                    todayExtras: todayExtras
+                    todayExtras: todayExtras,
+                    todayCredits: todayCredits
                 )
                 self.applyTitle(todayStats)
 
@@ -474,7 +478,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                     total: nil,
                     models: modelBreakdown,
                     workHours: workHours,
-                    todayExtras: todayExtras
+                    todayExtras: todayExtras,
+                    todayCredits: todayExtras.credits
                 )
                 self.applyTitle(todayStats)
                 self.updateMenu()
@@ -526,7 +531,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                 DispatchQueue.main.async {
                     DataCache.shared.update(today: todayStats, yesterday: nil, week: nil,
                                             month: nil, total: nil, models: nil, workHours: nil,
-                                            todayExtras: todayExtras)
+                                            todayExtras: todayExtras,
+                                            todayCredits: todayExtras.credits)
                     self.applyTitle(todayStats)
                     self.updateMenu()
                 }
@@ -554,7 +560,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                 DispatchQueue.main.async {
                     DataCache.shared.update(today: todayStats, yesterday: nil, week: nil,
                                             month: nil, total: nil, models: nil, workHours: nil,
-                                            todayExtras: todayExtras)
+                                            todayExtras: todayExtras,
+                                            todayCredits: todayExtras.credits)
                     self.applyTitle(todayStats)
                     self.updateMenu()
                 }
@@ -578,6 +585,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     /// 标题全文（表情分级 + 数字）
     private func titleText(for total: Int64) -> String {
         var text = fmtTitle(total)
+        if settings.menuEmojiEnabled {
+            text = PetPose.emoji(progress: thresholdProgress(total: total)) + " " + text
+        }
+        return text
+    }
+
+    /// 积分标题（整数不带小数点，小数保留两位）
+    private func creditTitle(for total: Int64) -> String {
+        let credits = DataCache.shared.getCachedTodayCredits() ?? 0
+        let number = credits == credits.rounded() && abs(credits) < 100_000
+            ? String(Int(credits))
+            : String(format: "%.2f", credits)
+        var text = number
         if settings.menuEmojiEnabled {
             text = PetPose.emoji(progress: thresholdProgress(total: total)) + " " + text
         }
@@ -609,6 +629,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             return
         }
         let progress = thresholdProgress(total: stats.total)
+
+        // 积分口径：只显示今日积分，不做 Token 滚动动画、不套 Token 预警颜色
+        if settings.menuBarMetric == .credits {
+            cancelRoll()
+            displayedTotal = stats.total
+            setMenuTitle(text: creditTitle(for: stats.total), color: nil)
+            petController.refresh(progress: progress)
+            return
+        }
+
         let color = titleColor(for: stats.total)
 
         if stats.total == displayedTotal {

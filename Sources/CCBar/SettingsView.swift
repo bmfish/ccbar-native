@@ -42,6 +42,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var launchAtLogin = false
     @Published var menuPetEnabled = true
     @Published var menuEmojiEnabled = true
+    @Published var menuBarMetric: MenuBarMetric = .tokens
     @Published var popoverWide = false
     @Published var sources: [SourceRowDraft] = []
     @Published var language: AppLanguage = .system
@@ -96,6 +97,7 @@ final class SettingsViewModel: ObservableObject {
         launchAtLogin = settings.launchAtLogin
         menuPetEnabled = settings.menuPetEnabled
         menuEmojiEnabled = settings.menuEmojiEnabled
+        menuBarMetric = settings.menuBarMetric
         popoverWide = settings.popoverWide
         language = AppLanguage(rawValue: UserDefaults.standard.string(forKey: "appLanguage") ?? "") ?? .system
         lastBackupDate = UserDefaults.standard.string(forKey: "lastAutoBackupDate") ?? ""
@@ -335,6 +337,7 @@ final class SettingsViewModel: ObservableObject {
         applyLaunchAtLogin(launchAtLogin)
         settings.menuPetEnabled = menuPetEnabled
         settings.menuEmojiEnabled = menuEmojiEnabled
+        settings.menuBarMetric = menuBarMetric
         settings.popoverWide = popoverWide
         settings.notifyInterval = notify!
         settings.ledRedThreshold = led!
@@ -364,6 +367,7 @@ final class SettingsViewModel: ObservableObject {
         applyLaunchAtLogin(false)
         settings.menuPetEnabled = true
         settings.menuEmojiEnabled = true
+        settings.menuBarMetric = .tokens
         settings.popoverWide = false
         settings.ledRedThreshold = 100
         settings.monthlyBudgetUsd = 0
@@ -645,6 +649,23 @@ struct SettingsRootView: View {
                         .controlSize(.small)
                         .tint(Color(nsColor: Design.successColor))
                     Text(L("380pt · 菜单栏弹窗展开宽度"))
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                    Spacer(minLength: 0)
+                }
+                .frame(height: 32)
+                rowDivider
+                HStack(spacing: 8) {
+                    rowLabel(L("菜单栏显示"))
+                    Picker("", selection: $vm.menuBarMetric) {
+                        ForEach(MenuBarMetric.allCases, id: \.self) { metric in
+                            Text(metric.displayName).tag(metric)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 120)
+                    Text(L("今日 Token 总量或积分"))
                         .font(.system(size: 10))
                         .foregroundColor(Color(nsColor: Design.textMuted))
                     Spacer(minLength: 0)
