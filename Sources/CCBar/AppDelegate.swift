@@ -339,8 +339,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             self.store.syncIfNeeded()
             // Trae 网络同步丢到独立队列，本地查询不等它（节流在 store 内，重复调用不重复发请求）
             self.syncTraeInBackground(interactive: false)
-            // 多 Mac 用量云同步（开关关闭时立即返回；9:00–18:00 每小时自动一次）
-            self.syncUsageInBackground()
 
             let todayStats = self.store.queryDayStats(days: 0)
             // 工时与今日区只有弹窗在用：关闭时不查，省掉每轮 800 行流水与逐时聚合
@@ -512,7 +510,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     // MARK: - 用量云同步（独立队列）
 
     /// 本机用量上传 + 其他 Mac 数据拉取。开关/地址/用户名/会话来自设置；
-    /// 后台节流（9:00–18:00 每小时一次）在 UsageSync 内，重复调用不会重复发请求。
+    /// 每次 Trae 同步真实拉取后触发一次，不再按小时独立轮询。
     private func syncUsageInBackground() {
         guard settings.usageSyncEnabled, !settings.usageSyncToken.isEmpty else { return }
         let config = UsageSync.Config(baseURL: settings.usageSyncURL,
@@ -544,13 +542,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
 
     /// Trae 用量同步 + 签到统一走 traeQueue，网络不占用 queryQueue。
     /// 节流（定时 15 分钟 / 交互 1 分钟）在 store 内判断，重复调用不会重复发请求。
-    /// 交互式调用在同步完成后补查一次今日，让刚打开的弹窗拿到最新数据。
+    /// 每次真实拉取后顺带把本机用量同步到后台；交互式调用再补查一次今日。
     private func syncTraeInBackground(interactive: Bool) {
         traeQueue.async { [weak self] in
             guard let self else { return }
             let didSync = self.store.syncTraeIfNeeded(interactive: interactive)
             // 每日签到：自动路径按「起始小时 + 按账号派生的随机分钟」放行，受开关与水位约束
             self.store.traeCheckinIfNeeded(interactive: interactive)
+            // 跟随 Trae 的真实拉取频率上传后台，不再独立按小时轮询
+            if didSync {
+                self.syncUsageInBackground()
+            }
             // 只有真的拉过 Trae 才补查；无凭据/静默/节流时不重复查今日
             guard interactive, didSync else { return }
             self.queryQueue.async { [weak self] in

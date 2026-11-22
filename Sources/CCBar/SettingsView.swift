@@ -177,7 +177,7 @@ final class SettingsViewModel: ObservableObject {
         usageSyncStatus = L("同步中…")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self, let store = AppDelegate.shared?.store else { return }
-            let outcome = UsageSync.run(store: store, config: config, force: true)
+            let outcome = UsageSync.run(store: store, config: config)
             DispatchQueue.main.async {
                 self.usageSyncSyncing = false
                 self.usageSyncStatus = store.usageSyncStatus()
@@ -782,7 +782,7 @@ struct SettingsRootView: View {
                         .toggleStyle(.switch)
                         .controlSize(.small)
                         .tint(Color(nsColor: Design.successColor))
-                    Text(L("自动同步 9:00–18:00，每小时一次"))
+                    Text(L("跟随 Trae 同步，约 15 分钟一次"))
                         .font(.system(size: 10))
                         .foregroundColor(Color(nsColor: Design.textMuted))
                     Spacer(minLength: 0)

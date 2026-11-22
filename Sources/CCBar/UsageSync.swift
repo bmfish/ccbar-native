@@ -52,10 +52,6 @@ enum UsageSync {
 
     /// 单批大小（服务端上限 5000，客户端取小值控制内存与请求时长）
     static let batchSize = 500
-    /// 后台自动同步最小间隔：每小时一次
-    static let minInterval: TimeInterval = 3600
-    /// 自动同步时段（本地时间）：9:00–18:00，含 9 点、不含 18 点；手动同步不受限
-    static let activeHours = 9..<18
     /// 增量回看：覆盖跨零点迟到与会话续聊
     static let incrementalOverlap: Int64 = 3 * 86_400
     /// 每日全量对账：回看 30 天，兜住老数据被改写
@@ -63,7 +59,6 @@ enum UsageSync {
     static let reconcileLookback: Int64 = 30 * 86_400
 
     private static let gate = NSLock()
-    private static var lastAttemptAt: TimeInterval = 0
     private static var running = false
 
     /// 地址归一化：去尾部斜杠；未带 /api 前缀时自动补上
@@ -78,7 +73,7 @@ enum UsageSync {
         return text
     }
 
-    static func run(store: StatsStore, config: Config, force: Bool = false,
+    static func run(store: StatsStore, config: Config,
                     now: Date = Date()) -> Outcome {
         guard let base = normalizedBaseURL(config.baseURL) else {
             store.setUsageSyncStatus("未配置服务地址")
@@ -116,19 +111,7 @@ enum UsageSync {
             gate.unlock()
             return outcome
         }
-        if !force {
-            // 自动同步只在工作时段内、每小时最多一次；「立即同步」始终可用
-            guard activeHours.contains(Calendar.current.component(.hour, from: now)) else {
-                gate.unlock()
-                return outcome
-            }
-            guard now.timeIntervalSince1970 - lastAttemptAt >= minInterval else {
-                gate.unlock()
-                return outcome
-            }
-        }
         running = true
-        lastAttemptAt = now.timeIntervalSince1970
         gate.unlock()
         defer {
             gate.lock()
