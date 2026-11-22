@@ -384,12 +384,6 @@ public class AdminConsoleRepository {
                 .list();
     }
 
-    public int purgeUsageBefore(long cutoffEpoch) {
-        return jdbcClient.sql("delete from usage_event where created_at < :cutoff")
-                .param("cutoff", cutoffEpoch)
-                .update();
-    }
-
     // ---------- 健康 ----------
 
     public List<HealthRecord> latestHealth() {

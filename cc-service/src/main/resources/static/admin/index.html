@@ -438,6 +438,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
       <span>推送管理</span>
     </div>
+    <div class="nav-item" data-view="audit">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 5h9M9 12h9M9 19h9"/><path d="M4.5 5h.01M4.5 12h.01M4.5 19h.01"/></svg>
+      <span>访问审计</span>
+    </div>
     <div class="nav-item" data-view="system">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
       <span>系统状态</span>
@@ -837,6 +841,107 @@
         </div>
       </section>
 
+      <!-- 访问审计 -->
+      <section class="view" id="view-audit">
+        <div class="page-head">
+          <div>
+            <h2>访问审计</h2>
+            <p>所有 /api 请求记录与访问统计</p>
+          </div>
+          <div class="page-actions">
+            <select class="select" id="auditDays">
+              <option value="1">今天</option>
+              <option value="7" selected>近 7 天</option>
+              <option value="30">近 30 天</option>
+              <option value="90">近 90 天</option>
+            </select>
+            <button class="btn" id="auditReloadBtn">刷新</button>
+          </div>
+        </div>
+        <div class="kpis">
+          <div class="card kpi">
+            <div class="label">请求总数</div>
+            <div class="value" id="auditTotal">—</div>
+            <div class="foot" id="auditTotalFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">成功率</div>
+            <div class="value" id="auditSuccessRate">—</div>
+            <div class="foot" id="auditSuccessFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">平均耗时</div>
+            <div class="value" id="auditAvg">—</div>
+            <div class="foot" id="auditAvgFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">独立用户</div>
+            <div class="value" id="auditUsers">—</div>
+            <div class="foot">有身份的业务请求</div>
+          </div>
+        </div>
+        <div class="grid-half">
+          <div class="card">
+            <div class="card-head"><h3>热门接口 Top 10</h3></div>
+            <div class="card-body flush">
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>接口</th><th class="num">请求</th><th class="num">失败</th><th class="num">平均耗时</th></tr></thead>
+                  <tbody id="auditTopRows"><tr class="empty-row"><td colspan="4">加载中…</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>按天统计</h3></div>
+            <div class="card-body flush">
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>日期</th><th class="num">请求</th><th class="num">失败</th><th class="num">平均耗时</th></tr></thead>
+                  <tbody id="auditDailyRows"><tr class="empty-row"><td colspan="4">加载中…</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>状态码分布</h3></div>
+          <div class="card-body"><div class="chips" id="auditStatusChips"></div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>请求明细</h3><span class="sub" id="auditLogCount"></span></div>
+          <div class="card-body" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <select class="select" id="auditMethod">
+              <option value="">全部方法</option>
+              <option value="GET">GET</option>
+              <option value="POST">POST</option>
+              <option value="PUT">PUT</option>
+              <option value="DELETE">DELETE</option>
+            </select>
+            <select class="select" id="auditStatus">
+              <option value="">全部状态</option>
+              <option value="2xx">2xx</option>
+              <option value="3xx">3xx</option>
+              <option value="4xx">4xx</option>
+              <option value="5xx">5xx</option>
+            </select>
+            <input class="input" id="auditPath" placeholder="路径包含…" style="max-width:220px">
+            <button class="btn" id="auditSearchBtn">查询</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>时间</th><th>用户</th><th>方法</th><th>路径</th><th class="num">状态</th><th class="num">耗时</th><th>IP</th></tr></thead>
+              <tbody id="auditLogRows"><tr class="empty-row"><td colspan="7">加载中…</td></tr></tbody>
+            </table>
+          </div>
+          <div class="card-body" style="display:flex;justify-content:flex-end;gap:8px;align-items:center">
+            <button class="btn sm ghost" id="auditPrev">上一页</button>
+            <span class="meta" id="auditPageInfo"></span>
+            <button class="btn sm ghost" id="auditNext">下一页</button>
+          </div>
+        </div>
+      </section>
+
       <!-- 系统状态 -->
       <section class="view" id="view-system">
         <div class="page-head">
@@ -878,13 +983,6 @@
           <div class="card">
             <div class="card-head"><h3>运行信息</h3></div>
             <div class="card-body"><div class="status-list" id="sysInfo"></div></div>
-          </div>
-        </div>
-        <div class="card danger-zone">
-          <div class="card-head"><h3>数据维护</h3></div>
-          <div class="card-body">
-            <p class="muted" style="margin:0 0 12px;font-size:12.5px">清理 90 天前的用量事件，释放数据库空间。用户、设备与健康数据不受影响。</p>
-            <button class="btn danger" id="purgeUsageBtn">清理 90 天前用量事件</button>
           </div>
         </div>
       </section>
@@ -947,6 +1045,7 @@ const VIEW_META = {
   devices: ['设备管理', '所有登记设备与在线状态'],
   health: ['健康管理', '体重、体脂与身高记录'],
   push: ['推送管理', 'Bark 定时推送任务'],
+  audit: ['访问审计', 'API 请求记录与访问统计'],
   system: ['系统状态', '服务健康与数据维护']
 };
 
@@ -962,6 +1061,7 @@ const state = {
   usage: { days: 7, userId: '', source: '', model: '' },
   flow: { range: 'today', anchor: startOfToday(), userId: '', source: '', model: '' },
   health: { days: 30, kind: 'all' },
+  audit: { days: 7, page: 1, size: 20, method: '', statusClass: '', path: '' },
   hourlyMetric: 'credits',
   bucketCache: {},
   lastLoaded: {},
@@ -1263,6 +1363,7 @@ const LOADERS = {
   devices: () => loadDevices(),
   health: () => loadHealth(),
   push: () => loadPush(),
+  audit: () => loadAudit(),
   system: () => loadSystem()
 };
 
@@ -2500,20 +2601,6 @@ async function loadSystem() {
     `<div class="status-row"><span class="k">${key}</span><span class="v">${value}</span></div>`).join('');
 }
 
-function purgeUsage() {
-  confirmAction(
-    '清理用量事件',
-    '将删除 90 天前的用量事件，历史统计会相应减少。此操作不可恢复。',
-    async () => {
-      const result = await api('/maintenance/purge-usage?days=90', { method: 'POST' });
-      toast(`已清理 ${result.deleted} 条用量事件`);
-      await refreshView('system');
-    },
-    '清理',
-    true
-  );
-}
-
 /* ---------- 推送管理 ---------- */
 
 function timeValue(value) {
@@ -2521,13 +2608,19 @@ function timeValue(value) {
 }
 
 function pushPreview(task) {
-  if (task.taskType === 'WEIGHT') return '有今日体重就播报，否则提醒称重';
-  if (task.taskType === 'TOKEN_USAGE') return '推送今日 Token 用量与积分';
+  if (task.taskType === 'WEIGHT') return `有今日体重就播报，否则提醒称重 · ${pushTemplateCount(task)} 条模板`;
+  if (task.taskType === 'TOKEN_USAGE') return `今日 Token + 积分 · ${pushTemplateCount(task)} 条模板`;
   const lines = String(task.messages || '').split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
   if (!lines.length) return '—';
   return lines.length > 1 ? `${lines[0]} 等 ${lines.length} 条` : lines[0];
+}
+
+function pushTemplateCount(task) {
+  return String(task.messages || '').split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean).length;
 }
 
 function pushTypeName(type) {
@@ -2670,13 +2763,19 @@ function syncPushEditorFields() {
   $('#ptDailyField').classList.toggle('hidden', !daily);
   $('#ptIntervalFields').classList.toggle('hidden', daily);
 
-  const text = $('#ptType').value === 'TEXT';
-  $('#ptBodyLabel').textContent = text
-    ? '推送内容（每行一条，随机选一条）'
-    : '兜底文案（可选，没有数据时随机选一条）';
-  $('#ptBodyHint').textContent = text
-    ? ''
-    : '有数据时会自动生成内容，这里的文案只在没有数据时使用';
+  const type = $('#ptType').value;
+  const label = $('#ptBodyLabel');
+  const hint = $('#ptBodyHint');
+  if (type === 'WEIGHT') {
+    label.textContent = '文案模板（每行一条，随机选一条）';
+    hint.textContent = '场景：[已称] [已称-无对比] [未称] [无数据]；占位符：{weight} {delta} {deltaPhrase} {lastDate} {lastWeight}';
+  } else if (type === 'TOKEN_USAGE') {
+    label.textContent = '文案模板（每行一条，随机选一条）';
+    hint.textContent = '场景：[有Token] [仅积分] [无消耗]；占位符：{tokens} {input} {output} {cache} {breakdown} {credits}';
+  } else {
+    label.textContent = '推送内容（每行一条，随机选一条）';
+    hint.textContent = '';
+  }
 }
 
 function readPushEditor() {
@@ -2783,6 +2882,100 @@ function deletePushTask(task) {
   );
 }
 
+/* ---------- 访问审计 ---------- */
+
+function auditStatusPill(status) {
+  if (status >= 500) return 'bad';
+  if (status >= 400) return 'warn';
+  if (status >= 300) return 'blue';
+  return 'ok';
+}
+
+function fmtMs(value) {
+  return Math.round(Number(value || 0)).toLocaleString('zh-CN') + ' ms';
+}
+
+async function loadAudit() {
+  const summary = await api(`/audit/summary?days=${state.audit.days}`);
+  const total = Number(summary.total || 0);
+  const failed = Number(summary.failed || 0);
+  const succeeded = Math.max(0, total - failed);
+
+  $('#auditTotal').textContent = fmtInt(total);
+  $('#auditTotalFoot').textContent = failed ? `${fmtInt(failed)} 次失败` : '没有失败请求';
+  $('#auditSuccessRate').textContent = total ? fmtPct(succeeded / total * 100) : '—';
+  $('#auditSuccessFoot').textContent = total ? `${fmtInt(succeeded)} 次成功` : '暂无请求';
+  $('#auditAvg').textContent = fmtMs(summary.avgDurationMs);
+  $('#auditAvgFoot').textContent = `P95 ${fmtMs(summary.p95DurationMs)}`;
+  $('#auditUsers').textContent = fmtInt(summary.uniqueUsers);
+
+  const top = summary.topPaths || [];
+  $('#auditTopRows').innerHTML = top.length ? top.map((row) => `
+    <tr>
+      <td><span class="pill plain">${esc(row.method)}</span> <span title="${esc(row.path)}">${esc(row.path)}</span></td>
+      <td class="num">${fmtInt(row.count)}</td>
+      <td class="num">${row.failed ? `<span style="color:var(--danger)">${fmtInt(row.failed)}</span>` : '0'}</td>
+      <td class="num">${fmtMs(row.avgDurationMs)}</td>
+    </tr>`).join('') : '<tr class="empty-row"><td colspan="4">暂无数据</td></tr>';
+
+  const daily = summary.daily || [];
+  $('#auditDailyRows').innerHTML = daily.length ? daily.map((row) => `
+    <tr>
+      <td>${esc(row.date)}</td>
+      <td class="num">${fmtInt(row.count)}</td>
+      <td class="num">${row.failed ? `<span style="color:var(--danger)">${fmtInt(row.failed)}</span>` : '0'}</td>
+      <td class="num">${fmtMs(row.avgDurationMs)}</td>
+    </tr>`).join('') : '<tr class="empty-row"><td colspan="4">暂无数据</td></tr>';
+
+  const codes = summary.statusCodes || [];
+  $('#auditStatusChips').innerHTML = codes.length ? codes.map((row) =>
+    `<span class="pill ${auditStatusPill(row.status)}">${row.status} · ${fmtInt(row.count)}</span>`).join('')
+    : '<span class="muted">暂无数据</span>';
+
+  await loadAuditLogs();
+}
+
+async function loadAuditLogs() {
+  const params = new URLSearchParams({
+    days: String(state.audit.days),
+    page: String(state.audit.page),
+    size: String(state.audit.size)
+  });
+  if (state.audit.method) params.set('method', state.audit.method);
+  if (state.audit.statusClass) params.set('statusClass', state.audit.statusClass);
+  if (state.audit.path) params.set('path', state.audit.path);
+
+  const data = await api('/audit/logs?' + params.toString());
+  const items = data.items || [];
+  $('#auditLogCount').textContent = data.total ? `共 ${fmtInt(data.total)} 条` : '';
+  $('#auditLogRows').innerHTML = items.length ? items.map((row) => `
+    <tr>
+      <td class="muted">${fmtDateTime(row.createdAt)}</td>
+      <td>${esc(row.username || (String(row.path || '').startsWith('/api/admin') ? '管理员' : '—'))}</td>
+      <td><span class="pill plain">${esc(row.method)}</span></td>
+      <td title="${esc(row.path)}">${esc(row.path)}</td>
+      <td class="num"><span class="pill ${auditStatusPill(row.status)}">${row.status}</span></td>
+      <td class="num">${fmtMs(row.durationMs)}</td>
+      <td class="muted">${esc(row.ip || '—')}</td>
+    </tr>`).join('') : '<tr class="empty-row"><td colspan="7">没有匹配的请求</td></tr>';
+
+  const pages = Math.max(1, Math.ceil(Number(data.total || 0) / (data.size || state.audit.size)));
+  state.audit.page = data.page || 1;
+  $('#auditPageInfo').textContent = `第 ${state.audit.page} / ${pages} 页`;
+  $('#auditPrev').disabled = state.audit.page <= 1;
+  $('#auditNext').disabled = state.audit.page >= pages;
+}
+
+function searchAudit() {
+  state.audit.method = $('#auditMethod').value;
+  state.audit.statusClass = $('#auditStatus').value;
+  state.audit.path = $('#auditPath').value.trim();
+  state.audit.page = 1;
+  loadAuditLogs().catch((error) => {
+    if (error.status !== 401) toast(error.message || '加载失败', 'error');
+  });
+}
+
 /* ---------- 事件绑定 ---------- */
 
 function bindEvents() {
@@ -2871,7 +3064,30 @@ function bindEvents() {
   $('#addHealthBtn').addEventListener('click', openAddHealth);
 
   $('#checkSystemBtn').addEventListener('click', () => refreshView('system'));
-  $('#purgeUsageBtn').addEventListener('click', purgeUsage);
+
+  $('#auditDays').addEventListener('change', () => {
+    state.audit.days = Number($('#auditDays').value) || 7;
+    state.audit.page = 1;
+    refreshView('audit', true);
+  });
+  $('#auditReloadBtn').addEventListener('click', () => refreshView('audit', true));
+  $('#auditSearchBtn').addEventListener('click', searchAudit);
+  $('#auditPath').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') searchAudit();
+  });
+  $('#auditPrev').addEventListener('click', () => {
+    if (state.audit.page <= 1) return;
+    state.audit.page -= 1;
+    loadAuditLogs().catch((error) => {
+      if (error.status !== 401) toast(error.message || '加载失败', 'error');
+    });
+  });
+  $('#auditNext').addEventListener('click', () => {
+    state.audit.page += 1;
+    loadAuditLogs().catch((error) => {
+      if (error.status !== 401) toast(error.message || '加载失败', 'error');
+    });
+  });
 
   $('#pushCreateBtn').addEventListener('click', () => openPushEditor(null));
   $('#pushTaskRows').addEventListener('click', (event) => {

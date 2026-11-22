@@ -237,14 +237,6 @@ public class AdminConsoleController {
                 health);
     }
 
-    @PostMapping("/maintenance/purge-usage")
-    public PurgeResult purgeUsage(@RequestParam(defaultValue = "90") int days) {
-        int safeDays = Math.min(Math.max(days, 1), 3650);
-        long cutoff = AdminTimes.now().minusDays(safeDays).toEpochSecond();
-        int deleted = console.purgeUsageBefore(cutoff);
-        return new PurgeResult(deleted, safeDays);
-    }
-
     private HourlyUsage buildHourly(OffsetDateTime from, OffsetDateTime to) {
         long[] tokens = new long[24];
         double[] credits = new double[24];

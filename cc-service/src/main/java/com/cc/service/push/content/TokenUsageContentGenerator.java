@@ -3,6 +3,7 @@ package com.cc.service.push.content;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Locale;
+import java.util.Map;
 
 import org.springframework.stereotype.Component;
 
@@ -10,7 +11,7 @@ import com.cc.service.admin.AdminTimes;
 import com.cc.service.push.PushTask;
 import com.cc.service.usage.UsageEventRepository;
 
-/** Token 用量：汇总今天所有用户的 token 与积分。 */
+/** Token 用量：有 Token 就一起推，没有 Token 时只推积分。 */
 @Component
 public class TokenUsageContentGenerator implements PushContentGenerator {
 
@@ -30,20 +31,31 @@ public class TokenUsageContentGenerator implements PushContentGenerator {
         LocalDate today = now.atZoneSameInstant(AdminTimes.ZONE).toLocalDate();
         OffsetDateTime start = AdminTimes.startOfDay(today);
         UsageEventRepository.DailyUsage usage = usageEvents.sumBetween(start, start.plusDays(1));
-        if (usage.totalTokens() == 0 && usage.credits() <= 0) {
-            String fallback = randomFallback(task);
-            return fallback != null ? fallback : "今天还没有 Token 消耗，积分 0。";
+
+        if (usage.totalTokens() > 0) {
+            String breakdown = "输入 " + tokens(usage.inputTokens()) + " / 输出 " + tokens(usage.outputTokens());
+            if (usage.cacheTokens() > 0) {
+                breakdown += " / 缓存 " + tokens(usage.cacheTokens());
+            }
+            return MessageTemplates.pick(task, "有Token",
+                    Map.of(
+                            "tokens", tokens(usage.totalTokens()),
+                            "input", tokens(usage.inputTokens()),
+                            "output", tokens(usage.outputTokens()),
+                            "cache", tokens(usage.cacheTokens()),
+                            "breakdown", breakdown,
+                            "credits", number(usage.credits())),
+                    "今日 Token {tokens}（{breakdown}），积分 {credits}。");
         }
 
-        StringBuilder message = new StringBuilder("今日 Token ")
-                .append(tokens(usage.totalTokens()))
-                .append("（输入 ").append(tokens(usage.inputTokens()))
-                .append(" / 输出 ").append(tokens(usage.outputTokens()));
-        if (usage.cacheTokens() > 0) {
-            message.append(" / 缓存 ").append(tokens(usage.cacheTokens()));
+        if (usage.credits() > 0) {
+            return MessageTemplates.pick(task, "仅积分",
+                    Map.of("credits", number(usage.credits())),
+                    "今日积分 {credits}，今天没有 Token 消耗。");
         }
-        message.append("），积分 ").append(number(usage.credits())).append("。");
-        return message.toString();
+
+        return MessageTemplates.pick(task, "无消耗", Map.of(),
+                "今天没有 Token 消耗，积分 0。");
     }
 
     private static String tokens(long value) {
