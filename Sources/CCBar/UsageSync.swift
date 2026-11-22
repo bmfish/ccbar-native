@@ -6,7 +6,7 @@ import Foundation
 //   POST /api/usage/events            批量 upsert（≤5000/批，主键 source + request_id）
 //   GET  /api/usage/events?after=seq  按 seq 游标增量拉取
 //
-// 上传：只读本机 usage_log 中 origin='local' 的行，按源水位回看 3 天（每日再回看 30 天对账），
+// 上传：只读本机 usage_log 中 origin='local' 的行，按源 updated_at 水位增量上传（保留 1 分钟并发兜底），
 // 整批 2xx 后推进水位；服务端内容未变化时不动 seq，避免重复下载。
 // 下载：写回 usage_log 并标记 origin='cloud'；同主键的本机行优先，绝不覆盖。
 // 双向都不会把拉回来的数据再传回去（origin 过滤），避免回声。
@@ -52,11 +52,8 @@ enum UsageSync {
 
     /// 单批大小（服务端上限 5000，客户端取小值控制内存与请求时长）
     static let batchSize = 500
-    /// 增量回看：覆盖跨零点迟到与会话续聊
-    static let incrementalOverlap: Int64 = 3 * 86_400
-    /// 每日全量对账：回看 30 天，兜住老数据被改写
-    static let reconcileInterval: TimeInterval = 86_400
-    static let reconcileLookback: Int64 = 30 * 86_400
+    /// 并发兜底：只回看 1 分钟，避免同一秒内的更新被严格水位漏掉
+    static let concurrencyOverlap: Int64 = 60
 
     private static let gate = NSLock()
     private static var running = false
@@ -123,7 +120,7 @@ enum UsageSync {
         let deviceId = store.usageDeviceID()
 
         if let error = upload(store: store, base: base, token: token,
-                              deviceId: deviceId, now: now, uploaded: &outcome.uploaded) {
+                              deviceId: deviceId, uploaded: &outcome.uploaded) {
             store.setUsageSyncStatus("上传失败：\(error)")
             outcome.error = error
             return outcome
@@ -184,40 +181,34 @@ enum UsageSync {
 
     /// 逐源上传本机明细；返回首个错误（成功为 nil）
     private static func upload(store: StatsStore, base: String, token: String,
-                               deviceId: String, now: Date, uploaded: inout Int) -> String? {
+                               deviceId: String, uploaded: inout Int) -> String? {
         let sources = store.usageLocalSources()
         guard !sources.isEmpty else { return nil }
-        let reconcileAt = TimeInterval(store.usageSyncMeta("reconcile_at")) ?? 0
-        let needsReconcile = now.timeIntervalSince1970 - reconcileAt >= reconcileInterval
 
         for source in sources {
             let watermark = Int64(store.usageSyncMeta("watermark_\(source)")) ?? 0
-            var start: Int64 = 0
-            if watermark > 0 {
-                let lookback = needsReconcile ? reconcileLookback : incrementalOverlap
-                start = max(watermark - lookback, 0)
-            }
-            var cursor = watermark > 0 ? StatsStore.UsageKeyset(createdAt: start, requestID: "") : nil
+            var cursor = watermark > 0
+                ? StatsStore.UsageUploadCursor(
+                    updatedAt: max(watermark - concurrencyOverlap, 0), requestID: "")
+                : nil
             var maxSeen = watermark
 
             while true {
                 let batch = store.usageLocalBatch(source: source, after: cursor, limit: batchSize)
                 if batch.isEmpty { break }
-                if let error = post(base: base, token: token, deviceId: deviceId, events: batch) {
+                if let error = post(base: base, token: token, deviceId: deviceId,
+                                    events: batch.map(\.event)) {
                     return "\(source)：\(error)"
                 }
                 uploaded += batch.count
                 if let last = batch.last {
-                    cursor = StatsStore.UsageKeyset(createdAt: last.createdAt, requestID: last.requestId)
+                    cursor = StatsStore.UsageUploadCursor(
+                        updatedAt: last.updatedAt, requestID: last.event.requestId)
+                    maxSeen = max(maxSeen, last.updatedAt)
                 }
-                maxSeen = max(maxSeen, batch.map(\.createdAt).max() ?? 0)
                 store.setUsageSyncMeta("watermark_\(source)", value: String(maxSeen))
                 if batch.count < batchSize { break }
             }
-        }
-
-        if needsReconcile {
-            store.setUsageSyncMeta("reconcile_at", value: String(Int(now.timeIntervalSince1970)))
         }
         return nil
     }

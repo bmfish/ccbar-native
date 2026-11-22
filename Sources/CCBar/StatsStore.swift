@@ -91,11 +91,11 @@ struct CCSwitchAdapter: SourceAdapter {
         let detail = """
         INSERT INTO usage_log
             (source, request_id, app_type, model, input_tokens, output_tokens,
-             cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_cost_usd, created_at, request_count)
+             cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_cost_usd, created_at, updated_at, request_count)
         SELECT
             'cc-switch', request_id, app_type, model, input_tokens, output_tokens,
             cache_read_tokens, cache_creation_tokens, 0,
-            CAST(total_cost_usd AS REAL), created_at, 1
+            CAST(total_cost_usd AS REAL), created_at, strftime('%s','now'), 1
         FROM \(alias).proxy_request_logs
         WHERE created_at >= \(fromEpoch) AND created_at < \(todayEpoch)
         ON CONFLICT(source, request_id) DO UPDATE SET
@@ -105,7 +105,18 @@ struct CCSwitchAdapter: SourceAdapter {
             cache_creation_tokens=excluded.cache_creation_tokens,
             reasoning_tokens=excluded.reasoning_tokens,
             total_cost_usd=excluded.total_cost_usd, created_at=excluded.created_at,
+            updated_at=strftime('%s','now'),
             request_count=excluded.request_count
+        WHERE usage_log.app_type IS NOT excluded.app_type
+           OR usage_log.model IS NOT excluded.model
+           OR usage_log.input_tokens IS NOT excluded.input_tokens
+           OR usage_log.output_tokens IS NOT excluded.output_tokens
+           OR usage_log.cache_read_tokens IS NOT excluded.cache_read_tokens
+           OR usage_log.cache_creation_tokens IS NOT excluded.cache_creation_tokens
+           OR usage_log.reasoning_tokens IS NOT excluded.reasoning_tokens
+           OR usage_log.total_cost_usd IS NOT excluded.total_cost_usd
+           OR usage_log.created_at IS NOT excluded.created_at
+           OR usage_log.request_count IS NOT excluded.request_count
         """
         // 历史聚合（早于本地已有明细最早一天的），展开成"每天每模型一行"的伪明细，
         // 请求侧无需再区分明细/聚合两套口径。created_at 取"该日期的本地正午"：
@@ -113,7 +124,7 @@ struct CCSwitchAdapter: SourceAdapter {
         let rollups = """
         INSERT INTO usage_log
             (source, request_id, app_type, model, input_tokens, output_tokens,
-             cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_cost_usd, created_at, request_count)
+             cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_cost_usd, created_at, updated_at, request_count)
         SELECT
             'cc-switch-rollup',
             'rollup|' || date || '|' || provider_id || '|' || model || '|' || request_model || '|' || pricing_model,
@@ -121,6 +132,7 @@ struct CCSwitchAdapter: SourceAdapter {
             cache_read_tokens, cache_creation_tokens, 0,
             CAST(total_cost_usd AS REAL),
             CAST(strftime('%s', date || ' 00:00:00') - (strftime('%s', 'now', 'localtime') - strftime('%s', 'now')) + 43200 AS INTEGER),
+            strftime('%s','now'),
             request_count
         FROM \(alias).usage_daily_rollups
         WHERE date < (SELECT date(MIN(created_at), 'unixepoch', 'localtime')
@@ -132,7 +144,18 @@ struct CCSwitchAdapter: SourceAdapter {
             cache_creation_tokens=excluded.cache_creation_tokens,
             reasoning_tokens=excluded.reasoning_tokens,
             total_cost_usd=excluded.total_cost_usd, created_at=excluded.created_at,
+            updated_at=strftime('%s','now'),
             request_count=excluded.request_count
+        WHERE usage_log.app_type IS NOT excluded.app_type
+           OR usage_log.model IS NOT excluded.model
+           OR usage_log.input_tokens IS NOT excluded.input_tokens
+           OR usage_log.output_tokens IS NOT excluded.output_tokens
+           OR usage_log.cache_read_tokens IS NOT excluded.cache_read_tokens
+           OR usage_log.cache_creation_tokens IS NOT excluded.cache_creation_tokens
+           OR usage_log.reasoning_tokens IS NOT excluded.reasoning_tokens
+           OR usage_log.total_cost_usd IS NOT excluded.total_cost_usd
+           OR usage_log.created_at IS NOT excluded.created_at
+           OR usage_log.request_count IS NOT excluded.request_count
         """
         return [detail, rollups]
     }
@@ -169,11 +192,11 @@ struct ZCodeAdapter: SourceAdapter {
         let detail = """
         INSERT INTO usage_log
             (source, request_id, app_type, model, input_tokens, output_tokens,
-             cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_cost_usd, created_at, request_count)
+             cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_cost_usd, created_at, updated_at, request_count)
         SELECT
             'zcode', id, 'zcode', model_id, input_tokens, output_tokens,
             0, 0, reasoning_tokens, 0,
-            started_at / 1000, 1
+            started_at / 1000, strftime('%s','now'), 1
         FROM \(alias).model_usage
         WHERE status != 'running'
           AND started_at >= \(fromEpoch) * 1000 AND started_at < \(todayEpoch) * 1000
@@ -184,7 +207,18 @@ struct ZCodeAdapter: SourceAdapter {
             cache_creation_tokens=excluded.cache_creation_tokens,
             reasoning_tokens=excluded.reasoning_tokens,
             total_cost_usd=excluded.total_cost_usd, created_at=excluded.created_at,
+            updated_at=strftime('%s','now'),
             request_count=excluded.request_count
+        WHERE usage_log.app_type IS NOT excluded.app_type
+           OR usage_log.model IS NOT excluded.model
+           OR usage_log.input_tokens IS NOT excluded.input_tokens
+           OR usage_log.output_tokens IS NOT excluded.output_tokens
+           OR usage_log.cache_read_tokens IS NOT excluded.cache_read_tokens
+           OR usage_log.cache_creation_tokens IS NOT excluded.cache_creation_tokens
+           OR usage_log.reasoning_tokens IS NOT excluded.reasoning_tokens
+           OR usage_log.total_cost_usd IS NOT excluded.total_cost_usd
+           OR usage_log.created_at IS NOT excluded.created_at
+           OR usage_log.request_count IS NOT excluded.request_count
         """
         return [detail]
     }
@@ -408,6 +442,7 @@ final class StatsStore: @unchecked Sendable {
             reasoning_tokens INTEGER NOT NULL DEFAULT 0,
             total_cost_usd REAL NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL DEFAULT 0,
             request_count INTEGER NOT NULL DEFAULT 1,
             account TEXT NOT NULL DEFAULT '',
             PRIMARY KEY (source, request_id)
@@ -425,7 +460,18 @@ final class StatsStore: @unchecked Sendable {
         exec("ALTER TABLE usage_log ADD COLUMN account TEXT NOT NULL DEFAULT ''")
         // 云同步来源标记：local = 本机数据源产生（上传）；cloud = 其他 Mac 拉回（只展示，不上传防回声）
         exec("ALTER TABLE usage_log ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'")
+        // 云同步增量水位：每次插入/更新都刷新，上传只取 updated_at > 上次水位
+        exec("ALTER TABLE usage_log ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0")
+        exec("CREATE INDEX IF NOT EXISTS idx_usage_updated ON usage_log(updated_at)")
         exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+
+        // 首次升级到 updated_at 水位：回填旧行，并清掉旧的 created_at 水位让下次同步重跑
+        if metaGet("usage_updated_at_version") != "1" {
+            exec("UPDATE usage_log SET updated_at = created_at WHERE updated_at = 0")
+            exec("DELETE FROM meta WHERE key LIKE 'cloud_usage_watermark_%' OR key = 'cloud_usage_reconcile_at'")
+            metaSet("usage_updated_at_version", value: "1")
+            ccLog("usage_log updated_at 迁移完成，云同步水位已重置")
+        }
 
         // 每日聚合缓存：区间/总量/按月查询直接读它，不再扫明细。
         // (date, source) 主键；meta 标记控制升级后一次性全量回填。
@@ -1115,8 +1161,8 @@ final class StatsStore: @unchecked Sendable {
         INSERT INTO usage_log
             (source, request_id, app_type, model, input_tokens, output_tokens,
              cache_read_tokens, cache_creation_tokens, reasoning_tokens,
-             total_cost_usd, credits, created_at, request_count, account)
-        VALUES ('trae', ?, 'trae', ?, ?, ?, ?, ?, 0, ?, ?, ?, 1, ?)
+             total_cost_usd, credits, created_at, updated_at, request_count, account)
+        VALUES ('trae', ?, 'trae', ?, ?, ?, ?, ?, 0, ?, ?, ?, strftime('%s','now'), 1, ?)
         ON CONFLICT(source, request_id) DO UPDATE SET
             model=excluded.model,
             input_tokens=excluded.input_tokens,
@@ -1126,8 +1172,18 @@ final class StatsStore: @unchecked Sendable {
             total_cost_usd=excluded.total_cost_usd,
             credits=excluded.credits,
             created_at=excluded.created_at,
+            updated_at=strftime('%s','now'),
             account=excluded.account,
             origin='local'
+        WHERE usage_log.model IS NOT excluded.model
+           OR usage_log.input_tokens IS NOT excluded.input_tokens
+           OR usage_log.output_tokens IS NOT excluded.output_tokens
+           OR usage_log.cache_read_tokens IS NOT excluded.cache_read_tokens
+           OR usage_log.cache_creation_tokens IS NOT excluded.cache_creation_tokens
+           OR usage_log.total_cost_usd IS NOT excluded.total_cost_usd
+           OR usage_log.credits IS NOT excluded.credits
+           OR usage_log.created_at IS NOT excluded.created_at
+           OR usage_log.account IS NOT excluded.account
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             exec("ROLLBACK")
@@ -1262,10 +1318,16 @@ final class StatsStore: @unchecked Sendable {
 
     // MARK: 多 Mac 用量云同步
 
-    /// 上传游标：按 (created_at, request_id) 递进，同一秒多行也不会死循环
-    struct UsageKeyset: Equatable {
-        var createdAt: Int64
+    /// 上传游标：按 (updated_at, request_id) 递进，同一秒多行也不会死循环
+    struct UsageUploadCursor: Equatable {
+        var updatedAt: Int64
         var requestID: String
+    }
+
+    /// 本机待上传的一条明细及其变更时间
+    struct UsageLocalEvent {
+        var event: UsageCloudEvent
+        var updatedAt: Int64
     }
 
     func usageSyncStatus() -> String {
@@ -1310,20 +1372,20 @@ final class StatsStore: @unchecked Sendable {
         return sources
     }
 
-    /// 某一源的本机明细页（键集分页，供上传）
-    func usageLocalBatch(source: String, after: UsageKeyset?, limit: Int) -> [UsageCloudEvent] {
+    /// 某一源的本机明细页（按 updated_at 键集分页，供增量上传）
+    func usageLocalBatch(source: String, after: UsageUploadCursor?, limit: Int) -> [UsageLocalEvent] {
         lock.lock(); defer { lock.unlock() }
         guard let db = handle, limit > 0 else { return [] }
         var sql = """
         SELECT source, request_id, app_type, model, input_tokens, output_tokens,
                cache_read_tokens, cache_creation_tokens, reasoning_tokens,
-               total_cost_usd, credits, created_at, request_count, account
+               total_cost_usd, credits, created_at, request_count, account, updated_at
         FROM usage_log WHERE origin = 'local' AND source = ?
         """
         if after != nil {
-            sql += " AND (created_at > ? OR (created_at = ? AND request_id > ?))"
+            sql += " AND (updated_at > ? OR (updated_at = ? AND request_id > ?))"
         }
-        sql += " ORDER BY created_at, request_id LIMIT ?"
+        sql += " ORDER BY updated_at, request_id LIMIT ?"
 
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
@@ -1333,8 +1395,8 @@ final class StatsStore: @unchecked Sendable {
         sqlite3_bind_text(stmt, 1, source, -1, transient)
         var index: Int32 = 2
         if let after {
-            sqlite3_bind_int64(stmt, index, after.createdAt)
-            sqlite3_bind_int64(stmt, index + 1, after.createdAt)
+            sqlite3_bind_int64(stmt, index, after.updatedAt)
+            sqlite3_bind_int64(stmt, index + 1, after.updatedAt)
             sqlite3_bind_text(stmt, index + 2, after.requestID, -1, transient)
             index += 3
         }
@@ -1345,9 +1407,9 @@ final class StatsStore: @unchecked Sendable {
                   let c = sqlite3_column_text(stmt, column) else { return nil }
             return String(cString: c)
         }
-        var rows: [UsageCloudEvent] = []
+        var rows: [UsageLocalEvent] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
-            rows.append(UsageCloudEvent(
+            let event = UsageCloudEvent(
                 source: text(0) ?? "",
                 requestId: text(1) ?? "",
                 appType: text(2),
@@ -1361,7 +1423,8 @@ final class StatsStore: @unchecked Sendable {
                 credits: sqlite3_column_double(stmt, 10),
                 createdAt: sqlite3_column_int64(stmt, 11),
                 requestCount: sqlite3_column_int64(stmt, 12),
-                account: text(13) ?? ""))
+                account: text(13) ?? "")
+            rows.append(UsageLocalEvent(event: event, updatedAt: sqlite3_column_int64(stmt, 14)))
         }
         return rows
     }
@@ -1378,8 +1441,8 @@ final class StatsStore: @unchecked Sendable {
         INSERT INTO usage_log
             (source, request_id, app_type, model, input_tokens, output_tokens,
              cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_cost_usd,
-             credits, created_at, request_count, account, origin)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'cloud')
+             credits, created_at, updated_at, request_count, account, origin)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,strftime('%s','now'),?,?,'cloud')
         ON CONFLICT(source, request_id) DO UPDATE SET
             app_type=excluded.app_type,
             model=excluded.model,
@@ -1391,9 +1454,22 @@ final class StatsStore: @unchecked Sendable {
             total_cost_usd=excluded.total_cost_usd,
             credits=excluded.credits,
             created_at=excluded.created_at,
+            updated_at=strftime('%s','now'),
             request_count=excluded.request_count,
             account=excluded.account
         WHERE usage_log.origin = 'cloud'
+          AND (usage_log.app_type IS NOT excluded.app_type
+            OR usage_log.model IS NOT excluded.model
+            OR usage_log.input_tokens IS NOT excluded.input_tokens
+            OR usage_log.output_tokens IS NOT excluded.output_tokens
+            OR usage_log.cache_read_tokens IS NOT excluded.cache_read_tokens
+            OR usage_log.cache_creation_tokens IS NOT excluded.cache_creation_tokens
+            OR usage_log.reasoning_tokens IS NOT excluded.reasoning_tokens
+            OR usage_log.total_cost_usd IS NOT excluded.total_cost_usd
+            OR usage_log.credits IS NOT excluded.credits
+            OR usage_log.created_at IS NOT excluded.created_at
+            OR usage_log.request_count IS NOT excluded.request_count
+            OR usage_log.account IS NOT excluded.account)
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
