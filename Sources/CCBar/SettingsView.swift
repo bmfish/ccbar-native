@@ -50,6 +50,15 @@ final class SettingsViewModel: ObservableObject {
     @Published var traeSyncing = false
     /// Trae 官方积分账单（已用 / 总额），数据源卡片底部展示
     @Published var traeCredits: (consumed: Double, total: Double)?
+    /// 多 Mac 用量云同步
+    @Published var usageSyncEnabled = false
+    @Published var usageSyncURL = ""
+    @Published var usageSyncUsername = ""
+    /// 密码只在登录时使用，不写入偏好
+    @Published var usageSyncPassword = ""
+    @Published var usageSyncToken = ""
+    @Published var usageSyncSyncing = false
+    @Published var usageSyncStatus = ""
 
     let settings: Settings
     let onSaved: () -> Void
@@ -90,6 +99,13 @@ final class SettingsViewModel: ObservableObject {
         popoverWide = settings.popoverWide
         language = AppLanguage(rawValue: UserDefaults.standard.string(forKey: "appLanguage") ?? "") ?? .system
         lastBackupDate = UserDefaults.standard.string(forKey: "lastAutoBackupDate") ?? ""
+        usageSyncEnabled = settings.usageSyncEnabled
+        usageSyncURL = settings.usageSyncURL
+        usageSyncUsername = settings.usageSyncUsername
+        usageSyncPassword = ""
+        // 旧版本只存过 Token、没有用户名，视为未登录，引导用用户名密码重新登录
+        usageSyncToken = settings.usageSyncUsername.isEmpty ? "" : settings.usageSyncToken
+        usageSyncStatus = AppDelegate.shared?.store.usageSyncStatus() ?? ""
 
         let configs = settings.sourceConfigs
         sources = SourceRegistry.adapters.map { adapter in
@@ -145,6 +161,39 @@ final class SettingsViewModel: ObservableObject {
             }
         }
         traeCredits = credits
+        usageSyncStatus = AppDelegate.shared?.store.usageSyncStatus() ?? ""
+    }
+
+    /// 用量云同步「登录并同步」：用当前草稿地址/用户名/密码强制跑一轮（不必先保存）
+    func syncUsageCloudNow() {
+        guard !usageSyncSyncing else { return }
+        let config = UsageSync.Config(baseURL: usageSyncURL,
+                                      username: usageSyncUsername,
+                                      password: usageSyncPassword,
+                                      token: usageSyncToken)
+        usageSyncSyncing = true
+        usageSyncStatus = L("同步中…")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self, let store = AppDelegate.shared?.store else { return }
+            let outcome = UsageSync.run(store: store, config: config, force: true)
+            DispatchQueue.main.async {
+                self.usageSyncSyncing = false
+                self.usageSyncStatus = store.usageSyncStatus()
+                if let token = outcome.token {
+                    self.usageSyncToken = token
+                    self.usageSyncPassword = ""
+                    self.settings.usageSyncToken = token
+                    self.settings.usageSyncUsername = self.usageSyncUsername
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.settings.usageSyncURL = self.usageSyncURL
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                if outcome.pulled > 0 {
+                    DataCache.shared.invalidateDailyCache()
+                    AppDelegate.shared?.refreshData()
+                }
+            }
+        }
     }
 
     /// 积分显示：整数不带小数点，小数保留两位
@@ -291,6 +340,15 @@ final class SettingsViewModel: ObservableObject {
         settings.ledRedThreshold = led!
         settings.monthlyBudgetUsd = budget!
         settings.defaultTokenPrice = price!
+        let syncUsername = usageSyncUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        if syncUsername != settings.usageSyncUsername {
+            // 换用户名后旧会话作废，需重新输密码登录
+            usageSyncToken = ""
+            settings.usageSyncToken = ""
+        }
+        settings.usageSyncUsername = syncUsername
+        settings.usageSyncEnabled = usageSyncEnabled
+        settings.usageSyncURL = usageSyncURL.trimmingCharacters(in: .whitespacesAndNewlines)
         applyTheme(theme)
         UserDefaults.standard.set(language.rawValue, forKey: "appLanguage")
 
@@ -310,6 +368,10 @@ final class SettingsViewModel: ObservableObject {
         settings.ledRedThreshold = 100
         settings.monthlyBudgetUsd = 0
         settings.defaultTokenPrice = 0
+        settings.usageSyncEnabled = false
+        settings.usageSyncURL = "http://139.196.108.26/api"
+        settings.usageSyncUsername = ""
+        settings.usageSyncToken = ""
         reload()
     }
 
@@ -490,6 +552,7 @@ struct SettingsRootView: View {
                         header
                         appearanceCard
                         sourcesCard
+                        usageSyncCard
                         refreshCard
                         behaviorCard
                         dataCard
@@ -681,6 +744,86 @@ struct SettingsRootView: View {
                 }
                 if let cr = vm.traeCredits {
                     creditsFooter(cr)
+                }
+            }
+        }
+    }
+
+    // MARK: 多 Mac 用量云同步
+
+    private var usageSyncCard: some View {
+        section(L("用量云同步"), trailing: L("多 Mac 汇总")) {
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    rowLabel(L("启用"))
+                    Toggle("", isOn: $vm.usageSyncEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .tint(Color(nsColor: Design.successColor))
+                    Text(L("自动同步 9:00–18:00，每小时一次"))
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(nsColor: Design.textMuted))
+                    Spacer(minLength: 0)
+                }
+                .frame(height: 32)
+                rowDivider
+                HStack(spacing: 8) {
+                    rowLabel(L("服务地址"))
+                    pathField($vm.usageSyncURL, placeholder: "http://host/api") {}
+                        .help(L("cc-service 地址，需包含 /api 前缀"))
+                    pillButton(vm.usageSyncSyncing ? L("同步中…")
+                                : (vm.usageSyncToken.isEmpty ? L("登录并同步") : L("立即同步")),
+                                disabled: vm.usageSyncSyncing) {
+                        vm.syncUsageCloudNow()
+                    }
+                }
+                .frame(height: 32)
+                rowDivider
+                HStack(spacing: 8) {
+                    rowLabel(L("用户名"))
+                    TextField("", text: $vm.usageSyncUsername)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(Color(nsColor: Design.textSecondary))
+                        .padding(.horizontal, 6)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 24)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(Color.black.opacity(0.28)))
+                        .overlay(RoundedRectangle(cornerRadius: 5)
+                            .stroke(Color(nsColor: Design.cardBorderDark)))
+                }
+                .frame(height: 32)
+                rowDivider
+                HStack(spacing: 8) {
+                    rowLabel(L("密码"))
+                    SecureField("", text: $vm.usageSyncPassword)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(Color(nsColor: Design.textSecondary))
+                        .padding(.horizontal, 6)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 24)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(Color.black.opacity(0.28)))
+                        .overlay(RoundedRectangle(cornerRadius: 5)
+                            .stroke(Color(nsColor: Design.cardBorderDark)))
+                    Text(vm.usageSyncToken.isEmpty ? L("未登录") : L("已登录"))
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(nsColor: vm.usageSyncToken.isEmpty
+                                                ? Design.textMuted : Design.successColor))
+                        .fixedSize()
+                }
+                .frame(height: 32)
+                if !vm.usageSyncStatus.isEmpty {
+                    rowDivider
+                    HStack(spacing: 6) {
+                        Text(vm.usageSyncStatus)
+                            .font(.system(size: 9))
+                            .foregroundColor(Color(nsColor: Design.textMuted))
+                            .lineLimit(2)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(minHeight: 24)
                 }
             }
         }

@@ -158,6 +158,30 @@ class Settings {
         get { defaults.object(forKey: "notifyInterval") as? Int ?? 1000 }
         set { defaults.set(newValue, forKey: "notifyInterval") }
     }
+
+    // MARK: 多 Mac 用量云同步
+
+    var usageSyncEnabled: Bool {
+        get { defaults.object(forKey: "usageSyncEnabled") as? Bool ?? false }
+        set { defaults.set(newValue, forKey: "usageSyncEnabled") }
+    }
+
+    /// 服务地址（含 /api 前缀，如 http://139.196.108.26/api）
+    var usageSyncURL: String {
+        get { defaults.string(forKey: "usageSyncURL") ?? "http://139.196.108.26/api" }
+        set { defaults.set(newValue, forKey: "usageSyncURL") }
+    }
+
+    var usageSyncUsername: String {
+        get { defaults.string(forKey: "usageSyncUsername") ?? "" }
+        set { defaults.set(newValue, forKey: "usageSyncUsername") }
+    }
+
+    /// 登录后拿到的会话 Token（不展示、不手填；密码不落盘）
+    var usageSyncToken: String {
+        get { defaults.string(forKey: "usageSyncToken") ?? "" }
+        set { defaults.set(newValue, forKey: "usageSyncToken") }
+    }
 }
 
 // MARK: - Data Cache
@@ -308,6 +332,12 @@ final class DataCache {
     func markDailyCacheDone() {
         lock.lock(); defer { lock.unlock() }
         lastDailyCacheDate = StatsStore.shortDateFormatter.string(from: Date())
+    }
+
+    /// 历史区间缓存作废（云同步拉回历史数据后调用，下一轮重算昨日/周/月/总量）
+    func invalidateDailyCache() {
+        lock.lock(); defer { lock.unlock() }
+        lastDailyCacheDate = nil
     }
 
     func markModelCacheDone() {

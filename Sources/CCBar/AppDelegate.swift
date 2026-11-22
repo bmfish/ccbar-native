@@ -22,6 +22,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     /// Trae 是 HTTP 源：网络同步单独一条串行队列，避免慢网络（最长 15s×3 次重试）
     /// 堵在 queryQueue 上，把本地查询与弹窗刷新一起拖住
     private let traeQueue = DispatchQueue(label: "ccbar.trae", qos: .utility)
+    /// 云同步网络独立成队，失败/慢请求不影响本地统计
+    private let cloudQueue = DispatchQueue(label: "ccbar.usage-cloud", qos: .utility)
 
     /// 菜单栏动画伴侣
     let petController = MenuPetController()
@@ -337,6 +339,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             self.store.syncIfNeeded()
             // Trae 网络同步丢到独立队列，本地查询不等它（节流在 store 内，重复调用不重复发请求）
             self.syncTraeInBackground(interactive: false)
+            // 多 Mac 用量云同步（开关关闭时立即返回；9:00–18:00 每小时自动一次）
+            self.syncUsageInBackground()
 
             let todayStats = self.store.queryDayStats(days: 0)
             // 工时与今日区只有弹窗在用：关闭时不查，省掉每轮 800 行流水与逐时聚合
@@ -498,6 +502,36 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
                            credits: store.queryTodayCredits(),
                            creditsByAccount: accounts,
                            checkinCredits: checkin)
+    }
+
+    // MARK: - 用量云同步（独立队列）
+
+    /// 本机用量上传 + 其他 Mac 数据拉取。开关/地址/用户名/会话来自设置；
+    /// 后台节流（9:00–18:00 每小时一次）在 UsageSync 内，重复调用不会重复发请求。
+    private func syncUsageInBackground() {
+        guard settings.usageSyncEnabled, !settings.usageSyncToken.isEmpty else { return }
+        let config = UsageSync.Config(baseURL: settings.usageSyncURL,
+                                      username: settings.usageSyncUsername,
+                                      token: settings.usageSyncToken)
+        cloudQueue.async { [weak self] in
+            guard let self else { return }
+            let outcome = UsageSync.run(store: self.store, config: config)
+            guard outcome.pulled > 0 else { return }
+            // 拉回的数据可能落在历史日期：作废每日缓存，下一轮重算；今日即时补查一次
+            DispatchQueue.main.async { DataCache.shared.invalidateDailyCache() }
+            self.queryQueue.async { [weak self] in
+                guard let self else { return }
+                let todayStats = self.store.queryDayStats(days: 0)
+                let todayExtras = Self.makeTodayExtras(store: self.store)
+                DispatchQueue.main.async {
+                    DataCache.shared.update(today: todayStats, yesterday: nil, week: nil,
+                                            month: nil, total: nil, models: nil, workHours: nil,
+                                            todayExtras: todayExtras)
+                    self.applyTitle(todayStats)
+                    self.updateMenu()
+                }
+            }
+        }
     }
 
     // MARK: - Trae 后台同步（独立队列）

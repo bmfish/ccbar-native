@@ -231,6 +231,8 @@ final class StatsStore: @unchecked Sendable {
     private(set) var attachedAdapters: [SourceAdapter] = []
     /// 每个数据源的连接诊断信息（设置页展示）：已连接 / 未启用 / 具体失败原因
     private(set) var sourceStatus: [String: String] = [:]
+    /// 云同步状态（设置页展示）；后台同步线程写、主线程读，读写都经 lock
+    private var usageSyncStatusText = ""
     /// 是否有任一可用数据源（SQLite ATTACH 或 Trae HTTP）。查询侧的早退判据，
     /// 避免空库时菜单栏把"未启用"误显示为 0
     private(set) var hasActiveSource = false
@@ -421,6 +423,8 @@ final class StatsStore: @unchecked Sendable {
         exec("ALTER TABLE usage_log ADD COLUMN credits REAL NOT NULL DEFAULT 0")
         // 多账号归属列：Trae 行写入所属账号 uid，其他源与历史行为空（不可追溯，不参与分账号统计）
         exec("ALTER TABLE usage_log ADD COLUMN account TEXT NOT NULL DEFAULT ''")
+        // 云同步来源标记：local = 本机数据源产生（上传）；cloud = 其他 Mac 拉回（只展示，不上传防回声）
+        exec("ALTER TABLE usage_log ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'")
         exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
 
         // 每日聚合缓存：区间/总量/按月查询直接读它，不再扫明细。
@@ -1122,7 +1126,8 @@ final class StatsStore: @unchecked Sendable {
             total_cost_usd=excluded.total_cost_usd,
             credits=excluded.credits,
             created_at=excluded.created_at,
-            account=excluded.account
+            account=excluded.account,
+            origin='local'
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             exec("ROLLBACK")
@@ -1237,6 +1242,198 @@ final class StatsStore: @unchecked Sendable {
     }
 
     // MARK: 备份
+
+    // MARK: 多 Mac 用量云同步
+
+    /// 上传游标：按 (created_at, request_id) 递进，同一秒多行也不会死循环
+    struct UsageKeyset: Equatable {
+        var createdAt: Int64
+        var requestID: String
+    }
+
+    func usageSyncStatus() -> String {
+        lock.lock(); defer { lock.unlock() }
+        return usageSyncStatusText
+    }
+
+    func setUsageSyncStatus(_ text: String) {
+        lock.lock(); defer { lock.unlock() }
+        usageSyncStatusText = text
+    }
+
+    func usageSyncMeta(_ key: String) -> String {
+        lock.lock(); defer { lock.unlock() }
+        return metaGet("cloud_usage_\(key)")
+    }
+
+    func setUsageSyncMeta(_ key: String, value: String) {
+        lock.lock(); defer { lock.unlock() }
+        metaSet("cloud_usage_\(key)", value: value)
+    }
+
+    /// 本机设备 ID（首次生成后持久化到 meta，用于服务端观测来源）
+    func usageDeviceID() -> String {
+        lock.lock(); defer { lock.unlock() }
+        var value = metaGet("cloud_device_id")
+        if value.isEmpty {
+            value = UUID().uuidString
+            metaSet("cloud_device_id", value: value)
+        }
+        return value
+    }
+
+    /// 本机产生的数据源（只有 origin='local' 的行会上传）
+    func usageLocalSources() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var sources: [String] = []
+        forEachRow("SELECT DISTINCT source FROM usage_log WHERE origin = 'local' ORDER BY source") { stmt in
+            if let c = sqlite3_column_text(stmt, 0) { sources.append(String(cString: c)) }
+        }
+        return sources
+    }
+
+    /// 某一源的本机明细页（键集分页，供上传）
+    func usageLocalBatch(source: String, after: UsageKeyset?, limit: Int) -> [UsageCloudEvent] {
+        lock.lock(); defer { lock.unlock() }
+        guard let db = handle, limit > 0 else { return [] }
+        var sql = """
+        SELECT source, request_id, app_type, model, input_tokens, output_tokens,
+               cache_read_tokens, cache_creation_tokens, reasoning_tokens,
+               total_cost_usd, credits, created_at, request_count, account
+        FROM usage_log WHERE origin = 'local' AND source = ?
+        """
+        if after != nil {
+            sql += " AND (created_at > ? OR (created_at = ? AND request_id > ?))"
+        }
+        sql += " ORDER BY created_at, request_id LIMIT ?"
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, source, -1, transient)
+        var index: Int32 = 2
+        if let after {
+            sqlite3_bind_int64(stmt, index, after.createdAt)
+            sqlite3_bind_int64(stmt, index + 1, after.createdAt)
+            sqlite3_bind_text(stmt, index + 2, after.requestID, -1, transient)
+            index += 3
+        }
+        sqlite3_bind_int(stmt, index, Int32(limit))
+
+        func text(_ column: Int32) -> String? {
+            guard sqlite3_column_type(stmt, column) != SQLITE_NULL,
+                  let c = sqlite3_column_text(stmt, column) else { return nil }
+            return String(cString: c)
+        }
+        var rows: [UsageCloudEvent] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rows.append(UsageCloudEvent(
+                source: text(0) ?? "",
+                requestId: text(1) ?? "",
+                appType: text(2),
+                model: text(3),
+                inputTokens: sqlite3_column_int64(stmt, 4),
+                outputTokens: sqlite3_column_int64(stmt, 5),
+                cacheReadTokens: sqlite3_column_int64(stmt, 6),
+                cacheCreationTokens: sqlite3_column_int64(stmt, 7),
+                reasoningTokens: sqlite3_column_int64(stmt, 8),
+                totalCostUsd: sqlite3_column_double(stmt, 9),
+                credits: sqlite3_column_double(stmt, 10),
+                createdAt: sqlite3_column_int64(stmt, 11),
+                requestCount: sqlite3_column_int64(stmt, 12),
+                account: text(13) ?? ""))
+        }
+        return rows
+    }
+
+    /// 拉回的明细写回 usage_log（origin='cloud'）。
+    /// 同主键的本机行（origin='local'）绝不覆盖；云行可被后续更新覆盖。
+    /// 返回实际插入/更新的行数。
+    @discardableResult
+    func applyUsageCloudEvents(_ events: [UsageCloudEvent]) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        guard let db = handle, !events.isEmpty else { return 0 }
+        exec("BEGIN IMMEDIATE")
+        let sql = """
+        INSERT INTO usage_log
+            (source, request_id, app_type, model, input_tokens, output_tokens,
+             cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_cost_usd,
+             credits, created_at, request_count, account, origin)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'cloud')
+        ON CONFLICT(source, request_id) DO UPDATE SET
+            app_type=excluded.app_type,
+            model=excluded.model,
+            input_tokens=excluded.input_tokens,
+            output_tokens=excluded.output_tokens,
+            cache_read_tokens=excluded.cache_read_tokens,
+            cache_creation_tokens=excluded.cache_creation_tokens,
+            reasoning_tokens=excluded.reasoning_tokens,
+            total_cost_usd=excluded.total_cost_usd,
+            credits=excluded.credits,
+            created_at=excluded.created_at,
+            request_count=excluded.request_count,
+            account=excluded.account
+        WHERE usage_log.origin = 'cloud'
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            exec("ROLLBACK")
+            return 0
+        }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        var changed = 0
+        for event in events {
+            sqlite3_reset(stmt)
+            sqlite3_bind_text(stmt, 1, event.source, -1, transient)
+            sqlite3_bind_text(stmt, 2, event.requestId, -1, transient)
+            if let appType = event.appType {
+                sqlite3_bind_text(stmt, 3, appType, -1, transient)
+            } else {
+                sqlite3_bind_null(stmt, 3)
+            }
+            if let model = event.model {
+                sqlite3_bind_text(stmt, 4, model, -1, transient)
+            } else {
+                sqlite3_bind_null(stmt, 4)
+            }
+            sqlite3_bind_int64(stmt, 5, event.inputTokens)
+            sqlite3_bind_int64(stmt, 6, event.outputTokens)
+            sqlite3_bind_int64(stmt, 7, event.cacheReadTokens)
+            sqlite3_bind_int64(stmt, 8, event.cacheCreationTokens)
+            sqlite3_bind_int64(stmt, 9, event.reasoningTokens)
+            sqlite3_bind_double(stmt, 10, event.totalCostUsd)
+            sqlite3_bind_double(stmt, 11, event.credits)
+            sqlite3_bind_int64(stmt, 12, event.createdAt)
+            sqlite3_bind_int64(stmt, 13, event.requestCount)
+            sqlite3_bind_text(stmt, 14, event.account, -1, transient)
+            if sqlite3_step(stmt) == SQLITE_DONE, sqlite3_changes(db) > 0 {
+                changed += 1
+            }
+        }
+        sqlite3_finalize(stmt)
+        exec("COMMIT")
+
+        // 历史（≤昨天）走 daily_agg：导入后重算受影响日期，今日由 usage_all 实时查询
+        let todayStart = Self.localMidnight(0)
+        if let minCreated = events.map(\.createdAt).min(), minCreated < todayStart {
+            refreshDailyAgg(fromEpoch: minCreated, toEpoch: todayStart)
+        }
+        return changed
+    }
+
+    /// 切换同步账号：清掉上一个账号拉回的 cloud 行、游标与水位；本机 local 行保留，
+    /// 随后会按新账号从头重传，避免两个账号的数据串在一起。
+    func resetUsageCloudState() {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return }
+        exec("DELETE FROM usage_log WHERE origin = 'cloud'")
+        exec("DELETE FROM meta WHERE key LIKE 'cloud_usage_%' AND key <> 'cloud_device_id'")
+        exec("DELETE FROM daily_agg")
+        refreshDailyAgg(fromEpoch: 0, toEpoch: Self.localMidnight(0))
+    }
 
     // MARK: 导出 / 导入（幂等）
 
