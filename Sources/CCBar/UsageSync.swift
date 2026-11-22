@@ -146,6 +146,12 @@ enum UsageSync {
             return outcome
         }
 
+        if let error = uploadQuota(store: store, base: base, token: token, deviceId: deviceId) {
+            store.setUsageSyncStatus("积分账单上传失败：\(error)")
+            outcome.error = error
+            return outcome
+        }
+
         let (pullError, pulled) = download(store: store, base: base, token: token)
         outcome.pulled = pulled
         if let pullError {
@@ -260,6 +266,61 @@ enum UsageSync {
         }
         if result.received != events.count {
             return "服务端收到 \(result.received)/\(events.count) 条"
+        }
+        return nil
+    }
+
+    // MARK: 积分账单
+
+    private struct QuotaSnapshot: Encodable {
+        let account: String
+        let slot: Int
+        let consumed: Double
+        let total: Double
+        let updatedAt: Int64
+    }
+
+    private struct QuotaUploadRequest: Encodable {
+        let deviceId: String
+        let quotas: [QuotaSnapshot]
+    }
+
+    private struct QuotaUploadResult: Decodable {
+        let received: Int
+        let saved: Int
+    }
+
+    /// 把本机 Trae 官方账单（已用 / 总额）上报到云端，供管理后台展示剩余积分。
+    private static func uploadQuota(store: StatsStore, base: String, token: String,
+                                    deviceId: String) -> String? {
+        let snapshots = store.traeQuotaSnapshots()
+        guard !snapshots.isEmpty else { return nil }
+        let now = Int64(Date().timeIntervalSince1970)
+        let quotas = snapshots.map { snapshot in
+            QuotaSnapshot(
+                account: snapshot.uid,
+                slot: snapshot.slot,
+                consumed: snapshot.consumed,
+                total: snapshot.total,
+                updatedAt: snapshot.updatedAt > 0 ? snapshot.updatedAt : now
+            )
+        }
+        guard let url = URL(string: base + "/usage/quota"),
+              let body = try? JSONEncoder().encode(
+                QuotaUploadRequest(deviceId: deviceId, quotas: quotas)) else {
+            return "请求构造失败"
+        }
+        let (data, status, error) = request(url: url, method: "POST", token: token, body: body)
+        if let error { return error }
+        guard let status else { return "无响应" }
+        guard (200..<300).contains(status) else {
+            return httpError(status, data: data)
+        }
+        guard let data, let result = try? JSONDecoder().decode(QuotaUploadResult.self, from: data) else {
+            return "响应解析失败"
+        }
+        if result.received != quotas.count {
+            return "服务端收到 \(result.received)/\(quotas.count) 个账号"
         }
         return nil
     }

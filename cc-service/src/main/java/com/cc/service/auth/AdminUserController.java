@@ -1,9 +1,11 @@
 package com.cc.service.auth;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
@@ -17,7 +19,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
-/** 用户管理（仅管理 Token 可访问），用 curl/脚本维护。 */
+import com.cc.service.admin.AdminConsoleRepository;
+import com.cc.service.admin.AdminTimes;
+
+/** 用户与设备管理（仅管理 Token 可访问）。 */
 @RestController
 @RequestMapping("/api/admin/users")
 public class AdminUserController {
@@ -31,10 +36,52 @@ public class AdminUserController {
             @NotBlank @Size(min = 6, max = 100) String password) {
     }
 
-    private final UserRepository users;
+    public record StatusRequest(@NotNull Boolean disabled) {
+    }
 
-    public AdminUserController(UserRepository users) {
+    public record DeviceView(
+            String deviceId,
+            OffsetDateTime firstSeenAt,
+            OffsetDateTime lastSeenAt,
+            boolean online,
+            long eventCount) {
+    }
+
+    public record UserListRow(
+            long id,
+            String username,
+            OffsetDateTime createdAt,
+            boolean disabled,
+            long deviceCount,
+            OffsetDateTime lastActiveAt,
+            boolean online,
+            long todayTokens,
+            double todayCredits,
+            long weekTokens,
+            double weekCredits) {
+    }
+
+    public record UserDetailRow(
+            long id,
+            String username,
+            OffsetDateTime createdAt,
+            boolean disabled,
+            long deviceCount,
+            OffsetDateTime lastActiveAt,
+            boolean online,
+            long todayTokens,
+            double todayCredits,
+            long weekTokens,
+            double weekCredits,
+            List<DeviceView> devices) {
+    }
+
+    private final UserRepository users;
+    private final AdminConsoleRepository console;
+
+    public AdminUserController(UserRepository users, AdminConsoleRepository console) {
         this.users = users;
+        this.console = console;
     }
 
     @PostMapping
@@ -42,15 +89,49 @@ public class AdminUserController {
         String username = request.username().trim();
         try {
             UserRepository.User user = users.create(username, AuthTokens.hashPassword(request.password()));
-            return new UserRepository.UserView(user.id(), user.username(), user.createdAt(), 0);
+            return new UserRepository.UserView(
+                    user.id(), user.username(), user.createdAt(), 0, user.disabled());
         } catch (DuplicateKeyException e) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "用户名已存在: " + username);
         }
     }
 
     @GetMapping
-    public List<UserRepository.UserView> list() {
-        return users.findAll();
+    public List<UserListRow> list() {
+        OffsetDateTime now = AdminTimes.now();
+        OffsetDateTime todayStart = AdminTimes.startOfDay(now.toLocalDate());
+        OffsetDateTime weekStart = AdminTimes.daysStart(7);
+        OffsetDateTime onlineSince = now.minusMinutes(AdminTimes.ONLINE_MINUTES);
+        return console.findAllUsers(todayStart, weekStart, now).stream()
+                .map(row -> toListRow(row, onlineSince))
+                .toList();
+    }
+
+    @GetMapping("/{id}")
+    public UserDetailRow detail(@PathVariable long id) {
+        OffsetDateTime now = AdminTimes.now();
+        OffsetDateTime todayStart = AdminTimes.startOfDay(now.toLocalDate());
+        OffsetDateTime weekStart = AdminTimes.daysStart(7);
+        OffsetDateTime onlineSince = now.minusMinutes(AdminTimes.ONLINE_MINUTES);
+        AdminConsoleRepository.AdminUserRow row = console.findUser(id, todayStart, weekStart, now);
+        if (row == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "用户不存在: " + id);
+        }
+        List<DeviceView> devices = console.findUserDevices(id).stream()
+                .map(device -> toDeviceView(device, onlineSince))
+                .toList();
+        return new UserDetailRow(
+                row.id(), row.username(), row.createdAt(), row.disabled(), row.deviceCount(),
+                row.lastActiveAt(), isOnline(row.lastActiveAt(), onlineSince),
+                row.todayTokens(), row.todayCredits(), row.weekTokens(), row.weekCredits(), devices);
+    }
+
+    @GetMapping("/{id}/devices")
+    public List<DeviceView> devices(@PathVariable long id) {
+        OffsetDateTime onlineSince = AdminTimes.onlineSince();
+        return console.findUserDevices(id).stream()
+                .map(device -> toDeviceView(device, onlineSince))
+                .toList();
     }
 
     @PostMapping("/{id}/password")
@@ -62,12 +143,33 @@ public class AdminUserController {
         users.deleteTokens(id);
     }
 
-    @GetMapping("/{id}/devices")
-    public List<UserRepository.DeviceView> devices(@PathVariable long id) {
-        UserRepository.UserView user = users.findAll().stream()
-                .filter(item -> item.id() == id)
-                .findFirst()
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "用户不存在: " + id));
-        return users.findDevices(user.id());
+    @PostMapping("/{id}/status")
+    public void updateStatus(@PathVariable long id, @Valid @RequestBody StatusRequest request) {
+        if (!users.setDisabled(id, request.disabled())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "用户不存在: " + id);
+        }
+        if (request.disabled()) {
+            users.deleteTokens(id);
+        }
+    }
+
+    private UserListRow toListRow(AdminConsoleRepository.AdminUserRow row, OffsetDateTime onlineSince) {
+        return new UserListRow(
+                row.id(), row.username(), row.createdAt(), row.disabled(), row.deviceCount(),
+                row.lastActiveAt(), isOnline(row.lastActiveAt(), onlineSince),
+                row.todayTokens(), row.todayCredits(), row.weekTokens(), row.weekCredits());
+    }
+
+    private DeviceView toDeviceView(AdminConsoleRepository.DeviceRow device, OffsetDateTime onlineSince) {
+        return new DeviceView(
+                device.deviceId(),
+                device.firstSeenAt(),
+                device.lastSeenAt(),
+                isOnline(device.lastSeenAt(), onlineSince),
+                device.eventCount());
+    }
+
+    private static boolean isOnline(OffsetDateTime lastSeenAt, OffsetDateTime onlineSince) {
+        return lastSeenAt != null && !lastSeenAt.isBefore(onlineSince);
     }
 }

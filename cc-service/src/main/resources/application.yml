@@ -17,6 +17,7 @@ spring:
 app:
   # 留空则关闭鉴权（仅限本地开发）
   api-token: ${API_TOKEN:}
+  version: ${APP_VERSION:0.0.1-SNAPSHOT}
 
 logging:
   level:

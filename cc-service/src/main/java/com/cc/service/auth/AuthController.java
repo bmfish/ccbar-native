@@ -38,6 +38,9 @@ public class AuthController {
         if (!AuthTokens.verifyPassword(request.password(), user.passwordHash())) {
             throw unauthorized();
         }
+        if (user.disabled()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "账号已被禁用");
+        }
         String token = AuthTokens.newToken();
         users.saveToken(user.id(), AuthTokens.sha256Hex(token));
         return new LoginResponse(token, user.id(), user.username());

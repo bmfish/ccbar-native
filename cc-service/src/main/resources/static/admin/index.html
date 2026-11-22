@@ -1,448 +1,2603 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CC Service 管理后台</title>
+<title>CC 管理控制台</title>
 <style>
   :root {
-    --bg: #131514;
-    --panel: #1d1f1e;
-    --panel-2: #252826;
-    --border: #303431;
-    --text: #f1f3f2;
-    --muted: #8c938f;
+    --bg: #0e1210;
+    --sidebar: #111613;
+    --panel: #161b18;
+    --panel-2: #1c231f;
+    --border: #29312b;
+    --border-strong: #39443c;
+    --text: #e9efeb;
+    --muted: #8d978f;
     --accent: #3ddc84;
-    --accent-soft: rgba(61, 220, 132, .14);
-    --green: #3ddc84;
-    --red: #ff6b6b;
-    --radius: 12px;
+    --accent-dim: rgba(61, 220, 132, .12);
+    --accent-on: #07140c;
+    --danger: #ff6b6b;
+    --danger-dim: rgba(255, 107, 107, .12);
+    --warning: #f2b544;
+    --series-1: #3ddc84;
+    --series-2: #2a8f5d;
+    --series-3: #78bdf5;
+    --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+    --radius-card: 14px;
+    color-scheme: dark;
+  }
+  html[data-theme="light"] {
+    --bg: #f3f6f3;
+    --sidebar: #ffffff;
+    --panel: #ffffff;
+    --panel-2: #f1f5f2;
+    --border: #e0e7e1;
+    --border-strong: #cfd9d1;
+    --text: #18211b;
+    --muted: #64736a;
+    --accent: #0f9d58;
+    --accent-dim: rgba(15, 157, 88, .10);
+    --accent-on: #ffffff;
+    --danger: #d93d3d;
+    --danger-dim: rgba(217, 61, 61, .10);
+    --warning: #b77a10;
+    --series-1: #0f9d58;
+    --series-2: #8ad8ad;
+    --series-3: #3b82f6;
+    --shadow: 0 16px 42px rgba(20, 40, 28, .08);
+    color-scheme: light;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; min-height: 100%; }
   body {
-    background: radial-gradient(1100px 600px at 12% -10%, #1b2a21 0%, var(--bg) 55%);
+    background: var(--bg);
     color: var(--text);
-    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
-  button, input { font: inherit; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  a { color: var(--accent); }
   .hidden { display: none !important; }
+  .mono { font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+  .muted { color: var(--muted); }
+  .num { font-variant-numeric: tabular-nums; }
 
   /* 登录 */
-  .login-wrap {
-    min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px;
-  }
+  .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
   .login-card {
     width: 380px; max-width: 100%; background: var(--panel); border: 1px solid var(--border);
-    border-radius: 16px; padding: 28px; box-shadow: 0 24px 70px rgba(0,0,0,.35);
+    border-radius: var(--radius-card); padding: 28px; box-shadow: var(--shadow);
   }
-  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
-  .brand-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--green); box-shadow: 0 0 12px var(--green); }
-  .brand h1 { font-size: 17px; margin: 0; letter-spacing: .3px; }
+  .login-card .brand { padding: 0 0 20px; }
   .login-card p { color: var(--muted); font-size: 12.5px; margin: 0 0 20px; }
+  .login-foot { margin-top: 16px; color: var(--muted); font-size: 11.5px; text-align: center; line-height: 1.7; }
+  .error { color: var(--danger); font-size: 12px; min-height: 17px; margin-top: 10px; }
+
+  /* 基础控件 */
+  .btn {
+    height: 34px; padding: 0 13px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text); cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    transition: background .12s, border-color .12s, color .12s; white-space: nowrap;
+  }
+  .btn:hover { border-color: var(--border-strong); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-on); font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.06); }
+  .btn.danger { color: var(--danger); }
+  .btn.danger:hover { background: var(--danger-dim); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
+  .btn.ghost { background: transparent; }
+  .btn.block { width: 100%; height: 40px; }
+  .btn.sm { height: 28px; padding: 0 9px; font-size: 12px; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .icon-btn {
+    width: 32px; height: 32px; padding: 0; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--muted); cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .icon-btn:hover { color: var(--text); border-color: var(--border-strong); }
+  .icon-btn svg { width: 15px; height: 15px; }
+  .input, .select {
+    height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text); outline: none;
+  }
+  .input:focus, .select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+  .input::placeholder { color: var(--muted); }
+  .select { padding-right: 26px; cursor: pointer; }
   .field { margin-bottom: 14px; }
   .field label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
-  .field input {
-    width: 100%; height: 38px; padding: 0 11px; color: var(--text);
-    background: #16181c; border: 1px solid var(--border); border-radius: 8px; outline: none;
-  }
-  .field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-  .btn {
-    height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--border);
-    background: var(--panel-2); color: var(--text); cursor: pointer; transition: .15s;
-  }
-  .btn:hover { border-color: #3a423d; background: #2d322f; }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: #07140c; font-weight: 600; }
-  .btn.primary:hover { background: #66e79c; }
-  .btn.danger { color: var(--red); }
-  .btn.block { width: 100%; height: 40px; }
-  .btn:disabled { opacity: .55; cursor: not-allowed; }
-  .error { color: var(--red); font-size: 12px; min-height: 17px; margin-top: 10px; }
+  .field .input, .field .select { width: 100%; height: 38px; }
+  .field .hint { color: var(--muted); font-size: 11.5px; margin-top: 6px; line-height: 1.6; }
 
-  /* 主界面 */
+  /* 布局 */
+  .app { display: flex; min-height: 100vh; }
+  .sidebar {
+    width: 224px; flex: 0 0 224px; background: var(--sidebar);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; padding: 18px 12px;
+    position: sticky; top: 0; height: 100vh;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 22px; }
+  .brand-mark {
+    width: 26px; height: 26px; border-radius: 8px; background: var(--accent);
+    color: var(--accent-on); font-weight: 700; font-size: 14px;
+    display: flex; align-items: center; justify-content: center; flex: 0 0 26px;
+  }
+  .brand-name { font-weight: 600; font-size: 14px; letter-spacing: .2px; white-space: nowrap; }
+  .brand-name span { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 5px; }
+  .nav-section { color: var(--muted); font-size: 11px; letter-spacing: .8px; padding: 14px 12px 6px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px; margin-bottom: 2px;
+    border-radius: 8px; color: var(--muted); cursor: pointer; user-select: none;
+    border: 1px solid transparent; transition: background .12s, color .12s; white-space: nowrap;
+  }
+  .nav-item:hover { background: var(--panel-2); color: var(--text); }
+  .nav-item.active { background: var(--accent-dim); color: var(--accent); }
+  .nav-item svg { flex: 0 0 16px; width: 16px; height: 16px; }
+  .nav-badge {
+    margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+    background: var(--panel-2); color: var(--muted); font-size: 10.5px;
+    display: inline-flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums;
+  }
+  .sidebar-foot { margin-top: auto; border-top: 1px solid var(--border); padding: 14px 10px 4px; display: flex; align-items: center; gap: 10px; }
+  .sidebar-foot .who { flex: 1; min-width: 0; }
+  .sidebar-foot .who b { display: block; font-size: 12.5px; font-weight: 500; }
+  .sidebar-foot .who span { display: block; font-size: 11px; color: var(--muted); }
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   .topbar {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 18px 32px; border-bottom: 1px solid var(--border);
-    background: rgba(19, 21, 20, .72); backdrop-filter: blur(12px);
-    position: sticky; top: 0; z-index: 5;
+    height: 62px; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 26px; border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: blur(10px); position: sticky; top: 0; z-index: 10; gap: 16px;
   }
-  .topbar h1 { font-size: 16px; margin: 0; letter-spacing: .3px; }
+  .topbar h1 { font-size: 15.5px; margin: 0; font-weight: 600; letter-spacing: .2px; }
   .topbar .sub { color: var(--muted); font-size: 12px; margin-left: 10px; }
-  .topbar .right { display: flex; gap: 10px; align-items: center; }
-  main { max-width: 1080px; margin: 0 auto; padding: 26px 24px 60px; }
-  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
-  .stat {
-    background: linear-gradient(180deg, var(--panel), #191b1a); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 16px 18px;
-  }
-  .stat .label { color: var(--muted); font-size: 12px; }
-  .stat .value {
-    font-size: 26px; font-weight: 650; margin-top: 3px;
-    font-variant-numeric: tabular-nums; color: var(--green);
-  }
-  .grid { display: grid; grid-template-columns: 360px 1fr; gap: 16px; align-items: start; }
-  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } .stats { grid-template-columns: 1fr; } }
-  .card {
-    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-    overflow: hidden;
-  }
-  .card-head {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 15px 18px; border-bottom: 1px solid var(--border);
-  }
-  .card-head h2 { font-size: 14px; margin: 0; font-weight: 600; }
-  .card-body { padding: 18px; }
-  .hint { color: var(--muted); font-size: 11.5px; margin-top: 8px; line-height: 1.6; }
-  .table-wrap { overflow-x: auto; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid #2b2f2c; white-space: nowrap; }
-  th { color: var(--muted); font-weight: 500; font-size: 12px; background: #191b1a; }
-  tbody tr:hover { background: rgba(255,255,255,.025); }
-  tbody tr:last-child td { border-bottom: none; }
-  td.actions { text-align: right; }
-  td.actions .btn { height: 28px; padding: 0 9px; font-size: 12px; margin-left: 6px; }
-  .empty { color: var(--muted); text-align: center; padding: 34px 16px; font-size: 13px; }
-  .pill {
-    display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px;
-    color: #a9e8c2; background: rgba(61, 220, 132, .08); border: 1px solid rgba(61, 220, 132, .22);
-    font-variant-numeric: tabular-nums;
-  }
+  .topbar .right { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+  .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .content { width: 100%; max-width: 1240px; margin: 0 auto; padding: 22px 26px 64px; }
+  .view { display: none; }
+  .view.active { display: block; }
+  .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+  .page-head h2 { font-size: 19px; margin: 0 0 3px; font-weight: 600; letter-spacing: .2px; }
+  .page-head p { margin: 0; color: var(--muted); font-size: 12.5px; }
+  .page-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
-  /* 弹窗 */
-  .overlay {
-    position: fixed; inset: 0; background: rgba(6, 8, 11, .66); backdrop-filter: blur(3px);
-    display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 20;
+  /* 卡片 */
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-card); }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 18px 0; flex-wrap: wrap; }
+  .card-head h3 { margin: 0; font-size: 13.5px; font-weight: 600; }
+  .card-head .sub { color: var(--muted); font-size: 11.5px; font-weight: 400; margin-left: 8px; }
+  .card-body { padding: 16px 18px 18px; }
+  .card-head + .card-body { padding-top: 14px; }
+
+  /* KPI */
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
+  .kpi { padding: 16px 17px 15px; position: relative; overflow: hidden; }
+  .kpi .label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .kpi .value { font-size: 27px; font-weight: 650; letter-spacing: -.4px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .kpi .value .unit { font-size: 12px; font-weight: 500; color: var(--muted); margin-left: 5px; letter-spacing: 0; }
+  .kpi .foot { color: var(--muted); font-size: 11.5px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .kpi .foot b { color: var(--accent); font-weight: 500; }
+  .kpi .foot .warn { color: var(--warning); }
+  .kpi .foot .bad { color: var(--danger); }
+  .kpi.focus { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+  .kpi.focus .value { color: var(--accent); }
+
+  /* 栅格 */
+  .grid-main { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr); gap: 12px; margin-bottom: 12px; }
+  .grid-half { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  .split { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+  .stack { display: flex; flex-direction: column; gap: 12px; }
+
+  /* 图表 */
+  .chart-wrap { padding: 12px 12px 6px; }
+  .chart-wrap svg { width: 100%; height: auto; display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; padding: 0 6px 6px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11.5px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: 0 0 7px; }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); display: inline-block; flex: 0 0 6px; }
+  .status-dot.ok { background: var(--accent); }
+  .status-dot.warn { background: var(--warning); }
+  .status-dot.bad { background: var(--danger); }
+  .chart-empty { padding: 48px 16px; text-align: center; color: var(--muted); font-size: 12.5px; }
+
+  /* 状态行 */
+  .status-list { display: flex; flex-direction: column; }
+  .status-row { display: flex; align-items: center; justify-content: space-between; padding: 11px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; gap: 12px; }
+  .status-row:last-child { border-bottom: none; }
+  .status-row .k { color: var(--muted); }
+  .status-row .v { display: inline-flex; align-items: center; gap: 7px; font-variant-numeric: tabular-nums; text-align: right; }
+
+  /* 条形列表 */
+  .bar-list { display: flex; flex-direction: column; gap: 13px; }
+  .bar-row .top { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; margin-bottom: 5px; }
+  .bar-row .top span:last-child { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .bar-row .top .name { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+  .bar-row .top .name b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .track { height: 6px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
+  .fill { height: 100%; border-radius: 999px; }
+
+  /* Trae 账户积分 */
+  .trae-list { display: flex; flex-direction: column; gap: 14px; }
+  .trae-row .top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 12.5px; }
+  .trae-row .top .name { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 500; }
+  .trae-row .top .name .id { color: var(--muted); font-weight: 400; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .trae-row .top .pct { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .trae-row .meta { display: flex; justify-content: space-between; gap: 10px; margin-top: 6px; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .trae-row .meta b { color: var(--text); font-weight: 500; }
+  .trae-total { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .trae-total .k { color: var(--muted); font-size: 11.5px; }
+  .trae-total .v { color: var(--accent); font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .trae-total .v span { color: var(--muted); font-size: 11.5px; font-weight: 400; }
+  .trae-empty { padding: 10px 2px; color: var(--muted); font-size: 12.5px; line-height: 1.7; }
+  .trae-empty b { color: var(--text); font-weight: 500; }
+
+  /* 表格 */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 11.5px; background: var(--panel-2); }
+  tbody tr:hover { background: color-mix(in srgb, var(--panel-2) 55%, transparent); }
+  tbody tr[data-user-id] { cursor: pointer; }
+  tbody tr.selected, tbody tr.selected:hover { background: var(--accent-dim); }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.actions, th.actions { text-align: right; }
+  tr.empty-row td { text-align: center; color: var(--muted); padding: 32px 16px; }
+  .flow-group { cursor: pointer; }
+  .flow-group .chev { color: var(--muted); transition: transform .15s; margin-right: 7px; vertical-align: -1px; display: inline-block; }
+  .flow-group.open .chev { transform: rotate(90deg); }
+  .flow-detail-row td { padding: 0; background: var(--panel-2); }
+  .flow-detail-inner { padding: 10px 16px 14px 38px; }
+  .flow-detail-inner th { background: transparent; padding: 7px 12px; font-size: 11px; }
+  .flow-detail-inner td { padding: 7px 12px; font-size: 12px; }
+  .flow-detail-inner .hint { color: var(--muted); font-size: 11.5px; padding: 8px 12px 0; }
+  .flow-summary { display: flex; align-items: baseline; gap: 22px; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; flex-wrap: wrap; }
+  .flow-summary b { font-size: 16px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .flow-summary span { color: var(--muted); }
+
+  /* 用户 */
+  .user-cell { display: flex; align-items: center; gap: 9px; }
+  .avatar {
+    width: 28px; height: 28px; border-radius: 50%; background: var(--panel-2);
+    border: 1px solid var(--border); color: var(--muted);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600; text-transform: uppercase; flex: 0 0 28px;
+  }
+  .avatar.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+  .user-cell .name { font-weight: 500; }
+  .user-cell .id { color: var(--muted); font-size: 11px; margin-left: 2px; }
+
+  /* 徽标 */
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px;
+    border-radius: 999px; font-size: 11px; border: 1px solid transparent;
+    background: var(--panel-2); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .pill.ok { color: var(--accent); background: var(--accent-dim); }
+  .pill.warn { color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, transparent); }
+  .pill.bad { color: var(--danger); background: var(--danger-dim); }
+  .pill.blue { color: var(--series-3); background: color-mix(in srgb, var(--series-3) 12%, transparent); }
+  .pill.plain { border-color: var(--border); background: transparent; }
+
+  /* 用户详情 */
+  .detail-head { display: flex; align-items: center; gap: 12px; padding: 18px 18px 0; }
+  .detail-head .avatar { width: 42px; height: 42px; flex-basis: 42px; font-size: 15px; }
+  .detail-head .who { min-width: 0; flex: 1; }
+  .detail-head .who b { display: block; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+  .detail-head .who span { display: block; color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+  .mini-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 16px 18px 0; }
+  .mini-stat { background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 9px 10px; min-width: 0; }
+  .mini-stat .k { color: var(--muted); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mini-stat .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; }
+  .detail-section { padding: 16px 18px 0; }
+  .detail-section h4 { margin: 0 0 8px; color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: .4px; }
+  .kv { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; font-size: 12.5px; border-bottom: 1px dashed var(--border); }
+  .kv:last-child { border-bottom: none; }
+  .kv .k { color: var(--muted); }
+  .kv .v { text-align: right; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
+  .device-line { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px dashed var(--border); }
+  .device-line:last-child { border-bottom: none; }
+  .device-line .info { flex: 1; min-width: 0; }
+  .device-line .info b { display: block; font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+  .device-line .info span { display: block; color: var(--muted); font-size: 11px; }
+  .detail-actions { display: flex; gap: 8px; padding: 16px 18px 18px; flex-wrap: wrap; }
+  .detail-empty { padding: 40px 18px; text-align: center; color: var(--muted); font-size: 12.5px; }
+
+  /* 工具栏 / 筛选 */
+  .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .toolbar .grow { flex: 1; min-width: 160px; }
+  .toolbar .input { width: 100%; }
+  .chips { display: inline-flex; align-items: center; gap: 4px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
+  .chip {
+    height: 26px; padding: 0 10px; border-radius: 6px; border: none; background: transparent;
+    color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap;
+  }
+  .chip:hover { color: var(--text); }
+  .chip.active { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+  .filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .filters .select { height: 32px; }
+
+  /* 弹窗 / 提示 */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, .52); z-index: 50;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
   }
   .modal {
-    width: 460px; max-width: 100%; max-height: 80vh; overflow: auto;
-    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
-    box-shadow: 0 28px 80px rgba(0,0,0,.5);
+    width: 420px; max-width: 100%; max-height: 88vh; overflow: auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-card);
+    box-shadow: var(--shadow);
   }
-  .modal-head { display: flex; justify-content: space-between; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--border); }
-  .modal-head h3 { margin: 0; font-size: 14px; }
-  .modal-body { padding: 18px; }
-  .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 0 18px 18px; }
-  .icon-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 18px; line-height: 1; }
-  .icon-btn:hover { color: var(--text); }
-  .device-row {
-    display: flex; justify-content: space-between; gap: 14px; padding: 10px 0;
-    border-bottom: 1px solid #2b2f2c; font-size: 12.5px;
+  .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px 0; }
+  .modal-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+  .modal-body { padding: 18px 20px 4px; }
+  .modal-body p { margin: 0 0 12px; color: var(--muted); font-size: 12.5px; line-height: 1.7; }
+  .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px 20px; }
+  .toast {
+    position: fixed; right: 22px; bottom: 22px; z-index: 80; max-width: 380px;
+    background: var(--panel); border: 1px solid var(--border-strong); border-left: 3px solid var(--accent);
+    border-radius: 10px; box-shadow: var(--shadow); padding: 12px 14px; font-size: 12.5px;
+    animation: toast-in .16s ease-out;
   }
-  .device-row:last-child { border-bottom: none; }
-  .device-id { font-family: "SF Mono", ui-monospace, monospace; color: #d5e6db; word-break: break-all; }
-  .device-time { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+  .toast.error { border-left-color: var(--danger); }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .loading { color: var(--muted); }
+  .skeleton { height: 12px; border-radius: 4px; background: var(--panel-2); animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+  .code {
+    margin: 0; padding: 14px 16px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--muted); font: 11.5px/1.7 "SF Mono", ui-monospace, Menlo, monospace;
+    overflow-x: auto; white-space: pre;
+  }
+  .danger-zone { border-color: color-mix(in srgb, var(--danger) 28%, var(--border)); }
+  .danger-zone .card-head h3 { color: var(--danger); }
+  .card-body.flush { padding: 0; }
+  .card-body.flush .table-wrap { border-radius: 0 0 var(--radius-card) var(--radius-card); }
+  .kpi .value.ok { color: var(--accent); }
+  .kpi .value.bad { color: var(--danger); }
 
-  /* Toast */
-  #toast {
-    position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%) translateY(12px);
-    background: #232826; color: var(--text); border: 1px solid #3a423d;
-    padding: 10px 16px; border-radius: 9px; font-size: 13px;
-    opacity: 0; pointer-events: none; transition: .2s; z-index: 30;
-    box-shadow: 0 12px 32px rgba(0,0,0,.4);
+  @media (max-width: 1120px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .grid-main, .grid-half, .split { grid-template-columns: 1fr; }
+    .kpi .value { font-size: 24px; }
   }
-  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-  #toast.error { border-color: rgba(255,107,107,.5); color: #ffb3b3; }
+  @media (max-width: 860px) {
+    .app { flex-direction: column; }
+    .sidebar {
+      width: 100%; flex: none; height: auto; position: static;
+      flex-direction: row; align-items: center; padding: 10px 12px;
+      overflow-x: auto; border-right: none; border-bottom: 1px solid var(--border);
+    }
+    .brand { padding: 0 12px 0 2px; }
+    .brand-name span, .nav-section, .sidebar-foot { display: none; }
+    .nav-item { margin-bottom: 0; padding: 7px 10px; }
+    .nav-badge { display: none; }
+    .topbar { height: 56px; padding: 0 16px; }
+    .topbar .sub, .meta { display: none; }
+    .content { padding: 16px 14px 48px; }
+    .mini-stats { grid-template-columns: 1fr; }
+    .toast { left: 14px; right: 14px; max-width: none; }
+  }
 </style>
 </head>
 <body>
-
-<div id="login" class="login-wrap">
+<!-- 登录 -->
+<div class="login-wrap" id="login">
   <div class="login-card">
-    <div class="brand"><span class="brand-dot"></span><h1>CC Service 管理后台</h1></div>
-    <p>输入管理员 Token 后管理用户与设备。</p>
+    <div class="brand">
+      <div class="brand-mark">c</div>
+      <div class="brand-name">ccBar<span>管理控制台</span></div>
+    </div>
+    <p>输入管理员 Token 后进入控制台。Token 保存在本机浏览器中。</p>
     <div class="field">
-      <label>管理员 Token</label>
-      <input id="tokenInput" type="password" placeholder="与 secrets.env 中 API_TOKEN 一致" autocomplete="current-password">
+      <label for="tokenInput">管理员 Token</label>
+      <input class="input" id="tokenInput" type="password" autocomplete="current-password" placeholder="API_TOKEN">
     </div>
-    <button id="loginBtn" class="btn primary block">进入后台</button>
-    <div id="loginError" class="error"></div>
+    <button class="btn primary block" id="loginBtn">进入控制台</button>
+    <div class="error" id="loginError"></div>
+    <div class="login-foot">数据来自 cc-service 实时接口<br>Token 可在服务端 API_TOKEN 中查看</div>
   </div>
 </div>
 
-<div id="app" class="hidden">
-  <header class="topbar">
-    <div><h1><span class="brand-dot" style="display:inline-block;vertical-align:middle;margin-right:8px"></span>用户管理 <span class="sub">CC Service</span></h1></div>
-    <div class="right">
-      <span class="pill" id="tokenHint">管理员</span>
-      <button class="btn" id="logoutBtn">退出</button>
+<!-- 主界面 -->
+<div class="app hidden" id="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">c</div>
+      <div class="brand-name">ccBar<span>控制台</span></div>
     </div>
-  </header>
-  <main>
-    <section class="stats">
-      <div class="stat"><div class="label">用户数</div><div class="value" id="statUsers">0</div></div>
-      <div class="stat"><div class="label">已登记设备</div><div class="value" id="statDevices">0</div></div>
-      <div class="stat"><div class="label">当前账号</div><div class="value" style="font-size:18px;margin-top:8px">管理员</div></div>
-    </section>
+    <div class="nav-section">监控</div>
+    <div class="nav-item active" data-view="overview">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      <span>概览</span>
+    </div>
+    <div class="nav-item" data-view="users">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c.4-3.4 2.7-5.2 5.5-5.2s5.1 1.8 5.5 5.2"/><path d="M16 5.2a3 3 0 0 1 0 5.6M17.5 14.9c2 .5 3.1 2 3.4 4.3"/></svg>
+      <span>用户与设备</span>
+    </div>
+    <div class="nav-item" data-view="usage">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+      <span>用量分析</span>
+    </div>
+    <div class="nav-item" data-view="flow">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M3 12h18M3 18h18"/><circle cx="7" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="10" cy="18" r="1.4" fill="currentColor" stroke="none"/></svg>
+      <span>流水明细</span>
+    </div>
+    <div class="nav-section">资产</div>
+    <div class="nav-item" data-view="devices">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2.5" y="5" width="19" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      <span>设备管理</span>
+      <span class="nav-badge" id="deviceBadge">0</span>
+    </div>
+    <div class="nav-item" data-view="health">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.4 6.6a4.8 4.8 0 0 0-6.8 0L12 8.2l-1.6-1.6a4.8 4.8 0 1 0-6.8 6.8L12 21l8.4-7.6a4.8 4.8 0 0 0 0-6.8Z"/></svg>
+      <span>健康管理</span>
+    </div>
+    <div class="nav-section">运维</div>
+    <div class="nav-item" data-view="system">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
+      <span>系统状态</span>
+    </div>
+    <div class="sidebar-foot">
+      <div class="avatar on" id="adminAvatar">A</div>
+      <div class="who">
+        <b>管理员</b>
+        <span>API Token 会话</span>
+      </div>
+      <button class="icon-btn" id="logoutBtn" title="退出登录">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+      </button>
+    </div>
+  </aside>
 
-    <div class="grid">
-      <section class="card">
-        <div class="card-head"><h2>创建用户</h2></div>
-        <div class="card-body">
-          <div class="field">
-            <label>用户名</label>
-            <input id="newUsername" placeholder="2–64 位，字母数字 _ . -" autocomplete="off">
+  <div class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="pageTitle">概览</h1><span class="sub" id="pageSub">今天的情况</span>
+      </div>
+      <div class="right">
+        <span class="pill" id="servicePill"><span class="status-dot"></span>连接中</span>
+        <span class="meta" id="refreshHint">尚未加载</span>
+        <button class="icon-btn" id="refreshBtn" title="刷新">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6"/></svg>
+        </button>
+        <button class="icon-btn" id="themeBtn" title="切换主题">
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+          <svg class="icon-moon hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- 概览 -->
+      <section class="view active" id="view-overview">
+        <div class="page-head">
+          <div>
+            <h2>今天的情况</h2>
+            <p id="overviewDate">加载中…</p>
           </div>
-          <div class="field">
-            <label>初始密码</label>
-            <input id="newPassword" type="password" placeholder="至少 6 位" autocomplete="new-password">
+          <div class="page-actions">
+            <button class="btn" id="exportDailyBtn">导出日报</button>
           </div>
-          <button id="createBtn" class="btn primary block">创建用户</button>
-          <div class="hint">用户在多台 Mac 上使用同一用户名登录，设备会自动归到该用户，用量合并。</div>
+        </div>
+        <div class="kpis">
+          <div class="card kpi">
+            <div class="label">今日 Token</div>
+            <div class="value" id="kpiTokens">—</div>
+            <div class="foot" id="kpiTokensFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">Trae 今日积分</div>
+            <div class="value" id="kpiCredits">—</div>
+            <div class="foot" id="kpiCreditsFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi focus">
+            <div class="label">剩余总积分</div>
+            <div class="value" id="kpiRemaining">—</div>
+            <div class="foot" id="kpiRemainingFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">Trae 账户</div>
+            <div class="value" id="kpiTraeAccounts">—</div>
+            <div class="foot" id="kpiTraeAccountsFoot">&nbsp;</div>
+          </div>
+        </div>
+        <div class="grid-main">
+          <div class="card">
+            <div class="card-head">
+              <h3>今日每小时用量 <span class="sub">0-23 时</span></h3>
+              <div class="chips" id="hourlyMetric">
+                <button class="chip active" data-metric="credits">积分</button>
+                <button class="chip" data-metric="tokens">Token</button>
+                <button class="chip" data-metric="requests">请求</button>
+              </div>
+            </div>
+            <div class="chart-wrap" id="hourlyChart"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Trae 账户积分 <span class="sub">官方账单快照</span></h3></div>
+            <div class="card-body" id="traeAccounts"></div>
+          </div>
+        </div>
+        <div class="grid-main">
+          <div class="card">
+            <div class="card-head"><h3>同步趋势 <span class="sub">近 7 天 · 按数据来源</span></h3></div>
+            <div class="chart-wrap" id="overviewTrend"></div>
+            <div class="legend" id="overviewLegend"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>服务状态 <span class="sub">实时</span></h3></div>
+            <div class="card-body"><div class="status-list" id="overviewStatus"></div></div>
+          </div>
+        </div>
+        <div class="grid-half">
+          <div class="card">
+            <div class="card-head"><h3>Top 模型 <span class="sub">近 7 天 Token 占比</span></h3></div>
+            <div class="card-body"><div class="bar-list" id="topModels"></div></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h3>最近同步设备</h3>
+              <button class="btn sm ghost" data-goto="devices">全部设备</button>
+            </div>
+            <div class="card-body flush">
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>用户</th><th>设备</th><th>状态</th><th>最近同步</th></tr></thead>
+                  <tbody id="recentDevices"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- 用户与设备 -->
+      <section class="view" id="view-users">
+        <div class="page-head">
+          <div>
+            <h2>用户与设备</h2>
+            <p>账号、登记设备与活跃状态，点击整行查看详情</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn primary" id="createUserBtn">创建用户</button>
+          </div>
+        </div>
+        <div class="toolbar">
+          <div class="grow"><input class="input" id="userSearch" placeholder="搜索用户名或 ID"></div>
+          <div class="chips" id="userChips">
+            <button class="chip active" data-filter="all">全部</button>
+            <button class="chip" data-filter="online">在线</button>
+            <button class="chip" data-filter="offline">离线</button>
+          </div>
+          <button class="btn" id="refreshUsersBtn">刷新</button>
+        </div>
+        <div class="split">
+          <div class="card">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>用户</th><th class="num">设备</th><th>最近活跃</th><th>今日用量</th><th>状态</th><th class="actions">操作</th></tr>
+                </thead>
+                <tbody id="userRows">
+                  <tr class="empty-row"><td colspan="6">加载中…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card" id="userDetail">
+            <div class="detail-empty">选择左侧用户查看详情</div>
+          </div>
         </div>
       </section>
 
-      <section class="card">
-        <div class="card-head">
-          <h2>用户列表</h2>
-          <button class="btn" id="refreshBtn" style="height:28px;font-size:12px">刷新</button>
+      <!-- 用量分析 -->
+      <section class="view" id="view-usage">
+        <div class="page-head">
+          <div>
+            <h2>用量分析</h2>
+            <p>Token、缓存与积分消耗，支持按用户、来源和模型筛选</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn" id="exportUsageBtn">导出 CSV</button>
+          </div>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>ID</th><th>用户名</th><th>创建时间</th><th>设备</th><th class="actions">操作</th></tr></thead>
-            <tbody id="userRows"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
-          </table>
+        <div class="toolbar">
+          <div class="filters">
+            <select class="select" id="usageDays">
+              <option value="7">近 7 天</option>
+              <option value="30">近 30 天</option>
+              <option value="90">近 90 天</option>
+            </select>
+            <select class="select" id="usageUser"><option value="">全部用户</option></select>
+            <select class="select" id="usageSource"><option value="">全部来源</option></select>
+            <select class="select" id="usageModel"><option value="">全部模型</option></select>
+            <button class="btn" id="applyUsageBtn">应用筛选</button>
+          </div>
+          <span class="meta" id="usageRange"></span>
+        </div>
+        <div class="kpis">
+          <div class="card kpi">
+            <div class="label">输入 Token</div>
+            <div class="value" id="usageInput">—</div>
+            <div class="foot" id="usageInputFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">输出 Token</div>
+            <div class="value" id="usageOutput">—</div>
+            <div class="foot" id="usageOutputFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">缓存读取</div>
+            <div class="value" id="usageCache">—</div>
+            <div class="foot" id="usageCacheFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">积分 / 金额</div>
+            <div class="value" id="usageCredits">—</div>
+            <div class="foot" id="usageCreditsFoot">&nbsp;</div>
+          </div>
+        </div>
+        <div class="grid-half">
+          <div class="card">
+            <div class="card-head"><h3>按来源 <span class="sub" id="usageSourceSub"></span></h3></div>
+            <div class="card-body">
+              <div class="bar-list" id="usageSources"></div>
+              <div class="status-list" id="usageSourceStats" style="margin-top:14px"></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>按模型 <span class="sub">按 Token 排序</span></h3></div>
+            <div class="card-body flush">
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>模型</th><th class="num">Token</th><th class="num">积分</th><th class="num">占比</th></tr></thead>
+                  <tbody id="usageModels"><tr class="empty-row"><td colspan="4">加载中…</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>明细 <span class="sub">最新 5 条同步记录</span></h3></div>
+          <div class="card-body flush">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>时间</th><th>用户</th><th>来源</th><th>模型</th><th class="num">输入</th><th class="num">输出</th><th class="num">缓存</th><th class="num">积分</th></tr>
+                </thead>
+                <tbody id="usageRecent"><tr class="empty-row"><td colspan="8">加载中…</td></tr></tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </section>
-    </div>
-  </main>
-</div>
+      <!-- 流水明细 -->
+      <section class="view" id="view-flow">
+        <div class="page-head">
+          <div>
+            <h2>流水明细</h2>
+            <p>按时间聚合的同步记录，点击时段可展开逐笔明细</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn" id="exportFlowBtn">导出流水</button>
+          </div>
+        </div>
+        <div class="toolbar">
+          <div class="chips" id="flowChips">
+            <button class="chip active" data-range="today">今日</button>
+            <button class="chip" data-range="7d">近 7 天</button>
+            <button class="chip" data-range="30d">近 30 天</button>
+          </div>
+          <div class="filters">
+            <select class="select" id="flowUser"><option value="">全部用户</option></select>
+            <select class="select" id="flowSource"><option value="">全部来源</option></select>
+            <select class="select" id="flowModel"><option value="">全部模型</option></select>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h3>同步流水 <span class="sub">按积分排序统计占比</span></h3>
+            <div class="page-actions">
+              <button class="icon-btn" id="flowPrev" title="前一天">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 18l-6-6 6-6"/></svg>
+              </button>
+              <span class="meta" id="flowLabel">今天</span>
+              <button class="icon-btn" id="flowNext" title="后一天">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18l6-6-6-6"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="flow-summary" id="flowSummary"></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>时段</th><th class="num">次数</th><th class="num">Token</th><th class="num">积分</th><th class="num">占比</th></tr></thead>
+              <tbody id="flowRows"><tr class="empty-row"><td colspan="5">加载中…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
 
-<div id="overlay" class="overlay hidden">
-  <div class="modal">
-    <div class="modal-head"><h3 id="modalTitle"></h3><button class="icon-btn" id="modalClose">&times;</button></div>
-    <div class="modal-body" id="modalBody"></div>
-    <div class="modal-foot" id="modalFoot"></div>
+      <!-- 设备管理 -->
+      <section class="view" id="view-devices">
+        <div class="page-head">
+          <div>
+            <h2>设备管理</h2>
+            <p>所有登记设备、归属用户与在线状态</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn danger" id="purgeDevicesBtn">清理 7 天离线设备</button>
+          </div>
+        </div>
+        <div class="kpis">
+          <div class="card kpi">
+            <div class="label">设备总数</div>
+            <div class="value" id="deviceTotal">—</div>
+            <div class="foot">已登记设备</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">在线设备</div>
+            <div class="value" id="deviceOnline">—</div>
+            <div class="foot">5 分钟内有上报</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">24 小时活跃</div>
+            <div class="value" id="deviceActive">—</div>
+            <div class="foot">最近一天有上报</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">7 天离线</div>
+            <div class="value" id="deviceOffline">—</div>
+            <div class="foot">可安全清理</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>设备</th><th>归属用户</th><th>首次登记</th><th>最近活跃</th><th>状态</th><th class="num">事件数</th><th class="actions">操作</th></tr>
+              </thead>
+              <tbody id="deviceRows"><tr class="empty-row"><td colspan="7">加载中…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+      <!-- 健康管理 -->
+      <section class="view" id="view-health">
+        <div class="page-head">
+          <div>
+            <h2>健康管理</h2>
+            <p>体重、体脂与身高记录，数据与 ccBar 客户端互通</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn primary" id="addHealthBtn">新增记录</button>
+          </div>
+        </div>
+        <div class="toolbar">
+          <div class="filters">
+            <select class="select" id="healthKind">
+              <option value="all">全部类型</option>
+              <option value="weight">体重</option>
+              <option value="bodyfat">体脂</option>
+              <option value="height">身高</option>
+            </select>
+            <select class="select" id="healthDays">
+              <option value="30">近 30 天</option>
+              <option value="90">近 90 天</option>
+              <option value="365">近 1 年</option>
+            </select>
+          </div>
+          <span class="meta" id="healthRange"></span>
+        </div>
+        <div class="kpis">
+          <div class="card kpi">
+            <div class="label">最新体重</div>
+            <div class="value" id="healthWeight">—</div>
+            <div class="foot" id="healthWeightFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">最新体脂</div>
+            <div class="value" id="healthBodyfat">—</div>
+            <div class="foot" id="healthBodyfatFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">身高</div>
+            <div class="value" id="healthHeight">—</div>
+            <div class="foot" id="healthHeightFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">BMI</div>
+            <div class="value" id="healthBmi">—</div>
+            <div class="foot" id="healthBmiFoot">&nbsp;</div>
+          </div>
+        </div>
+        <div class="grid-main">
+          <div class="card">
+            <div class="card-head"><h3>体重趋势 <span class="sub" id="healthTrendSub">近 30 天</span></h3></div>
+            <div class="chart-wrap" id="healthTrend"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>数据概览</h3></div>
+            <div class="card-body"><div class="status-list" id="healthStats"></div></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>最近记录 <span class="sub" id="healthRecordsSub"></span></h3></div>
+          <div class="card-body flush">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>类型</th><th class="num">数值</th><th>记录时间</th><th>来源</th></tr></thead>
+                <tbody id="healthRecords"><tr class="empty-row"><td colspan="4">加载中…</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 系统状态 -->
+      <section class="view" id="view-system">
+        <div class="page-head">
+          <div>
+            <h2>系统状态</h2>
+            <p>服务健康、数据库迁移与数据维护</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn" id="checkSystemBtn">重新检查</button>
+          </div>
+        </div>
+        <div class="kpis">
+          <div class="card kpi">
+            <div class="label">API 服务</div>
+            <div class="value" id="sysApi">—</div>
+            <div class="foot" id="sysApiFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">数据库</div>
+            <div class="value" id="sysDb">—</div>
+            <div class="foot" id="sysDbFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">数据库迁移</div>
+            <div class="value" id="sysMigration">—</div>
+            <div class="foot">Flyway 最新版本</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">运行时长</div>
+            <div class="value" id="sysUptime">—</div>
+            <div class="foot" id="sysUptimeFoot">&nbsp;</div>
+          </div>
+        </div>
+        <div class="grid-half">
+          <div class="card">
+            <div class="card-head"><h3>健康检查 <span class="sub">/api/health</span></h3></div>
+            <div class="card-body"><pre class="code" id="sysHealthCode">加载中…</pre></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>运行信息</h3></div>
+            <div class="card-body"><div class="status-list" id="sysInfo"></div></div>
+          </div>
+        </div>
+        <div class="card danger-zone">
+          <div class="card-head"><h3>数据维护</h3></div>
+          <div class="card-body">
+            <p class="muted" style="margin:0 0 12px;font-size:12.5px">清理 90 天前的用量事件，释放数据库空间。用户、设备与健康数据不受影响。</p>
+            <button class="btn danger" id="purgeUsageBtn">清理 90 天前用量事件</button>
+          </div>
+        </div>
+      </section>
+    </main>
   </div>
 </div>
 
-<div id="toast"></div>
-
+<div id="modalRoot"></div>
+<div id="toastRoot"></div>
 <script>
-(function () {
-  const API = '/api/admin/users';
-  const TOKEN_KEY = 'cc_admin_token';
-  let token = sessionStorage.getItem(TOKEN_KEY) || '';
-  let users = [];
+'use strict';
 
-  const $ = (id) => document.getElementById(id);
+const API = '/api/admin';
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
-  function showLogin(message) {
-    $('app').classList.add('hidden');
-    $('login').classList.remove('hidden');
-    if (message) $('loginError').textContent = message;
+const SOURCE_NAMES = {
+  ccswitch: 'cc-switch',
+  'cc-switch': 'cc-switch',
+  cc_switch: 'cc-switch',
+  zcode: 'ZCode',
+  trae: 'Trae'
+};
+const KIND_NAMES = { weight: '体重', bodyfat: '体脂', height: '身高' };
+const KIND_UNITS = { weight: 'kg', bodyfat: '%', height: 'cm' };
+const VIEW_META = {
+  overview: ['概览', '今天的情况'],
+  users: ['用户与设备', '账号、设备与活跃状态'],
+  usage: ['用量分析', 'Token、缓存与积分消耗'],
+  flow: ['流水明细', '按时间聚合的同步记录'],
+  devices: ['设备管理', '所有登记设备与在线状态'],
+  health: ['健康管理', '体重、体脂与身高记录'],
+  system: ['系统状态', '服务健康与数据维护']
+};
+
+const state = {
+  token: localStorage.getItem('cc_admin_token') || '',
+  theme: localStorage.getItem('cc_admin_theme') || 'dark',
+  view: 'overview',
+  users: [],
+  options: null,
+  selectedUserId: null,
+  userFilter: 'all',
+  userSearch: '',
+  usage: { days: 7, userId: '', source: '', model: '' },
+  flow: { range: 'today', anchor: startOfToday(), userId: '', source: '', model: '' },
+  health: { days: 30, kind: 'all' },
+  hourlyMetric: 'credits',
+  bucketCache: {},
+  lastLoaded: {},
+  loading: false
+};
+
+/* ---------- 基础工具 ---------- */
+
+class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
   }
+}
 
-  function showApp() {
-    $('login').classList.add('hidden');
-    $('app').classList.remove('hidden');
+function pad(value) {
+  return String(value).padStart(2, '0');
+}
+
+function startOfToday() {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function fmtDate(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function fmtDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return `${fmtDate(date)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function fmtClock(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function fmtInt(value) {
+  return Number(value || 0).toLocaleString('zh-CN');
+}
+
+function trimZero(text) {
+  return text.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+}
+
+function compact(value) {
+  const number = Number(value || 0);
+  if (number >= 1e9) return trimZero((number / 1e9).toFixed(2)) + 'B';
+  if (number >= 1e6) return trimZero((number / 1e6).toFixed(2)) + 'M';
+  if (number >= 1e4) return trimZero((number / 1e3).toFixed(1)) + 'k';
+  return fmtInt(number);
+}
+
+function fmtCredits(value) {
+  return Number(value || 0).toLocaleString('zh-CN', { maximumFractionDigits: 1 });
+}
+
+function fmtMoney(value) {
+  return '$' + Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtPct(value, digits = 1) {
+  return Number(value || 0).toFixed(digits) + '%';
+}
+
+function rel(value) {
+  if (!value) return '—';
+  const time = new Date(value).getTime();
+  if (Number.isNaN(time)) return '—';
+  const diff = Date.now() - time;
+  if (diff < 0) return fmtDateTime(value);
+  if (diff < 60000) return '刚刚';
+  if (diff < 3600000) return Math.floor(diff / 60000) + ' 分钟前';
+  if (diff < 86400000) return Math.floor(diff / 3600000) + ' 小时前';
+  if (diff < 172800000) return '昨天';
+  if (diff < 2592000000) return Math.floor(diff / 86400000) + ' 天前';
+  return fmtDate(value);
+}
+
+function esc(value) {
+  return String(value === null || value === undefined ? '' : value).replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[char]));
+}
+
+function sourceName(source) {
+  if (!source) return '未知';
+  return SOURCE_NAMES[String(source).toLowerCase()] || source;
+}
+
+function shortDevice(id) {
+  const text = String(id || '');
+  if (text.length <= 14) return text || '—';
+  return text.slice(0, 8) + '…' + text.slice(-4);
+}
+
+function fmtDuration(seconds) {
+  const total = Number(seconds || 0);
+  if (total < 60) return Math.floor(total) + ' 秒';
+  if (total < 3600) return Math.floor(total / 60) + ' 分钟';
+  if (total < 86400) return Math.floor(total / 3600) + ' 小时 ' + Math.floor((total % 3600) / 60) + ' 分';
+  return Math.floor(total / 86400) + ' 天 ' + Math.floor((total % 86400) / 3600) + ' 小时';
+}
+
+function fmtDurationShort(seconds) {
+  const total = Number(seconds || 0);
+  if (total < 3600) return Math.floor(total / 60) + ' 分';
+  if (total < 86400) return Math.floor(total / 3600) + ' 小时';
+  return Math.floor(total / 86400) + ' 天';
+}
+
+function qs(params) {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') search.set(key, value);
+  });
+  const text = search.toString();
+  return text ? '?' + text : '';
+}
+
+function toast(message, type = 'ok') {
+  const element = document.createElement('div');
+  element.className = 'toast' + (type === 'error' ? ' error' : '');
+  element.textContent = message;
+  $('#toastRoot').appendChild(element);
+  setTimeout(() => {
+    element.style.opacity = '0';
+    element.style.transition = 'opacity .2s';
+    setTimeout(() => element.remove(), 240);
+  }, 3200);
+}
+
+function applyTheme(theme) {
+  state.theme = theme;
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem('cc_admin_theme', theme);
+  const sun = $('.icon-sun');
+  const moon = $('.icon-moon');
+  if (sun && moon) {
+    sun.classList.toggle('hidden', theme !== 'dark');
+    moon.classList.toggle('hidden', theme === 'dark');
   }
+}
 
-  function toast(message, isError) {
-    const el = $('toast');
-    el.textContent = message;
-    el.classList.toggle('error', !!isError);
-    el.classList.add('show');
-    clearTimeout(toast.timer);
-    toast.timer = setTimeout(() => el.classList.remove('show'), 2600);
+function setServicePill(up) {
+  const element = $('#servicePill');
+  element.className = 'pill ' + (up ? 'ok' : 'bad');
+  element.innerHTML = `<span class="status-dot ${up ? 'ok' : 'bad'}"></span>${up ? '服务正常' : '服务异常'}`;
+}
+
+/* ---------- 请求 / 弹窗 ---------- */
+
+async function api(path, options = {}) {
+  const headers = Object.assign({}, options.headers || {}, {
+    Authorization: 'Bearer ' + state.token
+  });
+  if (options.body) headers['Content-Type'] = 'application/json';
+  let response;
+  try {
+    response = await fetch(API + path, Object.assign({}, options, { headers }));
+  } catch (error) {
+    throw new ApiError('无法连接服务，请确认服务已启动', 0);
   }
-
-  function escapeHtml(value) {
-    return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-    }[c]));
+  if (response.status === 401) {
+    logout('登录已过期，请重新输入 Token');
+    throw new ApiError('未授权', 401);
   }
-
-  function formatTime(value) {
-    if (!value) return '—';
-    const d = new Date(value);
-    if (Number.isNaN(d.getTime())) return '—';
-    return d.toLocaleString('zh-CN', { hour12: false });
-  }
-
-  async function api(path, options) {
-    options = options || {};
-    const headers = Object.assign({
-      'Authorization': 'Bearer ' + token,
-      'Content-Type': 'application/json'
-    }, options.headers || {});
-    let res;
+  if (!response.ok) {
+    let message = '';
     try {
-      res = await fetch(path, Object.assign({}, options, { headers }));
-    } catch (e) {
-      throw new Error('无法连接服务');
-    }
-    if (res.status === 401) {
-      sessionStorage.removeItem(TOKEN_KEY);
-      token = '';
-      showLogin('管理员 Token 无效，请重新输入');
-      throw new Error('未授权');
-    }
-    if (!res.ok) {
-      if (res.status === 409) throw new Error('用户名已存在');
-      if (res.status === 404) throw new Error('用户不存在');
-      throw new Error('请求失败（HTTP ' + res.status + '）');
-    }
-    const text = await res.text();
-    return text ? JSON.parse(text) : null;
+      const data = await response.json();
+      message = data.message || data.error || '';
+    } catch (error) { /* 非 JSON 错误响应 */ }
+    throw new ApiError(message || `请求失败 (${response.status})`, response.status);
   }
+  if (response.status === 204) return null;
+  const type = response.headers.get('content-type') || '';
+  return type.includes('application/json') ? response.json() : response.text();
+}
 
-  async function loadUsers() {
-    const rows = $('userRows');
-    rows.innerHTML = '<tr><td colspan="5" class="empty">加载中…</td></tr>';
+function openModal(options) {
+  closeModal();
+  const root = $('#modalRoot');
+  root.innerHTML = `
+    <div class="modal-overlay" data-modal-overlay>
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-head">
+          <h3>${esc(options.title)}</h3>
+          <button class="icon-btn" data-modal-close title="关闭">×</button>
+        </div>
+        <div class="modal-body">${options.body || ''}</div>
+        <div class="modal-foot">
+          <button class="btn" data-modal-close>${esc(options.cancelText || '取消')}</button>
+          <button class="btn ${options.danger ? 'danger' : 'primary'}" data-modal-confirm>${esc(options.confirmText || '确定')}</button>
+        </div>
+      </div>
+    </div>`;
+  const overlay = $('[data-modal-overlay]', root);
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) closeModal();
+  });
+  $$('[data-modal-close]', root).forEach((button) => button.addEventListener('click', closeModal));
+  const confirmBtn = $('[data-modal-confirm]', root);
+  confirmBtn.addEventListener('click', async () => {
+    confirmBtn.disabled = true;
     try {
-      users = await api(API);
-      renderUsers();
-    } catch (e) {
-      rows.innerHTML = '<tr><td colspan="5" class="empty">' + escapeHtml(e.message) + '</td></tr>';
-    }
-  }
-
-  function renderUsers() {
-    $('statUsers').textContent = users.length;
-    $('statDevices').textContent = users.reduce((sum, u) => sum + (u.deviceCount || 0), 0);
-
-    const rows = $('userRows');
-    if (!users.length) {
-      rows.innerHTML = '<tr><td colspan="5" class="empty">还没有用户，先在左侧创建一个</td></tr>';
-      return;
-    }
-    rows.innerHTML = users.map((u) => (
-      '<tr>' +
-        '<td>' + u.id + '</td>' +
-        '<td>' + escapeHtml(u.username) + '</td>' +
-        '<td>' + escapeHtml(formatTime(u.createdAt)) + '</td>' +
-        '<td><span class="pill">' + (u.deviceCount || 0) + ' 台</span></td>' +
-        '<td class="actions">' +
-          '<button class="btn" data-action="devices" data-id="' + u.id + '" data-name="' + escapeHtml(u.username) + '">设备</button>' +
-          '<button class="btn" data-action="password" data-id="' + u.id + '" data-name="' + escapeHtml(u.username) + '">重置密码</button>' +
-        '</td>' +
-      '</tr>'
-    )).join('');
-  }
-
-  function openModal(title, bodyHtml, footHtml) {
-    $('modalTitle').textContent = title;
-    $('modalBody').innerHTML = bodyHtml;
-    $('modalFoot').innerHTML = footHtml || '';
-    $('overlay').classList.remove('hidden');
-  }
-
-  function closeModal() {
-    $('overlay').classList.add('hidden');
-  }
-
-  async function openDevices(id, name) {
-    openModal('设备 · ' + name, '<div class="empty">加载中…</div>', '');
-    try {
-      const devices = await api(API + '/' + id + '/devices');
-      $('modalBody').innerHTML = devices.length
-        ? devices.map((d) => (
-            '<div class="device-row">' +
-              '<div class="device-id">' + escapeHtml(d.deviceId) + '</div>' +
-              '<div class="device-time">最近 ' + escapeHtml(formatTime(d.lastSeenAt)) + '</div>' +
-            '</div>'
-          )).join('')
-        : '<div class="empty">该用户还没有登记设备</div>';
-    } catch (e) {
-      $('modalBody').innerHTML = '<div class="empty">' + escapeHtml(e.message) + '</div>';
-    }
-  }
-
-  function openResetPassword(id, name) {
-    openModal('重置密码 · ' + name,
-      '<div class="field"><label>新密码</label><input id="resetPasswordInput" type="password" placeholder="至少 6 位" autocomplete="new-password"></div>' +
-      '<div class="hint">重置后该用户所有已登录设备会失效，需要在客户端重新登录。</div>',
-      '<button class="btn" id="resetCancel">取消</button><button class="btn primary" id="resetConfirm">确认重置</button>');
-    $('resetCancel').onclick = closeModal;
-    $('resetConfirm').onclick = async function () {
-      const password = $('resetPasswordInput').value;
-      if (password.length < 6) { toast('密码至少 6 位', true); return; }
-      this.disabled = true;
-      try {
-        await api(API + '/' + id + '/password', { method: 'POST', body: JSON.stringify({ password }) });
-        closeModal();
-        toast('密码已重置');
-      } catch (e) {
-        toast(e.message, true);
-        this.disabled = false;
-      }
-    };
-    setTimeout(() => $('resetPasswordInput').focus(), 30);
-  }
-
-  async function login() {
-    const input = $('tokenInput');
-    const value = input.value.trim();
-    if (!value) { $('loginError').textContent = '请输入管理员 Token'; return; }
-    token = value;
-    $('loginBtn').disabled = true;
-    $('loginError').textContent = '';
-    try {
-      await api(API);
-      sessionStorage.setItem(TOKEN_KEY, token);
-      showApp();
-      await loadUsers();
-    } catch (e) {
-      if (e.message !== '未授权') $('loginError').textContent = e.message;
+      await options.onConfirm();
+    } catch (error) {
+      if (error.status !== 401) toast(error.message || '操作失败', 'error');
     } finally {
-      $('loginBtn').disabled = false;
+      confirmBtn.disabled = false;
     }
+  });
+  const firstInput = $('input, select, textarea', root);
+  if (firstInput) setTimeout(() => firstInput.focus(), 30);
+  return root;
+}
+
+function closeModal() {
+  $('#modalRoot').innerHTML = '';
+}
+
+function confirmAction(title, message, onConfirm, confirmText = '确定', danger = true) {
+  openModal({
+    title,
+    body: `<p>${esc(message)}</p>`,
+    confirmText,
+    danger,
+    onConfirm: async () => {
+      await onConfirm();
+      closeModal();
+    }
+  });
+}
+
+function showLogin(message = '') {
+  state.token = '';
+  localStorage.removeItem('cc_admin_token');
+  $('#login').classList.remove('hidden');
+  $('#app').classList.add('hidden');
+  $('#loginError').textContent = message;
+  setTimeout(() => $('#tokenInput').focus(), 60);
+}
+
+function showApp() {
+  $('#login').classList.add('hidden');
+  $('#app').classList.remove('hidden');
+}
+
+function logout(message = '') {
+  closeModal();
+  showLogin(message);
+}
+
+async function doLogin() {
+  const token = $('#tokenInput').value.trim();
+  if (!token) {
+    $('#loginError').textContent = '请输入管理员 Token';
+    return;
+  }
+  const button = $('#loginBtn');
+  button.disabled = true;
+  $('#loginError').textContent = '';
+  try {
+    state.token = token;
+    await api('/overview');
+    localStorage.setItem('cc_admin_token', token);
+    showApp();
+    await afterLogin();
+  } catch (error) {
+    state.token = '';
+    $('#loginError').textContent = error.status === 401
+      ? 'Token 无效，请重试'
+      : (error.message || '无法连接服务');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+/* ---------- 视图调度 ---------- */
+
+const LOADERS = {
+  overview: () => loadOverview(),
+  users: () => loadUsers(),
+  usage: () => loadUsage(),
+  flow: () => loadFlow(),
+  devices: () => loadDevices(),
+  health: () => loadHealth(),
+  system: () => loadSystem()
+};
+
+function switchView(view, force = false) {
+  state.view = view;
+  const meta = VIEW_META[view] || ['', ''];
+  $('#pageTitle').textContent = meta[0];
+  $('#pageSub').textContent = meta[1];
+  $$('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.view === view));
+  $$('.view').forEach((section) => section.classList.toggle('active', section.id === 'view-' + view));
+  const stale = Date.now() - (state.lastLoaded[view] || 0) > 30000;
+  if (force || stale) return refreshView(view);
+  updateRefreshHint();
+  return Promise.resolve();
+}
+
+async function refreshView(view = state.view) {
+  if (state.loading) return;
+  state.loading = true;
+  try {
+    await LOADERS[view]();
+    state.lastLoaded[view] = Date.now();
+  } catch (error) {
+    if (error.status !== 401) toast(error.message || '加载失败', 'error');
+  } finally {
+    state.loading = false;
+    updateRefreshHint();
+  }
+}
+
+function updateRefreshHint() {
+  const timestamp = state.lastLoaded[state.view];
+  $('#refreshHint').textContent = timestamp
+    ? '更新于 ' + new Date(timestamp).toLocaleTimeString('zh-CN', { hour12: false })
+    : '尚未加载';
+}
+
+async function afterLogin() {
+  const results = await Promise.allSettled([loadOptions(), loadUsers()]);
+  results.forEach((result) => {
+    if (result.status === 'rejected' && result.reason.status !== 401) {
+      toast(result.reason.message || '初始化失败', 'error');
+    }
+  });
+  if (state.token) await switchView('overview', true);
+}
+
+/* ---------- 概览 ---------- */
+
+async function loadOverview() {
+  const data = await api('/overview');
+  state.overview = data;
+  renderOverviewKpis(data.kpi, data.trae);
+  renderHourlyChart(data.hourly);
+  renderTraeAccounts(data.trae);
+  renderStackedChart($('#overviewTrend'), $('#overviewLegend'), data.trend);
+  renderTopModels(data.topModels);
+  renderRecentDevices(data.recentDevices);
+  renderOverviewStatus(data.server);
+  $('#overviewDate').textContent = fmtDate(data.now) + ' · 数据每 30 秒自动刷新';
+  $('#deviceBadge').textContent = fmtInt(data.kpi.totalDevices);
+  setServicePill(data.server.status === 'UP');
+}
+
+function renderOverviewKpis(kpi, trae) {
+  const accounts = (trae && trae.accounts) || [];
+  $('#kpiTokens').innerHTML = `${compact(kpi.todayTokens)}<span class="unit">Token</span>`;
+  $('#kpiTokensFoot').textContent = `今日 ${fmtInt(kpi.todayEvents)} 条同步事件`;
+  $('#kpiCredits').textContent = fmtCredits(kpi.todayCredits);
+  $('#kpiCreditsFoot').textContent = accounts.length ? `${fmtInt(accounts.length)} 个账号 · 官方账单` : '等待 ccbar 上报账单';
+  $('#kpiRemaining').textContent = trae && trae.totalQuota > 0 ? fmtCredits(trae.totalRemaining) : '—';
+  $('#kpiRemainingFoot').textContent = trae && trae.totalQuota > 0
+    ? `已用 ${fmtCredits(trae.totalConsumed)} / ${fmtCredits(trae.totalQuota)}`
+    : '等待 ccbar 上报账单';
+  $('#kpiTraeAccounts').innerHTML = `${fmtInt(accounts.length)}<span class="unit">个</span>`;
+  $('#kpiTraeAccountsFoot').textContent = trae && trae.updatedAt
+    ? `更新于 ${fmtDateTime(trae.updatedAt)}`
+    : '暂无上报';
+}
+
+function renderHourlyChart(hourly) {
+  const container = $('#hourlyChart');
+  if (!container) return;
+  const metric = state.hourlyMetric || 'credits';
+  const labels = (hourly && hourly.labels) || Array.from({ length: 24 }, (_, index) => String(index));
+  const values = ((hourly && hourly[metric]) || []).map((value) => Number(value || 0));
+  const total = values.reduce((sum, value) => sum + value, 0);
+  if (!values.length || total <= 0) {
+    container.innerHTML = '<div class="chart-empty">今日暂无用量</div>';
+    return;
   }
 
-  async function createUser() {
-    const username = $('newUsername').value.trim();
-    const password = $('newPassword').value;
-    if (!/^[A-Za-z0-9_.-]{2,64}$/.test(username)) {
-      toast('用户名需为 2–64 位字母、数字、_ . -', true);
-      return;
-    }
-    if (password.length < 6) { toast('密码至少 6 位', true); return; }
-    const btn = $('createBtn');
-    btn.disabled = true;
-    try {
-      await api(API, { method: 'POST', body: JSON.stringify({ username, password }) });
-      $('newUsername').value = '';
-      $('newPassword').value = '';
-      toast('用户 ' + username + ' 已创建');
-      await loadUsers();
-    } catch (e) {
-      toast(e.message, true);
-    } finally {
-      btn.disabled = false;
-    }
+  const width = 660;
+  const height = 250;
+  const left = 48;
+  const right = 14;
+  const top = 18;
+  const bottom = 34;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const max = niceMax(Math.max(...values));
+  const step = values.length > 1 ? plotWidth / (values.length - 1) : 0;
+  const xOf = (index) => left + index * step;
+  const yOf = (value) => top + plotHeight - (value / max) * plotHeight;
+  const color = metric === 'credits' ? 'var(--accent)' : metric === 'tokens' ? 'var(--series-3)' : 'var(--series-2)';
+  const unit = metric === 'credits' ? '积分' : metric === 'tokens' ? 'Token' : '请求';
+  const formatValue = metric === 'credits' ? fmtCredits : metric === 'tokens' ? compact : fmtInt;
+
+  const points = values.map((value, index) => `${xOf(index).toFixed(1)},${yOf(value).toFixed(1)}`);
+  const areaPath = `M${left},${top + plotHeight} L${points.join(' L')} L${xOf(values.length - 1).toFixed(1)},${top + plotHeight} Z`;
+
+  let svg = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="今日每小时${unit}用量">`;
+  for (let index = 0; index <= 4; index++) {
+    const value = max * index / 4;
+    const y = yOf(value);
+    svg += `<line x1="${left}" y1="${y.toFixed(1)}" x2="${width - right}" y2="${y.toFixed(1)}" stroke="var(--border)" ${index === 0 ? '' : 'stroke-dasharray="3 5"'}/>`;
+    svg += `<text x="${left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" fill="var(--muted)" font-size="11">${axisNumber(value)}</text>`;
+  }
+  [0, 3, 6, 9, 12, 15, 18, 21, 23].forEach((hour) => {
+    if (hour >= labels.length) return;
+    svg += `<text x="${xOf(hour).toFixed(1)}" y="${height - 14}" text-anchor="middle" fill="var(--muted)" font-size="11">${escapeHtml(labels[hour])}</text>`;
+  });
+  svg += `<path d="${areaPath}" fill="${color}" opacity="0.12"/>`;
+  svg += `<polyline points="${points.join(' ')}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+
+  const peakIndex = values.indexOf(Math.max(...values));
+  if (peakIndex >= 0 && values[peakIndex] > 0) {
+    const peakX = xOf(peakIndex);
+    const peakY = yOf(values[peakIndex]);
+    const alignEnd = peakX > width - 130;
+    const textX = alignEnd ? peakX - 8 : peakX + 8;
+    svg += `<circle cx="${peakX.toFixed(1)}" cy="${peakY.toFixed(1)}" r="3.5" fill="${color}" stroke="var(--panel)" stroke-width="2"/>`;
+    svg += `<text x="${textX.toFixed(1)}" y="${Math.max(14, peakY - 9).toFixed(1)}" text-anchor="${alignEnd ? 'end' : 'start'}" fill="var(--text)" font-size="11.5">${escapeHtml(labels[peakIndex])}时 · ${formatValue(values[peakIndex])}</text>`;
+  }
+  svg += `<text x="${left}" y="${height - 0.5}" text-anchor="start" fill="var(--muted)" font-size="11">${unit}</text>`;
+  svg += '</svg>';
+  container.innerHTML = svg;
+}
+
+function axisNumber(value) {
+  if (value >= 10000) return compact(value);
+  if (value >= 1000) return Math.round(value).toLocaleString('zh-CN');
+  if (value > 0 && value < 10) return trimZero(value.toFixed(1));
+  return fmtInt(Math.round(value));
+}
+
+function renderTraeAccounts(trae) {
+  const container = $('#traeAccounts');
+  if (!container) return;
+  const accounts = (trae && trae.accounts) || [];
+  if (!accounts.length) {
+    container.innerHTML = '<div class="trae-empty"><b>暂无积分账单</b><br>ccbar 完成云同步后，会自动上报 Trae 官方已用 / 总额。</div>';
+    return;
+  }
+  const rows = accounts.map((account) => {
+    const pct = account.total > 0 ? Math.min(100, account.consumed / account.total * 100) : 0;
+    const name = account.slot ? `Trae ${account.slot}` : 'Trae';
+    return `<div class="trae-row">
+      <div class="top">
+        <span class="name">${escapeHtml(name)}<span class="id" title="${escapeHtml(account.account)}">${escapeHtml(shortAccount(account.account))}</span></span>
+        <span class="pct">已用 ${fmtPct(pct, 0)}</span>
+      </div>
+      <div class="track"><div class="fill" style="width:${pct.toFixed(1)}%;background:var(--series-1)"></div></div>
+      <div class="meta"><span>剩余 <b>${fmtCredits(account.remaining)}</b> / ${fmtCredits(account.total)}</span><span>今日 ${fmtCredits(account.todayCredits)}</span></div>
+    </div>`;
+  }).join('');
+  container.innerHTML = `<div class="trae-list">${rows}</div>
+    <div class="trae-total"><span class="k">合计剩余 / 总额</span><span class="v">${fmtCredits(trae.totalRemaining)} <span>/ ${fmtCredits(trae.totalQuota)}</span></span></div>`;
+}
+
+function shortAccount(account) {
+  const text = String(account || '');
+  return text.length > 10 ? `${text.slice(0, 4)}…${text.slice(-4)}` : text;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[char]));
+}
+
+function niceMax(value) {
+  if (value <= 0) return 0;
+  const exponent = Math.floor(Math.log10(value));
+  const base = Math.pow(10, exponent);
+  const fraction = value / base;
+  const nice = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
+  return nice * base;
+}
+
+function renderStackedChart(container, legendElement, trend) {
+  const labels = (trend && trend.labels) || [];
+  const raw = ((trend && trend.series) || []).map((series) => ({
+    name: sourceName(series.source),
+    values: series.data || [],
+    total: (series.data || []).reduce((sum, value) => sum + Number(value || 0), 0)
+  }));
+  const sorted = raw.slice().sort((left, right) => right.total - left.total);
+  const series = sorted.slice(0, 3).map((item, index) => ({
+    name: item.name,
+    values: item.values,
+    color: `var(--series-${index + 1})`
+  }));
+  if (sorted.length > 3) {
+    const values = labels.map((_, index) => sorted.slice(3)
+      .reduce((sum, item) => sum + Number(item.values[index] || 0), 0));
+    series.push({ name: '其他', values, color: 'var(--border-strong)' });
+  }
+  const totals = labels.map((_, index) => series
+    .reduce((sum, item) => sum + Number(item.values[index] || 0), 0));
+  const max = niceMax(Math.max(0, ...totals));
+  if (!labels.length || max <= 0) {
+    container.innerHTML = '<div class="chart-empty">近 7 天暂无同步数据</div>';
+    legendElement.innerHTML = '';
+    return;
   }
 
-  // 事件绑定
-  $('loginBtn').onclick = login;
-  $('tokenInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); });
-  $('logoutBtn').onclick = function () {
-    sessionStorage.removeItem(TOKEN_KEY);
-    token = '';
-    $('tokenInput').value = '';
-    showLogin('');
-  };
-  $('createBtn').onclick = createUser;
-  $('newPassword').addEventListener('keydown', (e) => { if (e.key === 'Enter') createUser(); });
-  $('refreshBtn').onclick = loadUsers;
-  $('modalClose').onclick = closeModal;
-  $('overlay').addEventListener('click', (e) => { if (e.target === $('overlay')) closeModal(); });
-  $('userRows').addEventListener('click', (e) => {
-    const btn = e.target.closest('button[data-action]');
-    if (!btn) return;
-    const id = Number(btn.dataset.id);
-    const name = btn.dataset.name;
-    if (btn.dataset.action === 'devices') openDevices(id, name);
-    if (btn.dataset.action === 'password') openResetPassword(id, name);
+  const width = 660;
+  const height = 240;
+  const left = 40;
+  const right = 10;
+  const top = 12;
+  const bottom = 30;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const groupWidth = plotWidth / labels.length;
+  const barWidth = Math.min(34, groupWidth * 0.52);
+  const yOf = (value) => top + plotHeight - (value / max) * plotHeight;
+
+  let svg = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="近 7 天同步趋势">`;
+  for (let index = 0; index <= 4; index++) {
+    const value = max * index / 4;
+    const y = yOf(value);
+    svg += `<line x1="${left}" y1="${y}" x2="${width - right}" y2="${y}" stroke="var(--border)" stroke-width="1" ${index === 0 ? '' : 'stroke-dasharray="3 5"'}/>`;
+    svg += `<text x="${left - 8}" y="${y + 3.5}" text-anchor="end" fill="var(--muted)" font-size="10">${compact(Math.round(value))}</text>`;
+  }
+  labels.forEach((label, index) => {
+    const center = left + groupWidth * index + groupWidth / 2;
+    let stack = 0;
+    series.forEach((item) => {
+      const value = Number(item.values[index] || 0);
+      if (value <= 0) return;
+      const yTop = yOf(stack + value);
+      const barHeight = Math.max(1, yOf(stack) - yTop);
+      svg += `<rect x="${center - barWidth / 2}" y="${yTop}" width="${barWidth}" height="${barHeight}" rx="2" fill="${item.color}"></rect>`;
+      stack += value;
+    });
+    svg += `<text x="${center}" y="${height - 9}" text-anchor="middle" fill="var(--muted)" font-size="10">${esc(label)}</text>`;
+  });
+  svg += '</svg>';
+
+  container.innerHTML = svg;
+  legendElement.innerHTML = series.map((item) =>
+    `<span><i class="dot" style="background:${item.color}"></i>${esc(item.name)}</span>`).join('');
+}
+
+function renderTopModels(models) {
+  const container = $('#topModels');
+  if (!models || !models.length) {
+    container.innerHTML = '<div class="muted" style="font-size:12.5px">近 7 天暂无模型数据</div>';
+    return;
+  }
+  container.innerHTML = models.map((model, index) => {
+    const color = index < 3 ? `var(--series-${index + 1})` : 'var(--border-strong)';
+    const width = Math.max(0, Math.min(100, Number(model.percent || 0)));
+    return `<div class="bar-row">
+      <div class="top">
+        <span class="name"><i class="dot" style="background:${color}"></i><b title="${esc(model.model)}">${esc(model.model || '未知模型')}</b></span>
+        <span>${fmtPct(model.percent)}</span>
+      </div>
+      <div class="track"><div class="fill" style="width:${width}%;background:${color}"></div></div>
+      <div class="top" style="margin-top:4px">
+        <span class="muted" style="font-size:11px">${compact(model.tokens)} Token</span>
+        <span>${fmtCredits(model.credits)} 积分</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderRecentDevices(devices) {
+  const tbody = $('#recentDevices');
+  if (!devices || !devices.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="4">暂无设备</td></tr>';
+    return;
+  }
+  tbody.innerHTML = devices.map((device) => `<tr>
+    <td><div class="user-cell"><span class="avatar ${device.online ? 'on' : ''}">${esc((device.username || '?').slice(0, 1))}</span><span class="name">${esc(device.username)}</span></div></td>
+    <td class="mono muted" title="${esc(device.deviceId)}">${esc(shortDevice(device.deviceId))}</td>
+    <td><span class="pill ${device.online ? 'ok' : ''}"><span class="status-dot ${device.online ? 'ok' : ''}"></span>${device.online ? '在线' : '离线'}</span></td>
+    <td class="muted">${esc(rel(device.lastSeenAt))}</td>
+  </tr>`).join('');
+}
+
+function renderOverviewStatus(server) {
+  const rows = [
+    ['API 服务', '<span class="pill ok"><span class="status-dot ok"></span>UP</span>'],
+    ['数据库', '<span class="pill ok"><span class="status-dot ok"></span>UP</span>'],
+    ['数据库迁移', `<span class="mono">${esc(server.migration)}</span>`],
+    ['运行时长', esc(fmtDuration(server.uptimeSeconds))],
+    ['最近同步', esc(rel(server.lastSyncAt))],
+    ['今日活跃设备', `${fmtInt(server.todayActiveDevices)} 台`],
+    ['自动刷新', '30 秒']
+  ];
+  $('#overviewStatus').innerHTML = rows.map(([key, value]) =>
+    `<div class="status-row"><span class="k">${key}</span><span class="v">${value}</span></div>`).join('');
+}
+
+function downloadBlob(content, filename, type = 'text/csv;charset=UTF-8') {
+  const blob = content instanceof Blob ? content : new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+function csvCell(value) {
+  return '"' + String(value === null || value === undefined ? '' : value).replace(/"/g, '""') + '"';
+}
+
+function exportDaily() {
+  if (!state.overview) {
+    toast('概览数据尚未加载', 'error');
+    return;
+  }
+  const overview = state.overview;
+  const kpi = overview.kpi;
+  const lines = [
+    ['指标', '数值'],
+    ['日期', fmtDate(overview.now)],
+    ['用户总数', kpi.totalUsers],
+    ['本周新增用户', kpi.newUsersWeek],
+    ['设备总数', kpi.totalDevices],
+    ['在线设备', kpi.onlineDevices],
+    ['今日同步事件', kpi.todayEvents],
+    ['近 7 天同步事件', kpi.weekEvents],
+    ['今日 Token', kpi.todayTokens],
+    ['今日积分', kpi.todayCredits]
+  ];
+  const csv = '\uFEFF' + lines.map((row) => row.map(csvCell).join(',')).join('\n');
+  downloadBlob(csv, `ccbar-daily-${fmtDate(overview.now)}.csv`);
+}
+
+/* ---------- 筛选项 ---------- */
+
+function populateSelect(select, items, placeholder, valueOf, labelOf) {
+  const current = select.value;
+  select.innerHTML = `<option value="">${esc(placeholder)}</option>` + (items || []).map((item) =>
+    `<option value="${esc(valueOf(item))}">${esc(labelOf(item))}</option>`).join('');
+  if (current && Array.from(select.options).some((option) => option.value === current)) {
+    select.value = current;
+  }
+}
+
+async function loadOptions() {
+  const options = await api('/usage/options');
+  state.options = options;
+  populateSelect($('#usageUser'), options.users, '全部用户', (user) => String(user.id), (user) => user.username);
+  populateSelect($('#flowUser'), options.users, '全部用户', (user) => String(user.id), (user) => user.username);
+  populateSelect($('#usageSource'), options.sources, '全部来源', (source) => source, (source) => sourceName(source));
+  populateSelect($('#flowSource'), options.sources, '全部来源', (source) => source, (source) => sourceName(source));
+  populateSelect($('#usageModel'), options.models, '全部模型', (model) => model, (model) => model);
+  populateSelect($('#flowModel'), options.models, '全部模型', (model) => model, (model) => model);
+}
+
+/* ---------- 用户与设备 ---------- */
+
+async function loadUsers() {
+  const users = await api('/users');
+  state.users = users;
+  if (state.selectedUserId && !users.some((user) => user.id === state.selectedUserId)) {
+    state.selectedUserId = null;
+  }
+  renderUserRows();
+  if (state.selectedUserId) {
+    await loadUserDetail(state.selectedUserId);
+  } else {
+    renderUserDetailEmpty();
+  }
+}
+
+function userStatus(user) {
+  if (user.disabled) return { cls: 'bad', dot: 'bad', text: '已禁用' };
+  if (user.online) return { cls: 'ok', dot: 'ok', text: '在线' };
+  if (!user.lastActiveAt) return { cls: '', dot: '', text: '未激活' };
+  if (Date.now() - new Date(user.lastActiveAt).getTime() > 3 * 86400000) {
+    return { cls: 'warn', dot: 'warn', text: '离线较久' };
+  }
+  return { cls: '', dot: '', text: '离线' };
+}
+
+function usageCell(user) {
+  if (!user.todayTokens && !user.todayCredits) return '<span class="muted">—</span>';
+  const tokens = user.todayTokens ? `<span class="num">${compact(user.todayTokens)} tok</span>` : '<span class="muted">—</span>';
+  return `${tokens} <span class="muted">· ${fmtCredits(user.todayCredits)} 积分</span>`;
+}
+
+function renderUserRows() {
+  const tbody = $('#userRows');
+  const term = state.userSearch.trim().toLowerCase();
+  const rows = state.users.filter((user) => {
+    if (term && !user.username.toLowerCase().includes(term) && String(user.id) !== term) return false;
+    if (state.userFilter === 'online') return user.online && !user.disabled;
+    if (state.userFilter === 'offline') return !user.online;
+    return true;
   });
 
-  // 自动登录
-  if (token) {
-    showApp();
-    loadUsers().catch(() => showLogin('登录已失效'));
-  } else {
-    showLogin('');
+  if (!rows.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${state.users.length ? '没有匹配的用户' : '暂无用户'}</td></tr>`;
+    return;
   }
-})();
+
+  tbody.innerHTML = rows.map((user) => {
+    const status = userStatus(user);
+    return `<tr data-user-id="${user.id}" class="${user.id === state.selectedUserId ? 'selected' : ''}">
+      <td>
+        <div class="user-cell">
+          <span class="avatar ${user.online && !user.disabled ? 'on' : ''}">${esc(user.username.slice(0, 1))}</span>
+          <span class="name">${esc(user.username)}</span><span class="id">#${user.id}</span>
+        </div>
+      </td>
+      <td class="num">${fmtInt(user.deviceCount)}</td>
+      <td class="muted">${esc(rel(user.lastActiveAt))}</td>
+      <td>${usageCell(user)}</td>
+      <td><span class="pill ${status.cls}"><span class="status-dot ${status.dot}"></span>${status.text}</span></td>
+      <td class="actions"><button class="btn sm ghost" data-reset-user="${user.id}">重置</button></td>
+    </tr>`;
+  }).join('');
+
+  $$('#userRows tr[data-user-id]').forEach((row) => {
+    row.addEventListener('click', () => selectUser(Number(row.dataset.userId)));
+  });
+  $$('#userRows [data-reset-user]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      openResetPassword(Number(button.dataset.resetUser));
+    });
+  });
+}
+
+function renderUserDetailEmpty() {
+  $('#userDetail').innerHTML = '<div class="detail-empty">选择左侧用户查看详情</div>';
+}
+
+async function selectUser(id) {
+  state.selectedUserId = id;
+  $$('#userRows tr[data-user-id]').forEach((row) => {
+    row.classList.toggle('selected', Number(row.dataset.userId) === id);
+  });
+  try {
+    await loadUserDetail(id);
+  } catch (error) {
+    if (error.status !== 401) toast(error.message || '加载用户详情失败', 'error');
+  }
+}
+
+async function loadUserDetail(id) {
+  const detail = await api('/users/' + id);
+  state.userDetail = detail;
+  renderUserDetail(detail);
+}
+
+function renderUserDetail(user) {
+  const status = userStatus(user);
+  const devices = user.devices || [];
+  const deviceHtml = devices.length ? devices.map((device) => `
+    <div class="device-line">
+      <span class="status-dot ${device.online ? 'ok' : ''}"></span>
+      <div class="info">
+        <b class="mono" title="${esc(device.deviceId)}">${esc(shortDevice(device.deviceId))}</b>
+        <span>首次 ${fmtDate(device.firstSeenAt)} · 最近 ${esc(rel(device.lastSeenAt))} · ${fmtInt(device.eventCount)} 条事件</span>
+      </div>
+      <button class="icon-btn" data-copy="${esc(device.deviceId)}" title="复制设备 ID">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+      </button>
+    </div>`).join('') : '<div class="muted" style="font-size:12px;padding:6px 0">暂无登记设备</div>';
+
+  $('#userDetail').innerHTML = `
+    <div class="detail-head">
+      <div class="avatar ${user.online && !user.disabled ? 'on' : ''}">${esc(user.username.slice(0, 1))}</div>
+      <div class="who">
+        <b>${esc(user.username)}</b>
+        <span>ID #${user.id} · 创建于 ${fmtDate(user.createdAt)}</span>
+      </div>
+      <span class="pill ${status.cls}"><span class="status-dot ${status.dot}"></span>${status.text}</span>
+    </div>
+    <div class="mini-stats">
+      <div class="mini-stat"><div class="k">设备</div><div class="v">${fmtInt(user.deviceCount)}</div></div>
+      <div class="mini-stat"><div class="k">今日 Token</div><div class="v">${user.todayTokens ? compact(user.todayTokens) : '—'}</div></div>
+      <div class="mini-stat"><div class="k">今日积分</div><div class="v">${fmtCredits(user.todayCredits)}</div></div>
+    </div>
+    <div class="detail-section">
+      <h4>账号信息</h4>
+      <div class="kv"><span class="k">用户 ID</span><span class="v mono">#${user.id}</span></div>
+      <div class="kv"><span class="k">创建时间</span><span class="v">${fmtDateTime(user.createdAt)}</span></div>
+      <div class="kv"><span class="k">最近活跃</span><span class="v">${esc(rel(user.lastActiveAt))}</span></div>
+      <div class="kv"><span class="k">近 7 天用量</span><span class="v">${user.weekTokens ? compact(user.weekTokens) + ' Token' : '—'}</span></div>
+      <div class="kv"><span class="k">近 7 天积分</span><span class="v">${fmtCredits(user.weekCredits)}</span></div>
+    </div>
+    <div class="detail-section">
+      <h4>登记设备</h4>
+      ${deviceHtml}
+    </div>
+    <div class="detail-actions">
+      <button class="btn" data-reset-detail="${user.id}">重置密码</button>
+      <button class="btn ${user.disabled ? 'primary' : 'danger'}" data-toggle-status="${user.id}">${user.disabled ? '启用账号' : '禁用账号'}</button>
+    </div>`;
+
+  $$('#userDetail [data-copy]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await copyText(button.dataset.copy);
+      toast('设备 ID 已复制');
+    });
+  });
+  const resetButton = $('#userDetail [data-reset-detail]');
+  if (resetButton) resetButton.addEventListener('click', () => openResetPassword(user.id));
+  const statusButton = $('#userDetail [data-toggle-status]');
+  if (statusButton) statusButton.addEventListener('click', () => toggleUserStatus(user));
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (error) {
+    const area = document.createElement('textarea');
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
+  }
+}
+
+function toggleUserStatus(user) {
+  const disabling = !user.disabled;
+  confirmAction(
+    disabling ? '禁用账号' : '启用账号',
+    disabling
+      ? `禁用 ${user.username} 后，该用户所有 Token 会立即失效，客户端将无法继续同步。`
+      : `确认启用 ${user.username}？启用后需要重新登录获取 Token。`,
+    async () => {
+      await api('/users/' + user.id + '/status', {
+        method: 'POST',
+        body: JSON.stringify({ disabled: disabling })
+      });
+      toast(disabling ? '账号已禁用' : '账号已启用');
+      await loadUsers();
+      await loadUserDetail(user.id);
+    },
+    disabling ? '禁用' : '启用',
+    disabling
+  );
+}
+
+function openCreateUser() {
+  openModal({
+    title: '创建用户',
+    body: `
+      <div class="field">
+        <label>用户名</label>
+        <input class="input" id="newUsername" placeholder="2-64 位字母、数字或 _ . -" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>初始密码</label>
+        <input class="input" id="newPassword" type="password" placeholder="至少 6 位" autocomplete="new-password">
+      </div>
+      <div class="hint">创建后把用户名和密码发给用户，在 ccBar 登录后即可同步数据。</div>`,
+    confirmText: '创建',
+    onConfirm: async () => {
+      const username = $('#newUsername').value.trim();
+      const password = $('#newPassword').value;
+      if (!/^[A-Za-z0-9_.-]{2,64}$/.test(username)) {
+        toast('用户名需为 2-64 位字母、数字或 _ . -', 'error');
+        return;
+      }
+      if (password.length < 6) {
+        toast('密码至少 6 位', 'error');
+        return;
+      }
+      const created = await api('/users', {
+        method: 'POST',
+        body: JSON.stringify({ username, password })
+      });
+      closeModal();
+      toast('用户已创建：' + created.username);
+      await loadOptions();
+      await loadUsers();
+      await selectUser(created.id);
+    }
+  });
+}
+
+function openResetPassword(userId) {
+  const known = state.users.find((user) => user.id === userId) || state.userDetail;
+  openModal({
+    title: '重置密码',
+    body: `
+      <p>为 ${esc(known ? known.username : '该用户')} 设置新密码，保存后旧登录会立即失效。</p>
+      <div class="field">
+        <label>新密码</label>
+        <input class="input" id="resetPassword" type="password" placeholder="至少 6 位" autocomplete="new-password">
+      </div>`,
+    confirmText: '重置',
+    onConfirm: async () => {
+      const password = $('#resetPassword').value;
+      if (password.length < 6) {
+        toast('密码至少 6 位', 'error');
+        return;
+      }
+      await api('/users/' + userId + '/password', {
+        method: 'POST',
+        body: JSON.stringify({ password })
+      });
+      closeModal();
+      toast('密码已重置，旧登录已失效');
+      await loadUsers();
+    }
+  });
+}
+
+function applyUserFilter() {
+  state.userSearch = $('#userSearch').value.trim();
+  renderUserRows();
+}
+
+/* ---------- 用量分析 ---------- */
+
+function usageQuery() {
+  const filters = state.usage;
+  return qs({
+    days: filters.days,
+    userId: filters.userId,
+    source: filters.source,
+    model: filters.model
+  });
+}
+
+function readUsageFilters() {
+  state.usage = {
+    days: Number($('#usageDays').value) || 7,
+    userId: $('#usageUser').value,
+    source: $('#usageSource').value,
+    model: $('#usageModel').value
+  };
+}
+
+async function loadUsage() {
+  const data = await api('/usage/summary' + usageQuery());
+  state.usageData = data;
+  renderUsageKpis(data.totals);
+  renderUsageSources(data.bySource, data.totals);
+  renderUsageModels(data.byModel, data.totals);
+  renderUsageRecent(data.recent);
+  const days = Math.max(1, Math.ceil((new Date(data.to) - new Date(data.from)) / 86400000));
+  $('#usageRange').textContent = `${fmtDate(data.from)} 至 ${fmtDate(data.to)} · ${days} 天`;
+  $('#usageSourceSub').textContent = `${(data.bySource || []).length} 个来源`;
+}
+
+function renderUsageKpis(totals) {
+  const totalTokens = totals.tokens || 0;
+  const share = (value) => totalTokens > 0 ? fmtPct(value * 100 / totalTokens) : '0%';
+  $('#usageInput').innerHTML = `${compact(totals.inputTokens)}<span class="unit">Token</span>`;
+  $('#usageInputFoot').textContent = `占总 Token ${share(totals.inputTokens)}`;
+  $('#usageOutput').innerHTML = `${compact(totals.outputTokens)}<span class="unit">Token</span>`;
+  $('#usageOutputFoot').textContent = `占总 Token ${share(totals.outputTokens)}`;
+  $('#usageCache').innerHTML = `${compact(totals.cacheReadTokens)}<span class="unit">Token</span>`;
+  const hitBase = totals.cacheReadTokens + totals.inputTokens;
+  $('#usageCacheFoot').textContent = hitBase > 0
+    ? `缓存命中率 ${fmtPct(totals.cacheReadTokens * 100 / hitBase)}`
+    : '暂无缓存数据';
+  $('#usageCredits').innerHTML = `${fmtCredits(totals.credits)}<span class="unit">积分</span>`;
+  $('#usageCreditsFoot').textContent = `${fmtMoney(totals.costUsd)} · ${fmtInt(totals.requests)} 次请求`;
+}
+
+function renderUsageSources(sources, totals) {
+  const container = $('#usageSources');
+  if (!sources || !sources.length) {
+    container.innerHTML = '<div class="muted" style="font-size:12.5px">该范围内暂无来源数据</div>';
+  } else {
+    container.innerHTML = sources.map((source, index) => {
+      const percent = totals.events > 0 ? source.events * 100 / totals.events : 0;
+      const color = index < 3 ? `var(--series-${index + 1})` : 'var(--border-strong)';
+      return `<div class="bar-row">
+        <div class="top">
+          <span class="name"><i class="dot" style="background:${color}"></i><b>${esc(sourceName(source.source))}</b></span>
+          <span>${fmtInt(source.events)} 条 · ${fmtPct(percent)}</span>
+        </div>
+        <div class="track"><div class="fill" style="width:${Math.max(0, Math.min(100, percent))}%;background:${color}"></div></div>
+      </div>`;
+    }).join('');
+  }
+
+  const from = state.usageData ? new Date(state.usageData.from) : new Date();
+  const to = state.usageData ? new Date(state.usageData.to) : new Date();
+  const days = Math.max(1, Math.ceil((to - from) / 86400000));
+  const rows = [
+    ['日均事件', fmtInt(Math.round(totals.events / days)) + ' 条'],
+    ['覆盖设备', fmtInt(totals.devices) + ' 台'],
+    ['同步事件', fmtInt(totals.events) + ' 条'],
+    ['最近上报', esc(rel(totals.lastReportAt))]
+  ];
+  $('#usageSourceStats').innerHTML = rows.map(([key, value]) =>
+    `<div class="status-row"><span class="k">${key}</span><span class="v">${value}</span></div>`).join('');
+}
+
+function renderUsageModels(models, totals) {
+  const tbody = $('#usageModels');
+  if (!models || !models.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="4">暂无模型数据</td></tr>';
+    return;
+  }
+  const totalTokens = totals.tokens || 0;
+  tbody.innerHTML = models.map((model) => {
+    const percent = totalTokens > 0 ? model.tokens * 100 / totalTokens : 0;
+    return `<tr>
+      <td><span class="mono">${esc(model.model || '未知模型')}</span></td>
+      <td class="num">${model.tokens ? compact(model.tokens) : '<span class="muted">—</span>'}</td>
+      <td class="num">${fmtCredits(model.credits)}</td>
+      <td class="num">${fmtPct(percent)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function tokenCell(value) {
+  return value ? `<span class="num">${compact(value)}</span>` : '<span class="muted">—</span>';
+}
+
+function renderUsageRecent(rows) {
+  const tbody = $('#usageRecent');
+  if (!rows || !rows.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">该范围内暂无同步记录</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((row) => `<tr>
+    <td class="muted">${esc(fmtDateTime(row.at))}</td>
+    <td>${esc(row.username)}</td>
+    <td>${esc(sourceName(row.source))}</td>
+    <td><span class="mono">${esc(row.model || '—')}</span></td>
+    <td class="num">${tokenCell(row.inputTokens)}</td>
+    <td class="num">${tokenCell(row.outputTokens)}</td>
+    <td class="num">${tokenCell(row.cacheReadTokens)}</td>
+    <td class="num">${fmtCredits(row.credits)}</td>
+  </tr>`).join('');
+}
+
+async function exportUsage() {
+  await downloadFromApi('/usage/export' + usageQuery(), `ccbar-usage-${fmtDate(new Date())}.csv`);
+}
+
+async function downloadFromApi(path, fallbackName) {
+  let response;
+  try {
+    response = await fetch(API + path, { headers: { Authorization: 'Bearer ' + state.token } });
+  } catch (error) {
+    toast('无法连接服务', 'error');
+    return;
+  }
+  if (response.status === 401) {
+    logout('登录已过期，请重新输入 Token');
+    return;
+  }
+  if (!response.ok) {
+    toast('导出失败 (' + response.status + ')', 'error');
+    return;
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get('content-disposition') || '';
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  downloadBlob(blob, match ? match[1] : fallbackName);
+}
+
+/* ---------- 流水明细 ---------- */
+
+function readFlowFilters() {
+  state.flow = {
+    range: state.flow.range,
+    anchor: state.flow.anchor,
+    userId: $('#flowUser').value,
+    source: $('#flowSource').value,
+    model: $('#flowModel').value
+  };
+}
+
+function flowRange() {
+  if (state.flow.range === 'today') {
+    const from = new Date(state.flow.anchor);
+    const isToday = from.getTime() === startOfToday().getTime();
+    return { from, to: isToday ? new Date() : addDays(from, 1), days: 1 };
+  }
+  const days = state.flow.range === '30d' ? 30 : 7;
+  return { from: addDays(startOfToday(), -(days - 1)), to: new Date(), days };
+}
+
+async function loadFlow() {
+  const range = flowRange();
+  const query = qs({
+    from: range.from.toISOString(),
+    to: range.to.toISOString(),
+    userId: state.flow.userId,
+    source: state.flow.source,
+    model: state.flow.model
+  });
+  const data = await api('/usage/flow' + query);
+  state.flowData = data;
+  state.bucketCache = {};
+  renderFlow(data);
+}
+
+function renderFlow(data) {
+  const totals = data.totals;
+  const isToday = state.flow.range === 'today';
+  $('#flowLabel').textContent = isToday
+    ? fmtDate(state.flow.anchor)
+    : (state.flow.range === '30d' ? '近 30 天' : '近 7 天');
+  const prev = $('#flowPrev');
+  const next = $('#flowNext');
+  prev.disabled = !isToday;
+  next.disabled = !isToday || addDays(state.flow.anchor, 1) > startOfToday();
+  prev.classList.toggle('hidden', !isToday);
+  next.classList.toggle('hidden', !isToday);
+
+  $('#flowSummary').innerHTML = `
+    <span>合计</span><b>${fmtCredits(totals.credits)}</b><span>积分</span>
+    <b>${compact(totals.tokens)}</b><span>Token</span>
+    <b>${fmtInt(totals.requests)}</b><span>次请求</span>
+    <span>${data.granularity === 'hour' ? '按小时聚合' : '按天聚合'}</span>`;
+
+  const tbody = $('#flowRows');
+  if (!data.buckets || !data.buckets.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">该时段暂无同步记录</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = data.buckets.map((bucket, index) => `<tr class="flow-group" data-bucket-index="${index}">
+    <td><span class="chev">›</span>${bucketLabel(bucket, data.granularity)}</td>
+    <td class="num">${fmtInt(bucket.requests)}</td>
+    <td class="num">${bucket.tokens ? compact(bucket.tokens) : '<span class="muted">—</span>'}</td>
+    <td class="num">${fmtCredits(bucket.credits)}</td>
+    <td class="num"><span class="pill ${bucket.percent >= 30 ? 'warn' : ''}">${fmtPct(bucket.percent)}</span></td>
+  </tr>`).join('');
+
+  $$('#flowRows .flow-group').forEach((row) => {
+    row.addEventListener('click', () => toggleFlowBucket(row, data.buckets[Number(row.dataset.bucketIndex)], data.granularity));
+  });
+}
+
+function bucketLabel(bucket, granularity) {
+  const start = new Date(bucket.fromEpoch * 1000);
+  if (granularity === 'hour') {
+    return `${pad(start.getHours())}:00 — ${pad((start.getHours() + 1) % 24)}:00`;
+  }
+  return `${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;
+}
+
+async function toggleFlowBucket(row, bucket, granularity) {
+  const next = row.nextElementSibling;
+  if (row.classList.contains('open')) {
+    row.classList.remove('open');
+    if (next && next.classList.contains('flow-detail-row')) next.remove();
+    return;
+  }
+  row.classList.add('open');
+  const detailRow = document.createElement('tr');
+  detailRow.className = 'flow-detail-row';
+  detailRow.innerHTML = '<td colspan="5"><div class="flow-detail-inner"><div class="hint">加载中…</div></div></td>';
+  row.insertAdjacentElement('afterend', detailRow);
+
+  const key = `${bucket.fromEpoch}-${bucket.toEpoch}-${state.flow.userId}|${state.flow.source}|${state.flow.model}`;
+  try {
+    let result = state.bucketCache[key];
+    if (!result) {
+      result = await api('/usage/bucket-items' + qs({
+        from: bucket.fromEpoch,
+        to: bucket.toEpoch,
+        userId: state.flow.userId,
+        source: state.flow.source,
+        model: state.flow.model,
+        limit: 100
+      }));
+      state.bucketCache[key] = result;
+    }
+    if (!row.classList.contains('open')) return;
+    const inner = $('.flow-detail-inner', detailRow);
+    if (!result.items.length) {
+      inner.innerHTML = '<div class="hint">该时段没有逐笔记录</div>';
+      return;
+    }
+    const items = result.items.map((item) => `<tr>
+      <td class="muted">${esc(fmtClock(item.at))}</td>
+      <td>${esc(item.username)}</td>
+      <td>${esc(sourceName(item.source))}</td>
+      <td><span class="mono">${esc(item.model || '—')}</span></td>
+      <td class="num">${tokenCell(item.inputTokens)}</td>
+      <td class="num">${tokenCell(item.outputTokens)}</td>
+      <td class="num">${tokenCell(item.cacheReadTokens)}</td>
+      <td class="num">${fmtCredits(item.credits)}</td>
+    </tr>`).join('');
+    inner.innerHTML = `
+      <table>
+        <thead><tr><th>时间</th><th>用户</th><th>来源</th><th>模型</th><th class="num">输入</th><th class="num">输出</th><th class="num">缓存</th><th class="num">积分</th></tr></thead>
+        <tbody>${items}</tbody>
+      </table>
+      <div class="hint">共 ${fmtInt(result.total)} 条，展示前 ${result.limit} 条${granularity === 'day' ? ' · 当天汇总' : ''}</div>`;
+  } catch (error) {
+    if (error.status !== 401) {
+      const inner = $('.flow-detail-inner', detailRow);
+      if (inner) inner.innerHTML = `<div class="hint">加载失败：${esc(error.message || '未知错误')}</div>`;
+    }
+  }
+}
+
+function setFlowRange(range) {
+  state.flow.range = range;
+  if (range === 'today') state.flow.anchor = startOfToday();
+  $$('#flowChips .chip').forEach((chip) => chip.classList.toggle('active', chip.dataset.range === range));
+  refreshView('flow');
+}
+
+function shiftFlowDay(delta) {
+  const next = addDays(state.flow.anchor, delta);
+  if (next.getTime() > startOfToday().getTime()) return;
+  state.flow.anchor = next;
+  refreshView('flow');
+}
+
+async function exportFlow() {
+  const range = flowRange();
+  const query = qs({
+    from: range.from.toISOString(),
+    to: range.to.toISOString(),
+    userId: state.flow.userId,
+    source: state.flow.source,
+    model: state.flow.model
+  });
+  await downloadFromApi('/usage/export' + query, `ccbar-flow-${fmtDate(range.from)}.csv`);
+}
+
+/* ---------- 设备管理 ---------- */
+
+async function loadDevices() {
+  const data = await api('/devices');
+  state.devices = data;
+  $('#deviceTotal').textContent = fmtInt(data.summary.total);
+  $('#deviceOnline').textContent = fmtInt(data.summary.online);
+  $('#deviceActive').textContent = fmtInt(data.summary.active24h);
+  $('#deviceOffline').textContent = fmtInt(data.summary.offline7d);
+  $('#deviceBadge').textContent = fmtInt(data.summary.total);
+  renderDeviceRows(data.devices);
+}
+
+function renderDeviceRows(devices) {
+  const tbody = $('#deviceRows');
+  if (!devices || !devices.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">暂无登记设备</td></tr>';
+    return;
+  }
+  const weekAgo = Date.now() - 7 * 86400000;
+  tbody.innerHTML = devices.map((device) => {
+    let status = { cls: '', dot: '', text: '离线' };
+    if (device.online) {
+      status = { cls: 'ok', dot: 'ok', text: '在线' };
+    } else if (!device.lastSeenAt || new Date(device.lastSeenAt).getTime() < weekAgo) {
+      status = { cls: 'warn', dot: 'warn', text: '离线较久' };
+    }
+    return `<tr>
+      <td><span class="mono" title="${esc(device.deviceId)}">${esc(shortDevice(device.deviceId))}</span></td>
+      <td>${esc(device.username)}</td>
+      <td class="muted">${fmtDate(device.firstSeenAt)}</td>
+      <td class="muted">${esc(rel(device.lastSeenAt))}</td>
+      <td><span class="pill ${status.cls}"><span class="status-dot ${status.dot}"></span>${status.text}</span></td>
+      <td class="num">${fmtInt(device.eventCount)}</td>
+      <td class="actions"><button class="btn sm ghost" data-copy-device="${esc(device.deviceId)}">复制 ID</button></td>
+    </tr>`;
+  }).join('');
+
+  $$('#deviceRows [data-copy-device]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await copyText(button.dataset.copyDevice);
+      toast('设备 ID 已复制');
+    });
+  });
+}
+
+function purgeDevices() {
+  confirmAction(
+    '清理离线设备',
+    '将删除 7 天未活跃的设备登记记录，不会删除用量数据。用户下次同步时会重新登记。',
+    async () => {
+      const result = await api('/devices/purge?days=7', { method: 'POST' });
+      toast(`已清理 ${result.deleted} 台离线设备`);
+      await loadDevices();
+      state.lastLoaded.devices = Date.now();
+    },
+    '清理',
+    true
+  );
+}
+
+/* ---------- 健康管理 ---------- */
+
+async function loadHealth() {
+  const data = await api('/health/summary?days=' + state.health.days);
+  state.healthData = data;
+  renderHealthKpis(data);
+  renderWeightChart($('#healthTrend'), data.weightTrend);
+  renderHealthStats(data);
+  renderHealthRecords(data.recent);
+  $('#healthRange').textContent = `趋势从 ${fmtDate(data.from)} 开始`;
+  $('#healthTrendSub').textContent = state.health.days === 365 ? '近 1 年' : `近 ${state.health.days} 天`;
+}
+
+function latestOf(data, kind) {
+  return (data.latest || []).find((item) => item.kind === kind) || null;
+}
+
+function deltaFoot(current, previous, unit, digits = 1) {
+  if (current === null || current === undefined || previous === null || previous === undefined) {
+    return '暂无对比数据';
+  }
+  const delta = current - previous;
+  const text = `${delta > 0 ? '+' : ''}${delta.toFixed(digits)} ${unit}`;
+  return `较上周 ${delta > 0 ? `<span class="warn">${text}</span>` : `<b>${text}</b>`}`;
+}
+
+function renderHealthKpis(data) {
+  const weight = latestOf(data, 'weight');
+  const bodyfat = latestOf(data, 'bodyfat');
+  const height = latestOf(data, 'height');
+
+  if (weight) {
+    $('#healthWeight').innerHTML = `${weight.value.toFixed(1)}<span class="unit">kg</span>`;
+    $('#healthWeightFoot').innerHTML = deltaFoot(weight.value, data.weekAgo.weight, 'kg');
+  } else {
+    $('#healthWeight').textContent = '—';
+    $('#healthWeightFoot').textContent = '暂无体重记录';
+  }
+
+  if (bodyfat) {
+    $('#healthBodyfat').innerHTML = `${(bodyfat.value * 100).toFixed(1)}<span class="unit">%</span>`;
+    const previous = data.weekAgo.bodyfat;
+    $('#healthBodyfatFoot').innerHTML = previous === null || previous === undefined
+      ? '暂无对比数据'
+      : deltaFoot(bodyfat.value * 100, previous * 100, '%');
+  } else {
+    $('#healthBodyfat').textContent = '—';
+    $('#healthBodyfatFoot').textContent = '暂无体脂记录';
+  }
+
+  if (height) {
+    $('#healthHeight').innerHTML = `${height.value.toFixed(0)}<span class="unit">cm</span>`;
+    $('#healthHeightFoot').textContent = `最近记录 ${rel(height.recordedAt)}`;
+  } else {
+    $('#healthHeight').textContent = '—';
+    $('#healthHeightFoot').textContent = '暂无身高记录';
+  }
+
+  $('#healthBmi').textContent = data.bmi === null || data.bmi === undefined ? '—' : data.bmi.toFixed(1);
+  $('#healthBmiFoot').textContent = data.bmi === null || data.bmi === undefined
+    ? '需要体重和身高'
+    : '正常范围 18.5 - 24';
+}
+
+function renderWeightChart(container, points) {
+  if (!points || !points.length) {
+    container.innerHTML = '<div class="chart-empty">该区间暂无体重记录</div>';
+    return;
+  }
+  const width = 660;
+  const height = 220;
+  const left = 44;
+  const right = 18;
+  const top = 16;
+  const bottom = 26;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const values = points.map((point) => Number(point.value));
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+  const padding = Math.max(0.5, (max - min) * 0.18);
+  min -= padding;
+  max += padding;
+  const xOf = (index) => left + (points.length === 1 ? plotWidth / 2 : plotWidth * index / (points.length - 1));
+  const yOf = (value) => top + plotHeight - ((value - min) / (max - min)) * plotHeight;
+
+  let svg = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="体重趋势">`;
+  for (let index = 0; index <= 4; index++) {
+    const value = min + (max - min) * index / 4;
+    const y = yOf(value);
+    svg += `<line x1="${left}" y1="${y}" x2="${width - right}" y2="${y}" stroke="var(--border)" stroke-width="1" ${index === 0 ? '' : 'stroke-dasharray="3 5"'}/>`;
+    svg += `<text x="${left - 8}" y="${y + 3.5}" text-anchor="end" fill="var(--muted)" font-size="10">${value.toFixed(1)}</text>`;
+  }
+
+  if (points.length > 1) {
+    const line = points.map((point, index) => `${index === 0 ? 'M' : 'L'}${xOf(index).toFixed(1)},${yOf(point.value).toFixed(1)}`).join(' ');
+    const area = `${line} L${xOf(points.length - 1).toFixed(1)},${top + plotHeight} L${xOf(0).toFixed(1)},${top + plotHeight} Z`;
+    svg += `<path d="${area}" fill="var(--accent-dim)" stroke="none"></path>`;
+    svg += `<path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>`;
+  }
+
+  const lastIndex = points.length - 1;
+  const lastX = xOf(lastIndex);
+  const lastY = yOf(points[lastIndex].value);
+  svg += `<circle cx="${lastX}" cy="${lastY}" r="3.5" fill="var(--accent)" stroke="var(--panel)" stroke-width="2"></circle>`;
+  svg += `<text x="${Math.min(lastX + 7, width - right)}" y="${Math.max(lastY - 9, 12)}" text-anchor="${lastX > width - 70 ? 'end' : 'start'}" fill="var(--text)" font-size="10.5">${points[lastIndex].value.toFixed(1)} kg</text>`;
+
+  const labelIndexes = Array.from(new Set([0, Math.floor((points.length - 1) / 4), Math.floor((points.length - 1) / 2), Math.floor((points.length - 1) * 3 / 4), lastIndex]));
+  labelIndexes.forEach((index) => {
+    const point = points[index];
+    svg += `<text x="${xOf(index)}" y="${height - 8}" text-anchor="middle" fill="var(--muted)" font-size="10">${esc(point.date.slice(5))}</text>`;
+  });
+  svg += '</svg>';
+  container.innerHTML = svg;
+}
+
+function renderHealthStats(data) {
+  const rows = [
+    ['体重记录', fmtInt(data.counts.weight || 0) + ' 条'],
+    ['体脂记录', fmtInt(data.counts.bodyfat || 0) + ' 条'],
+    ['身高记录', fmtInt(data.counts.height || 0) + ' 条'],
+    ['数据来源', fmtInt(data.sources) + ' 个'],
+    ['覆盖天数', fmtInt(data.days) + ' 天'],
+    ['最近记录', esc(rel(data.lastRecordAt))]
+  ];
+  $('#healthStats').innerHTML = rows.map(([key, value]) =>
+    `<div class="status-row"><span class="k">${key}</span><span class="v">${value}</span></div>`).join('');
+}
+
+function healthValueText(record) {
+  if (record.kind === 'bodyfat') return (record.value * 100).toFixed(1) + ' %';
+  if (record.kind === 'height') return record.value.toFixed(0) + ' cm';
+  return record.value.toFixed(1) + ' kg';
+}
+
+function renderHealthRecords(rows) {
+  const tbody = $('#healthRecords');
+  const filtered = (rows || []).filter((row) => state.health.kind === 'all' || row.kind === state.health.kind);
+  $('#healthRecordsSub').textContent = (state.health.kind === 'all' ? '全部类型' : KIND_NAMES[state.health.kind]) + ' · 最近 12 条';
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="4">暂无健康记录</td></tr>';
+    return;
+  }
+  tbody.innerHTML = filtered.map((record) => `<tr>
+    <td><span class="pill ${record.kind === 'weight' ? 'ok' : record.kind === 'bodyfat' ? 'blue' : ''}">${KIND_NAMES[record.kind] || record.kind}</span></td>
+    <td class="num">${healthValueText(record)}</td>
+    <td class="muted">${fmtDateTime(record.recordedAt)}</td>
+    <td class="muted">${esc(record.source || '—')}</td>
+  </tr>`).join('');
+}
+
+function toLocalInput(date) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function openAddHealth() {
+  openModal({
+    title: '新增健康记录',
+    body: `
+      <div class="field">
+        <label>类型</label>
+        <select class="select" id="healthNewKind">
+          <option value="weight">体重 (kg)</option>
+          <option value="bodyfat">体脂 (%)</option>
+          <option value="height">身高 (cm)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>数值</label>
+        <input class="input" id="healthNewValue" type="number" step="0.1" placeholder="例如 68.4">
+      </div>
+      <div class="field">
+        <label>记录时间</label>
+        <input class="input" id="healthNewTime" type="datetime-local" value="${toLocalInput(new Date())}">
+      </div>
+      <div class="hint">体脂按百分比填写，例如 18.2 表示 18.2%。</div>`,
+    confirmText: '保存',
+    onConfirm: async () => {
+      const kind = $('#healthNewKind').value;
+      let value = Number($('#healthNewValue').value);
+      const time = $('#healthNewTime').value;
+      if (!Number.isFinite(value) || value <= 0) {
+        toast('请输入有效数值', 'error');
+        return;
+      }
+      if (!time) {
+        toast('请选择记录时间', 'error');
+        return;
+      }
+      if (kind === 'bodyfat') value = value / 100;
+      await api('/health/samples', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind,
+          recordedAt: new Date(time).toISOString(),
+          value,
+          source: 'admin'
+        })
+      });
+      closeModal();
+      toast('健康记录已保存');
+      await refreshView('health');
+    }
+  });
+}
+
+/* ---------- 系统状态 ---------- */
+
+async function loadSystem() {
+  const data = await api('/system');
+  state.system = data;
+  $('#sysApi').textContent = '正常';
+  $('#sysApi').className = 'value ok';
+  $('#sysApiFoot').textContent = data.version + ' · 2xx';
+  $('#sysDb').textContent = '正常';
+  $('#sysDb').className = 'value ok';
+  $('#sysDbFoot').textContent = 'PostgreSQL';
+  $('#sysMigration').textContent = data.migration;
+  $('#sysUptime').textContent = fmtDurationShort(data.uptimeSeconds);
+  $('#sysUptimeFoot').textContent = '启动于 ' + fmtDateTime(data.startedAt);
+  $('#sysHealthCode').textContent = JSON.stringify(data.health, null, 2);
+
+  const rows = [
+    ['服务版本', esc(data.version)],
+    ['启动时间', fmtDateTime(data.startedAt)],
+    ['用户', fmtInt(data.counts.users) + ' 个'],
+    ['设备', fmtInt(data.counts.devices) + ' 台'],
+    ['用量事件', fmtInt(data.counts.usageEvents) + ' 条'],
+    ['健康样本', fmtInt(data.counts.healthSamples) + ' 条'],
+    ['最近用量', esc(rel(data.lastUsageAt))],
+    ['最近设备上报', esc(rel(data.lastDeviceSeenAt))]
+  ];
+  $('#sysInfo').innerHTML = rows.map(([key, value]) =>
+    `<div class="status-row"><span class="k">${key}</span><span class="v">${value}</span></div>`).join('');
+}
+
+function purgeUsage() {
+  confirmAction(
+    '清理用量事件',
+    '将删除 90 天前的用量事件，历史统计会相应减少。此操作不可恢复。',
+    async () => {
+      const result = await api('/maintenance/purge-usage?days=90', { method: 'POST' });
+      toast(`已清理 ${result.deleted} 条用量事件`);
+      await refreshView('system');
+    },
+    '清理',
+    true
+  );
+}
+
+/* ---------- 事件绑定 ---------- */
+
+function bindEvents() {
+  $('#loginBtn').addEventListener('click', doLogin);
+  $('#tokenInput').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') doLogin();
+  });
+
+  $$('.nav-item').forEach((item) => {
+    item.addEventListener('click', () => switchView(item.dataset.view));
+  });
+  $('#refreshBtn').addEventListener('click', () => refreshView(state.view));
+  $('#themeBtn').addEventListener('click', () => applyTheme(state.theme === 'dark' ? 'light' : 'dark'));
+  $('#logoutBtn').addEventListener('click', () => logout(''));
+  document.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-goto]');
+    if (target) switchView(target.dataset.goto);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeModal();
+    if (event.key === 'Enter' && event.target.closest('.modal') && event.target.tagName !== 'TEXTAREA') {
+      const confirm = $('[data-modal-confirm]');
+      if (confirm && !confirm.disabled) {
+        event.preventDefault();
+        confirm.click();
+      }
+    }
+  });
+
+  $('#exportDailyBtn').addEventListener('click', exportDaily);
+  $('#hourlyMetric').addEventListener('click', (event) => {
+    const chip = event.target.closest('.chip[data-metric]');
+    if (!chip) return;
+    state.hourlyMetric = chip.dataset.metric;
+    $$('#hourlyMetric .chip').forEach((item) => item.classList.toggle('active', item === chip));
+    if (state.overview) renderHourlyChart(state.overview.hourly);
+  });
+
+  $('#userSearch').addEventListener('input', applyUserFilter);
+  $('#userChips').addEventListener('click', (event) => {
+    const chip = event.target.closest('.chip');
+    if (!chip) return;
+    state.userFilter = chip.dataset.filter;
+    $$('#userChips .chip').forEach((item) => item.classList.toggle('active', item === chip));
+    renderUserRows();
+  });
+  $('#refreshUsersBtn').addEventListener('click', () => refreshView('users'));
+  $('#createUserBtn').addEventListener('click', openCreateUser);
+
+  ['#usageDays', '#usageUser', '#usageSource', '#usageModel'].forEach((selector) => {
+    $(selector).addEventListener('change', () => {
+      readUsageFilters();
+      refreshView('usage');
+    });
+  });
+  $('#applyUsageBtn').addEventListener('click', () => {
+    readUsageFilters();
+    refreshView('usage');
+  });
+  $('#exportUsageBtn').addEventListener('click', exportUsage);
+
+  $('#flowChips').addEventListener('click', (event) => {
+    const chip = event.target.closest('.chip');
+    if (chip) setFlowRange(chip.dataset.range);
+  });
+  ['#flowUser', '#flowSource', '#flowModel'].forEach((selector) => {
+    $(selector).addEventListener('change', () => {
+      readFlowFilters();
+      refreshView('flow');
+    });
+  });
+  $('#flowPrev').addEventListener('click', () => shiftFlowDay(-1));
+  $('#flowNext').addEventListener('click', () => shiftFlowDay(1));
+  $('#exportFlowBtn').addEventListener('click', exportFlow);
+
+  $('#purgeDevicesBtn').addEventListener('click', purgeDevices);
+
+  $('#healthKind').addEventListener('change', () => {
+    state.health.kind = $('#healthKind').value;
+    if (state.healthData) renderHealthRecords(state.healthData.recent);
+  });
+  $('#healthDays').addEventListener('change', () => {
+    state.health.days = Number($('#healthDays').value) || 30;
+    refreshView('health');
+  });
+  $('#addHealthBtn').addEventListener('click', openAddHealth);
+
+  $('#checkSystemBtn').addEventListener('click', () => refreshView('system'));
+  $('#purgeUsageBtn').addEventListener('click', purgeUsage);
+
+  setInterval(() => {
+    updateRefreshHint();
+    if (!document.hidden && state.view === 'overview' && !state.loading
+        && Date.now() - (state.lastLoaded.overview || 0) > 30000) {
+      refreshView('overview');
+    }
+  }, 5000);
+}
+
+async function boot() {
+  applyTheme(state.theme);
+  bindEvents();
+  if (!state.token) {
+    showLogin();
+    return;
+  }
+  showApp();
+  try {
+    await afterLogin();
+  } catch (error) {
+    if (error.status !== 401) toast(error.message || '加载失败', 'error');
+  }
+}
+
+boot();
 </script>
+    </main>
+  </div>
+</div>
+
 </body>
 </html>

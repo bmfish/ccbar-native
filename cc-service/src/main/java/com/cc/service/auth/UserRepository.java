@@ -15,7 +15,8 @@ public class UserRepository {
             rs.getLong("id"),
             rs.getString("username"),
             rs.getString("password_hash"),
-            rs.getObject("created_at", OffsetDateTime.class));
+            rs.getObject("created_at", OffsetDateTime.class),
+            rs.getBoolean("disabled"));
 
     private final JdbcClient jdbcClient;
 
@@ -25,7 +26,7 @@ public class UserRepository {
 
     public Optional<User> findByUsername(String username) {
         return jdbcClient.sql("""
-                select id, username, password_hash, created_at
+                select id, username, password_hash, created_at, disabled
                 from app_user where username = :username
                 """)
                 .param("username", username)
@@ -37,7 +38,7 @@ public class UserRepository {
         return jdbcClient.sql("""
                 insert into app_user (username, password_hash)
                 values (:username, :passwordHash)
-                returning id, username, password_hash, created_at
+                returning id, username, password_hash, created_at, disabled
                 """)
                 .param("username", username)
                 .param("passwordHash", passwordHash)
@@ -64,7 +65,7 @@ public class UserRepository {
 
     public List<UserView> findAll() {
         return jdbcClient.sql("""
-                select u.id, u.username, u.created_at,
+                select u.id, u.username, u.created_at, u.disabled,
                        (select count(*) from user_device d where d.user_id = u.id) as device_count
                 from app_user u
                 order by u.id
@@ -73,7 +74,8 @@ public class UserRepository {
                         rs.getLong("id"),
                         rs.getString("username"),
                         rs.getObject("created_at", OffsetDateTime.class),
-                        rs.getLong("device_count")))
+                        rs.getLong("device_count"),
+                        rs.getBoolean("disabled")))
                 .list();
     }
 
@@ -88,7 +90,11 @@ public class UserRepository {
     }
 
     public Optional<Long> findUserIdByToken(String tokenHash) {
-        return jdbcClient.sql("select user_id from user_token where token_hash = :tokenHash")
+        return jdbcClient.sql("""
+                select t.user_id from user_token t
+                join app_user u on u.id = t.user_id
+                where t.token_hash = :tokenHash and not u.disabled
+                """)
                 .param("tokenHash", tokenHash)
                 .query(Long.class)
                 .optional();
@@ -104,6 +110,17 @@ public class UserRepository {
         jdbcClient.sql("delete from user_token where user_id = :userId")
                 .param("userId", userId)
                 .update();
+    }
+
+    public boolean setDisabled(long userId, boolean disabled) {
+        int rows = jdbcClient.sql("""
+                update app_user set disabled = :disabled, updated_at = now()
+                where id = :id
+                """)
+                .param("disabled", disabled)
+                .param("id", userId)
+                .update();
+        return rows > 0;
     }
 
     public void touchDevice(long userId, String deviceId) {
@@ -131,10 +148,20 @@ public class UserRepository {
                 .list();
     }
 
-    public record User(long id, String username, String passwordHash, OffsetDateTime createdAt) {
+    public record User(
+            long id,
+            String username,
+            String passwordHash,
+            OffsetDateTime createdAt,
+            boolean disabled) {
     }
 
-    public record UserView(long id, String username, OffsetDateTime createdAt, long deviceCount) {
+    public record UserView(
+            long id,
+            String username,
+            OffsetDateTime createdAt,
+            long deviceCount,
+            boolean disabled) {
     }
 
     public record DeviceView(String deviceId, OffsetDateTime firstSeenAt, OffsetDateTime lastSeenAt) {

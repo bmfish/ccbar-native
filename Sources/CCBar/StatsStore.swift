@@ -1192,6 +1192,23 @@ final class StatsStore: @unchecked Sendable {
         return result
     }
 
+    /// 云同步用：Trae 各账号官方账单快照（含 uid 与账单拉取时间）。
+    func traeQuotaSnapshots() -> [(slot: Int, uid: String, consumed: Double, total: Double, updatedAt: Int64)] {
+        lock.lock(); defer { lock.unlock() }
+        guard handle != nil else { return [] }
+        var result: [(slot: Int, uid: String, consumed: Double, total: Double, updatedAt: Int64)] = []
+        for (slot, uidKey) in [(1, "trae_uid"), (2, "trae_uid_2")] {
+            let uid = metaGet(uidKey)
+            guard !uid.isEmpty else { continue }
+            let parts = metaGet("trae_ent_\(uid)").split(separator: "|")
+            guard parts.count == 2, let c = Double(parts[0]), let t = Double(parts[1]) else { continue }
+            let atKey = slot == 2 ? "trae_ent_at_2" : "trae_ent_at"
+            let updatedAt = Int64(Double(metaGet(atKey)) ?? 0)
+            result.append((slot: slot, uid: uid, consumed: c, total: t, updatedAt: updatedAt))
+        }
+        return result
+    }
+
     static func traeAuthFromMeta(_ raw: String) -> TraeAuth {
         guard let data = raw.data(using: .utf8),
               let auth = try? JSONDecoder().decode(TraeAuth.self, from: data) else { return TraeAuth() }
