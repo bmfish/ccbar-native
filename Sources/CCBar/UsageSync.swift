@@ -6,7 +6,7 @@ import Foundation
 //   POST /api/usage/events            批量 upsert（≤5000/批，主键 source + request_id）
 //   GET  /api/usage/events?after=seq  按 seq 游标增量拉取
 //
-// 上传：只读本机 usage_log 中 origin='local' 的行，按源 updated_at 水位增量上传（保留 1 分钟并发兜底），
+// 上传：只读本机 usage_log 中 origin='local' 的行，按源 (updated_at, request_id) 精确游标增量上传，
 // 整批 2xx 后推进水位；服务端内容未变化时不动 seq，避免重复下载。
 // 下载：写回 usage_log 并标记 origin='cloud'；同主键的本机行优先，绝不覆盖。
 // 双向都不会把拉回来的数据再传回去（origin 过滤），避免回声。
@@ -52,8 +52,6 @@ enum UsageSync {
 
     /// 单批大小（服务端上限 5000，客户端取小值控制内存与请求时长）
     static let batchSize = 500
-    /// 并发兜底：只回看 1 分钟，避免同一秒内的更新被严格水位漏掉
-    static let concurrencyOverlap: Int64 = 60
 
     private static let gate = NSLock()
     private static var running = false
@@ -187,11 +185,10 @@ enum UsageSync {
 
         for source in sources {
             let watermark = Int64(store.usageSyncMeta("watermark_\(source)")) ?? 0
+            let lastRequest = store.usageSyncMeta("watermark_last_\(source)")
             var cursor = watermark > 0
-                ? StatsStore.UsageUploadCursor(
-                    updatedAt: max(watermark - concurrencyOverlap, 0), requestID: "")
+                ? StatsStore.UsageUploadCursor(updatedAt: watermark, requestID: lastRequest)
                 : nil
-            var maxSeen = watermark
 
             while true {
                 let batch = store.usageLocalBatch(source: source, after: cursor, limit: batchSize)
@@ -204,9 +201,9 @@ enum UsageSync {
                 if let last = batch.last {
                     cursor = StatsStore.UsageUploadCursor(
                         updatedAt: last.updatedAt, requestID: last.event.requestId)
-                    maxSeen = max(maxSeen, last.updatedAt)
+                    store.setUsageSyncMeta("watermark_\(source)", value: String(last.updatedAt))
+                    store.setUsageSyncMeta("watermark_last_\(source)", value: last.event.requestId)
                 }
-                store.setUsageSyncMeta("watermark_\(source)", value: String(maxSeen))
                 if batch.count < batchSize { break }
             }
         }

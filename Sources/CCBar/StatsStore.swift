@@ -95,7 +95,7 @@ struct CCSwitchAdapter: SourceAdapter {
         SELECT
             'cc-switch', request_id, app_type, model, input_tokens, output_tokens,
             cache_read_tokens, cache_creation_tokens, 0,
-            CAST(total_cost_usd AS REAL), created_at, strftime('%s','now'), 1
+            CAST(total_cost_usd AS REAL), created_at, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), 1
         FROM \(alias).proxy_request_logs
         WHERE created_at >= \(fromEpoch) AND created_at < \(todayEpoch)
         ON CONFLICT(source, request_id) DO UPDATE SET
@@ -105,7 +105,7 @@ struct CCSwitchAdapter: SourceAdapter {
             cache_creation_tokens=excluded.cache_creation_tokens,
             reasoning_tokens=excluded.reasoning_tokens,
             total_cost_usd=excluded.total_cost_usd, created_at=excluded.created_at,
-            updated_at=strftime('%s','now'),
+            updated_at=CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
             request_count=excluded.request_count
         WHERE usage_log.app_type IS NOT excluded.app_type
            OR usage_log.model IS NOT excluded.model
@@ -132,7 +132,7 @@ struct CCSwitchAdapter: SourceAdapter {
             cache_read_tokens, cache_creation_tokens, 0,
             CAST(total_cost_usd AS REAL),
             CAST(strftime('%s', date || ' 00:00:00') - (strftime('%s', 'now', 'localtime') - strftime('%s', 'now')) + 43200 AS INTEGER),
-            strftime('%s','now'),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
             request_count
         FROM \(alias).usage_daily_rollups
         WHERE date < (SELECT date(MIN(created_at), 'unixepoch', 'localtime')
@@ -144,7 +144,7 @@ struct CCSwitchAdapter: SourceAdapter {
             cache_creation_tokens=excluded.cache_creation_tokens,
             reasoning_tokens=excluded.reasoning_tokens,
             total_cost_usd=excluded.total_cost_usd, created_at=excluded.created_at,
-            updated_at=strftime('%s','now'),
+            updated_at=CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
             request_count=excluded.request_count
         WHERE usage_log.app_type IS NOT excluded.app_type
            OR usage_log.model IS NOT excluded.model
@@ -196,7 +196,7 @@ struct ZCodeAdapter: SourceAdapter {
         SELECT
             'zcode', id, 'zcode', model_id, input_tokens, output_tokens,
             0, 0, reasoning_tokens, 0,
-            started_at / 1000, strftime('%s','now'), 1
+            started_at / 1000, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), 1
         FROM \(alias).model_usage
         WHERE status != 'running'
           AND started_at >= \(fromEpoch) * 1000 AND started_at < \(todayEpoch) * 1000
@@ -207,7 +207,7 @@ struct ZCodeAdapter: SourceAdapter {
             cache_creation_tokens=excluded.cache_creation_tokens,
             reasoning_tokens=excluded.reasoning_tokens,
             total_cost_usd=excluded.total_cost_usd, created_at=excluded.created_at,
-            updated_at=strftime('%s','now'),
+            updated_at=CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
             request_count=excluded.request_count
         WHERE usage_log.app_type IS NOT excluded.app_type
            OR usage_log.model IS NOT excluded.model
@@ -465,12 +465,21 @@ final class StatsStore: @unchecked Sendable {
         exec("CREATE INDEX IF NOT EXISTS idx_usage_updated ON usage_log(updated_at)")
         exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
 
-        // 首次升级到 updated_at 水位：回填旧行，并清掉旧的 created_at 水位让下次同步重跑
-        if metaGet("usage_updated_at_version") != "1" {
-            exec("UPDATE usage_log SET updated_at = created_at WHERE updated_at = 0")
-            exec("DELETE FROM meta WHERE key LIKE 'cloud_usage_watermark_%' OR key = 'cloud_usage_reconcile_at'")
-            metaSet("usage_updated_at_version", value: "1")
-            ccLog("usage_log updated_at 迁移完成，云同步水位已重置")
+        // updated_at 使用毫秒水位；v1（秒）升级时换算行与水位，避免重复全量上传
+        let updatedAtVersion = metaGet("usage_updated_at_version")
+        if updatedAtVersion != "2" {
+            if updatedAtVersion == "1" {
+                exec("UPDATE usage_log SET updated_at = updated_at * 1000 "
+                     + "WHERE updated_at > 0 AND updated_at < 100000000000")
+                exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) * 1000 AS TEXT) "
+                     + "WHERE key LIKE 'cloud_usage_watermark_%' "
+                     + "AND CAST(value AS INTEGER) > 0 AND CAST(value AS INTEGER) < 100000000000")
+            } else {
+                exec("DELETE FROM meta WHERE key LIKE 'cloud_usage_watermark_%' OR key = 'cloud_usage_reconcile_at'")
+            }
+            exec("UPDATE usage_log SET updated_at = created_at * 1000 WHERE updated_at = 0")
+            metaSet("usage_updated_at_version", value: "2")
+            ccLog("usage_log updated_at 迁移到毫秒水位")
         }
 
         // 每日聚合缓存：区间/总量/按月查询直接读它，不再扫明细。
@@ -1162,7 +1171,7 @@ final class StatsStore: @unchecked Sendable {
             (source, request_id, app_type, model, input_tokens, output_tokens,
              cache_read_tokens, cache_creation_tokens, reasoning_tokens,
              total_cost_usd, credits, created_at, updated_at, request_count, account)
-        VALUES ('trae', ?, 'trae', ?, ?, ?, ?, ?, 0, ?, ?, ?, strftime('%s','now'), 1, ?)
+        VALUES ('trae', ?, 'trae', ?, ?, ?, ?, ?, 0, ?, ?, ?, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), 1, ?)
         ON CONFLICT(source, request_id) DO UPDATE SET
             model=excluded.model,
             input_tokens=excluded.input_tokens,
@@ -1172,7 +1181,7 @@ final class StatsStore: @unchecked Sendable {
             total_cost_usd=excluded.total_cost_usd,
             credits=excluded.credits,
             created_at=excluded.created_at,
-            updated_at=strftime('%s','now'),
+            updated_at=CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
             account=excluded.account,
             origin='local'
         WHERE usage_log.model IS NOT excluded.model
@@ -1442,7 +1451,7 @@ final class StatsStore: @unchecked Sendable {
             (source, request_id, app_type, model, input_tokens, output_tokens,
              cache_read_tokens, cache_creation_tokens, reasoning_tokens, total_cost_usd,
              credits, created_at, updated_at, request_count, account, origin)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,strftime('%s','now'),?,?,'cloud')
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),?,?,'cloud')
         ON CONFLICT(source, request_id) DO UPDATE SET
             app_type=excluded.app_type,
             model=excluded.model,
@@ -1454,7 +1463,7 @@ final class StatsStore: @unchecked Sendable {
             total_cost_usd=excluded.total_cost_usd,
             credits=excluded.credits,
             created_at=excluded.created_at,
-            updated_at=strftime('%s','now'),
+            updated_at=CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
             request_count=excluded.request_count,
             account=excluded.account
         WHERE usage_log.origin = 'cloud'
