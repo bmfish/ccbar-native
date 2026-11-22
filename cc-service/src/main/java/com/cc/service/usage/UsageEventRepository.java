@@ -1,5 +1,6 @@
 package com.cc.service.usage;
 
+import java.time.OffsetDateTime;
 import java.util.Arrays;
 import java.util.List;
 
@@ -119,6 +120,50 @@ public class UsageEventRepository {
                 .param("limit", limit)
                 .query(ROW_MAPPER)
                 .list();
+    }
+
+    /** 按时间范围汇总所有用户的 token、积分与请求数。 */
+    public DailyUsage sumBetween(OffsetDateTime from, OffsetDateTime to) {
+        return jdbcClient.sql("""
+                        select coalesce(sum(input_tokens), 0) as input_tokens,
+                               coalesce(sum(output_tokens), 0) as output_tokens,
+                               coalesce(sum(cache_read_tokens), 0) as cache_read_tokens,
+                               coalesce(sum(cache_creation_tokens), 0) as cache_creation_tokens,
+                               coalesce(sum(reasoning_tokens), 0) as reasoning_tokens,
+                               coalesce(sum(credits), 0) as credits,
+                               coalesce(sum(request_count), 0) as request_count
+                        from usage_event
+                        where created_at >= :from and created_at < :to
+                        """)
+                .param("from", from.toEpochSecond())
+                .param("to", to.toEpochSecond())
+                .query((rs, rowNum) -> new DailyUsage(
+                        rs.getLong("input_tokens"),
+                        rs.getLong("output_tokens"),
+                        rs.getLong("cache_read_tokens"),
+                        rs.getLong("cache_creation_tokens"),
+                        rs.getLong("reasoning_tokens"),
+                        rs.getDouble("credits"),
+                        rs.getLong("request_count")))
+                .single();
+    }
+
+    public record DailyUsage(
+            long inputTokens,
+            long outputTokens,
+            long cacheReadTokens,
+            long cacheCreationTokens,
+            long reasoningTokens,
+            double credits,
+            long requestCount) {
+
+        public long totalTokens() {
+            return inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens + reasoningTokens;
+        }
+
+        public long cacheTokens() {
+            return cacheReadTokens + cacheCreationTokens;
+        }
     }
 
     public record EventInput(

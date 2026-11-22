@@ -18,6 +18,9 @@ app:
   # 留空则关闭鉴权（仅限本地开发）
   api-token: ${API_TOKEN:}
   version: ${APP_VERSION:0.0.1-SNAPSHOT}
+  push:
+    # 久坐提醒定时检查间隔（毫秒）
+    check-interval-ms: ${PUSH_CHECK_INTERVAL_MS:30000}
 
 logging:
   level:

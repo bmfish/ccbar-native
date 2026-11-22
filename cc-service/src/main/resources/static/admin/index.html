@@ -434,6 +434,10 @@
       <span>健康管理</span>
     </div>
     <div class="nav-section">运维</div>
+    <div class="nav-item" data-view="push">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
+      <span>推送管理</span>
+    </div>
     <div class="nav-item" data-view="system">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
       <span>系统状态</span>
@@ -884,6 +888,35 @@
           </div>
         </div>
       </section>
+
+      <!-- 久坐提醒 -->
+      <section class="view" id="view-push">
+        <div class="page-head">
+          <div>
+            <h2>推送任务</h2>
+            <p>通过 Bark 定时提醒，可新增多个任务并分别设置调度</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn primary" id="pushCreateBtn">新增任务</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>任务列表</h3><span class="sub" id="pushTaskCount"></span></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>任务</th><th>调度</th><th>状态</th><th>最近推送</th><th class="actions">操作</th></tr>
+              </thead>
+              <tbody id="pushTaskRows">
+                <tr class="empty-row"><td colspan="5">加载中…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <p class="muted" style="margin:14px 2px 0;font-size:12px;line-height:1.7">
+          服务每 30 秒检查一次。间隔任务只在生效时段内按间隔推送；每天定时任务每天最多推送一次。手动测试不受开关和调度限制。
+        </p>
+      </section>
     </main>
   </div>
 </div>
@@ -913,6 +946,7 @@ const VIEW_META = {
   flow: ['流水明细', '按时间聚合的同步记录'],
   devices: ['设备管理', '所有登记设备与在线状态'],
   health: ['健康管理', '体重、体脂与身高记录'],
+  push: ['推送管理', 'Bark 定时推送任务'],
   system: ['系统状态', '服务健康与数据维护']
 };
 
@@ -1228,6 +1262,7 @@ const LOADERS = {
   flow: () => loadFlow(),
   devices: () => loadDevices(),
   health: () => loadHealth(),
+  push: () => loadPush(),
   system: () => loadSystem()
 };
 
@@ -2479,6 +2514,275 @@ function purgeUsage() {
   );
 }
 
+/* ---------- 推送管理 ---------- */
+
+function timeValue(value) {
+  return value ? String(value).slice(0, 5) : '';
+}
+
+function pushPreview(task) {
+  if (task.taskType === 'WEIGHT') return '有今日体重就播报，否则提醒称重';
+  if (task.taskType === 'TOKEN_USAGE') return '推送今日 Token 用量与积分';
+  const lines = String(task.messages || '').split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return '—';
+  return lines.length > 1 ? `${lines[0]} 等 ${lines.length} 条` : lines[0];
+}
+
+function pushTypeName(type) {
+  if (type === 'WEIGHT') return '体重';
+  if (type === 'TOKEN_USAGE') return 'Token 用量';
+  return '静态文案';
+}
+
+function pushTextPreview(text, max) {
+  const value = String(text || '');
+  return value.length > max ? value.slice(0, max) + '…' : value;
+}
+
+function pushScheduleText(task) {
+  if (task.scheduleType === 'DAILY') {
+    return '每天 ' + (timeValue(task.dailyTime) || '—');
+  }
+  return '每 ' + (task.intervalMinutes || 60) + ' 分钟 · '
+    + (timeValue(task.activeStart) || '00:00') + '-' + (timeValue(task.activeEnd) || '23:59');
+}
+
+async function loadPush() {
+  const tasks = await api('/push/tasks');
+  state.pushTasks = tasks;
+  $('#pushTaskCount').textContent = tasks.length ? `共 ${tasks.length} 个` : '';
+  const rows = $('#pushTaskRows');
+  if (!tasks.length) {
+    rows.innerHTML = '<tr class="empty-row"><td colspan="5">还没有推送任务，点右上角“新增任务”</td></tr>';
+    return;
+  }
+  rows.innerHTML = tasks.map((task) => `
+    <tr>
+      <td>
+        <div class="name">
+          ${esc(task.name)}
+          <span class="pill plain" style="margin-left:6px">${pushTypeName(task.taskType)}</span>
+        </div>
+        <div class="muted" style="font-size:11px">${esc(task.title)} · ${esc(pushPreview(task))}</div>
+      </td>
+      <td>${esc(pushScheduleText(task))}</td>
+      <td>
+        ${task.enabled ? '<span class="pill ok">启用</span>' : '<span class="pill">停用</span>'}
+        ${task.lastStatus === 'FAILED'
+          ? `<span class="muted" style="margin-left:6px" title="${esc(task.lastError || '')}">最近失败</span>` : ''}
+      </td>
+      <td>
+        <div>${task.lastSentAt ? fmtDateTime(task.lastSentAt) : '—'}</div>
+        ${task.lastBody
+          ? `<div class="muted" style="font-size:11px;margin-top:2px" title="${esc(task.lastBody)}">${esc(pushTextPreview(task.lastBody, 36))}</div>`
+          : ''}
+      </td>
+      <td class="actions">
+        <button class="btn sm ghost" data-push-action="test" data-id="${task.id}">测试</button>
+        <button class="btn sm ghost" data-push-action="edit" data-id="${task.id}">编辑</button>
+        <button class="btn sm ghost" data-push-action="toggle" data-id="${task.id}">${task.enabled ? '停用' : '启用'}</button>
+        <button class="btn sm danger" data-push-action="delete" data-id="${task.id}">删除</button>
+      </td>
+    </tr>`).join('');
+}
+
+function pushEditorHtml(task) {
+  const daily = task && task.scheduleType === 'DAILY';
+  const taskType = (task && task.taskType) || 'TEXT';
+  const defaultBark = task
+    ? task.barkUrl
+    : ((state.pushTasks && state.pushTasks[0] && state.pushTasks[0].barkUrl) || '');
+  return `
+    <div class="grid-half" style="gap:12px">
+      <div class="field">
+        <label for="ptType">任务类型</label>
+        <select class="select" id="ptType">
+          <option value="TEXT" ${taskType === 'TEXT' ? 'selected' : ''}>静态文案（随机选一条）</option>
+          <option value="WEIGHT" ${taskType === 'WEIGHT' ? 'selected' : ''}>体重（有数据播报 / 没数据提醒）</option>
+          <option value="TOKEN_USAGE" ${taskType === 'TOKEN_USAGE' ? 'selected' : ''}>Token 用量（今日 token 与积分）</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="ptName">任务名称</label>
+        <input class="input" id="ptName" maxlength="100" value="${esc(task ? task.name : '')}" placeholder="例如：久坐提醒">
+      </div>
+    </div>
+    <div class="field">
+      <label for="ptBarkUrl">Bark 地址</label>
+      <input class="input" id="ptBarkUrl" maxlength="500" value="${esc(defaultBark)}" placeholder="https://api.day.app/你的设备Key">
+      <div class="hint">只填到设备 Key，标题和内容会自动拼到地址后面</div>
+    </div>
+    <div class="grid-half" style="gap:12px">
+      <div class="field">
+        <label for="ptTitle">推送标题</label>
+        <input class="input" id="ptTitle" maxlength="100" value="${esc(task ? task.title : '')}" placeholder="例如：久坐提醒">
+      </div>
+      <div class="field">
+        <label for="ptGroup">分组（可选）</label>
+        <input class="input" id="ptGroup" maxlength="100" value="${esc(task ? task.groupName : '')}" placeholder="example">
+      </div>
+    </div>
+    <div class="field" id="ptBodyField">
+      <label for="ptBody" id="ptBodyLabel">推送内容（每行一条，随机选一条）</label>
+      <textarea class="input" id="ptBody" maxlength="2000" style="height:120px;padding:10px;resize:vertical" placeholder="起来活动一下，喝口水，看看远处。&#10;站起来伸个懒腰，走两步。&#10;让眼睛休息一下，看看窗外。">${esc(task ? task.messages : '')}</textarea>
+      <div class="hint" id="ptBodyHint"></div>
+    </div>
+    <div class="field">
+      <label style="display:flex;align-items:center;gap:8px;color:var(--text);cursor:pointer">
+        <input type="checkbox" id="ptEnabled" ${!task || task.enabled ? 'checked' : ''}> 启用这个任务
+      </label>
+    </div>
+    <div class="grid-half" style="gap:12px">
+      <div class="field">
+        <label for="ptSchedule">推送频率</label>
+        <select class="select" id="ptSchedule">
+          <option value="INTERVAL" ${daily ? '' : 'selected'}>按间隔重复</option>
+          <option value="DAILY" ${daily ? 'selected' : ''}>每天定时</option>
+        </select>
+      </div>
+      <div class="field" id="ptDailyField">
+        <label for="ptDailyTime">每天推送时间</label>
+        <input class="input" id="ptDailyTime" type="time" value="${task ? timeValue(task.dailyTime) : '09:00'}">
+      </div>
+    </div>
+    <div id="ptIntervalFields">
+      <div class="grid-half" style="gap:12px">
+        <div class="field">
+          <label for="ptInterval">间隔（分钟）</label>
+          <input class="input" id="ptInterval" type="number" min="1" max="1440" value="${task ? task.intervalMinutes : 60}">
+        </div>
+        <div class="field">
+          <label>生效时段</label>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input class="input" id="ptStart" type="time" value="${task ? timeValue(task.activeStart) : '09:00'}">
+            <span class="muted">至</span>
+            <input class="input" id="ptEnd" type="time" value="${task ? timeValue(task.activeEnd) : '18:00'}">
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function syncPushEditorFields() {
+  const daily = $('#ptSchedule').value === 'DAILY';
+  $('#ptDailyField').classList.toggle('hidden', !daily);
+  $('#ptIntervalFields').classList.toggle('hidden', daily);
+
+  const text = $('#ptType').value === 'TEXT';
+  $('#ptBodyLabel').textContent = text
+    ? '推送内容（每行一条，随机选一条）'
+    : '兜底文案（可选，没有数据时随机选一条）';
+  $('#ptBodyHint').textContent = text
+    ? ''
+    : '有数据时会自动生成内容，这里的文案只在没有数据时使用';
+}
+
+function readPushEditor() {
+  const scheduleType = $('#ptSchedule').value;
+  const taskType = $('#ptType').value;
+  const payload = {
+    name: $('#ptName').value.trim(),
+    enabled: $('#ptEnabled').checked,
+    barkUrl: $('#ptBarkUrl').value.trim(),
+    title: $('#ptTitle').value.trim(),
+    taskType,
+    messages: $('#ptBody').value.trim(),
+    groupName: $('#ptGroup').value.trim(),
+    scheduleType,
+    intervalMinutes: Number($('#ptInterval').value) || 60,
+    dailyTime: $('#ptDailyTime').value || '09:00',
+    activeStart: $('#ptStart').value || '09:00',
+    activeEnd: $('#ptEnd').value || '18:00'
+  };
+  if (!payload.name || !payload.title) {
+    throw new Error('任务名称和标题都要填写');
+  }
+  if (taskType === 'TEXT' && !payload.messages) {
+    throw new Error('静态文案任务要填写推送内容');
+  }
+  if (!payload.barkUrl) {
+    throw new Error('请填写 Bark 地址');
+  }
+  if (!/^https?:\/\//i.test(payload.barkUrl)) {
+    throw new Error('Bark 地址必须以 http:// 或 https:// 开头');
+  }
+  return payload;
+}
+
+function openPushEditor(task) {
+  const root = openModal({
+    title: task ? '编辑推送任务' : '新增推送任务',
+    body: pushEditorHtml(task),
+    confirmText: '保存',
+    onConfirm: async () => {
+      const payload = readPushEditor();
+      if (task) {
+        await api(`/push/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify(payload) });
+      } else {
+        await api('/push/tasks', { method: 'POST', body: JSON.stringify(payload) });
+      }
+      closeModal();
+      toast(task ? '推送任务已更新' : '推送任务已创建');
+      await loadPush();
+      state.lastLoaded.push = Date.now();
+    }
+  });
+  $('#ptSchedule', root).addEventListener('change', syncPushEditorFields);
+  $('#ptType', root).addEventListener('change', syncPushEditorFields);
+  syncPushEditorFields();
+}
+
+async function testPushTask(task) {
+  try {
+    const result = await api(`/push/tasks/${task.id}/test`, { method: 'POST' });
+    toast(result.message || (result.success ? '推送成功' : '推送失败'), result.success ? 'ok' : 'error');
+    await loadPush();
+  } catch (error) {
+    if (error.status !== 401) toast(error.message || '推送失败', 'error');
+  }
+}
+
+async function togglePushTask(task) {
+  try {
+    await api(`/push/tasks/${task.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        name: task.name,
+        enabled: !task.enabled,
+        barkUrl: task.barkUrl,
+        title: task.title,
+        taskType: task.taskType || 'TEXT',
+        messages: task.messages,
+        groupName: task.groupName || '',
+        scheduleType: task.scheduleType,
+        intervalMinutes: task.intervalMinutes,
+        dailyTime: timeValue(task.dailyTime) || '09:00',
+        activeStart: timeValue(task.activeStart) || '09:00',
+        activeEnd: timeValue(task.activeEnd) || '18:00'
+      })
+    });
+    toast(task.enabled ? '已停用' : '已启用');
+    await loadPush();
+  } catch (error) {
+    if (error.status !== 401) toast(error.message || '操作失败', 'error');
+  }
+}
+
+function deletePushTask(task) {
+  confirmAction(
+    '删除推送任务',
+    `确定删除「${task.name}」吗？删除后不再推送。`,
+    async () => {
+      await api(`/push/tasks/${task.id}`, { method: 'DELETE' });
+      toast('推送任务已删除');
+      await loadPush();
+    },
+    '删除'
+  );
+}
+
 /* ---------- 事件绑定 ---------- */
 
 function bindEvents() {
@@ -2568,6 +2872,18 @@ function bindEvents() {
 
   $('#checkSystemBtn').addEventListener('click', () => refreshView('system'));
   $('#purgeUsageBtn').addEventListener('click', purgeUsage);
+
+  $('#pushCreateBtn').addEventListener('click', () => openPushEditor(null));
+  $('#pushTaskRows').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-push-action]');
+    if (!button) return;
+    const task = (state.pushTasks || []).find((item) => String(item.id) === button.dataset.id);
+    if (!task) return;
+    if (button.dataset.pushAction === 'test') testPushTask(task);
+    else if (button.dataset.pushAction === 'edit') openPushEditor(task);
+    else if (button.dataset.pushAction === 'toggle') togglePushTask(task);
+    else if (button.dataset.pushAction === 'delete') deletePushTask(task);
+  });
 
   setInterval(() => {
     updateRefreshHint();
