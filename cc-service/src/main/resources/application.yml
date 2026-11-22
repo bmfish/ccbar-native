@@ -1,0 +1,23 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: cc-service
+  flyway:
+    baseline-on-migrate: true
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/cc_service}
+    username: ${DB_USER:cc}
+    password: ${DB_PASSWORD:cc_password}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      connection-timeout: 3000
+
+app:
+  # 留空则关闭鉴权（仅限本地开发）
+  api-token: ${API_TOKEN:}
+
+logging:
+  level:
+    root: INFO

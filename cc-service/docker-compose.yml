@@ -1,0 +1,34 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cc-postgres
+    environment:
+      POSTGRES_DB: cc_service
+      POSTGRES_USER: cc
+      POSTGRES_PASSWORD: cc_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - cc-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cc -d cc_service"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    container_name: cc-service
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/cc_service
+      DB_USER: cc
+      DB_PASSWORD: cc_password
+      API_TOKEN: ${API_TOKEN:-}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  cc-pgdata:

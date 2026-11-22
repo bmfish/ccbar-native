@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CC Service 管理后台</title>
+<style>
+  :root {
+    --bg: #131514;
+    --panel: #1d1f1e;
+    --panel-2: #252826;
+    --border: #303431;
+    --text: #f1f3f2;
+    --muted: #8c938f;
+    --accent: #3ddc84;
+    --accent-soft: rgba(61, 220, 132, .14);
+    --green: #3ddc84;
+    --red: #ff6b6b;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: radial-gradient(1100px 600px at 12% -10%, #1b2a21 0%, var(--bg) 55%);
+    color: var(--text);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  }
+  button, input { font: inherit; }
+  .hidden { display: none !important; }
+
+  /* 登录 */
+  .login-wrap {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .login-card {
+    width: 380px; max-width: 100%; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 16px; padding: 28px; box-shadow: 0 24px 70px rgba(0,0,0,.35);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .brand-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--green); box-shadow: 0 0 12px var(--green); }
+  .brand h1 { font-size: 17px; margin: 0; letter-spacing: .3px; }
+  .login-card p { color: var(--muted); font-size: 12.5px; margin: 0 0 20px; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  .field input {
+    width: 100%; height: 38px; padding: 0 11px; color: var(--text);
+    background: #16181c; border: 1px solid var(--border); border-radius: 8px; outline: none;
+  }
+  .field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .btn {
+    height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text); cursor: pointer; transition: .15s;
+  }
+  .btn:hover { border-color: #3a423d; background: #2d322f; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #07140c; font-weight: 600; }
+  .btn.primary:hover { background: #66e79c; }
+  .btn.danger { color: var(--red); }
+  .btn.block { width: 100%; height: 40px; }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  .error { color: var(--red); font-size: 12px; min-height: 17px; margin-top: 10px; }
+
+  /* 主界面 */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 32px; border-bottom: 1px solid var(--border);
+    background: rgba(19, 21, 20, .72); backdrop-filter: blur(12px);
+    position: sticky; top: 0; z-index: 5;
+  }
+  .topbar h1 { font-size: 16px; margin: 0; letter-spacing: .3px; }
+  .topbar .sub { color: var(--muted); font-size: 12px; margin-left: 10px; }
+  .topbar .right { display: flex; gap: 10px; align-items: center; }
+  main { max-width: 1080px; margin: 0 auto; padding: 26px 24px 60px; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
+  .stat {
+    background: linear-gradient(180deg, var(--panel), #191b1a); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px 18px;
+  }
+  .stat .label { color: var(--muted); font-size: 12px; }
+  .stat .value {
+    font-size: 26px; font-weight: 650; margin-top: 3px;
+    font-variant-numeric: tabular-nums; color: var(--green);
+  }
+  .grid { display: grid; grid-template-columns: 360px 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } .stats { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .card-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 15px 18px; border-bottom: 1px solid var(--border);
+  }
+  .card-head h2 { font-size: 14px; margin: 0; font-weight: 600; }
+  .card-body { padding: 18px; }
+  .hint { color: var(--muted); font-size: 11.5px; margin-top: 8px; line-height: 1.6; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid #2b2f2c; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; background: #191b1a; }
+  tbody tr:hover { background: rgba(255,255,255,.025); }
+  tbody tr:last-child td { border-bottom: none; }
+  td.actions { text-align: right; }
+  td.actions .btn { height: 28px; padding: 0 9px; font-size: 12px; margin-left: 6px; }
+  .empty { color: var(--muted); text-align: center; padding: 34px 16px; font-size: 13px; }
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px;
+    color: #a9e8c2; background: rgba(61, 220, 132, .08); border: 1px solid rgba(61, 220, 132, .22);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 弹窗 */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(6, 8, 11, .66); backdrop-filter: blur(3px);
+    display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 20;
+  }
+  .modal {
+    width: 460px; max-width: 100%; max-height: 80vh; overflow: auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    box-shadow: 0 28px 80px rgba(0,0,0,.5);
+  }
+  .modal-head { display: flex; justify-content: space-between; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+  .modal-head h3 { margin: 0; font-size: 14px; }
+  .modal-body { padding: 18px; }
+  .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 0 18px 18px; }
+  .icon-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 18px; line-height: 1; }
+  .icon-btn:hover { color: var(--text); }
+  .device-row {
+    display: flex; justify-content: space-between; gap: 14px; padding: 10px 0;
+    border-bottom: 1px solid #2b2f2c; font-size: 12.5px;
+  }
+  .device-row:last-child { border-bottom: none; }
+  .device-id { font-family: "SF Mono", ui-monospace, monospace; color: #d5e6db; word-break: break-all; }
+  .device-time { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+
+  /* Toast */
+  #toast {
+    position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%) translateY(12px);
+    background: #232826; color: var(--text); border: 1px solid #3a423d;
+    padding: 10px 16px; border-radius: 9px; font-size: 13px;
+    opacity: 0; pointer-events: none; transition: .2s; z-index: 30;
+    box-shadow: 0 12px 32px rgba(0,0,0,.4);
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.error { border-color: rgba(255,107,107,.5); color: #ffb3b3; }
+</style>
+</head>
+<body>
+
+<div id="login" class="login-wrap">
+  <div class="login-card">
+    <div class="brand"><span class="brand-dot"></span><h1>CC Service 管理后台</h1></div>
+    <p>输入管理员 Token 后管理用户与设备。</p>
+    <div class="field">
+      <label>管理员 Token</label>
+      <input id="tokenInput" type="password" placeholder="与 secrets.env 中 API_TOKEN 一致" autocomplete="current-password">
+    </div>
+    <button id="loginBtn" class="btn primary block">进入后台</button>
+    <div id="loginError" class="error"></div>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <header class="topbar">
+    <div><h1><span class="brand-dot" style="display:inline-block;vertical-align:middle;margin-right:8px"></span>用户管理 <span class="sub">CC Service</span></h1></div>
+    <div class="right">
+      <span class="pill" id="tokenHint">管理员</span>
+      <button class="btn" id="logoutBtn">退出</button>
+    </div>
+  </header>
+  <main>
+    <section class="stats">
+      <div class="stat"><div class="label">用户数</div><div class="value" id="statUsers">0</div></div>
+      <div class="stat"><div class="label">已登记设备</div><div class="value" id="statDevices">0</div></div>
+      <div class="stat"><div class="label">当前账号</div><div class="value" style="font-size:18px;margin-top:8px">管理员</div></div>
+    </section>
+
+    <div class="grid">
+      <section class="card">
+        <div class="card-head"><h2>创建用户</h2></div>
+        <div class="card-body">
+          <div class="field">
+            <label>用户名</label>
+            <input id="newUsername" placeholder="2–64 位，字母数字 _ . -" autocomplete="off">
+          </div>
+          <div class="field">
+            <label>初始密码</label>
+            <input id="newPassword" type="password" placeholder="至少 6 位" autocomplete="new-password">
+          </div>
+          <button id="createBtn" class="btn primary block">创建用户</button>
+          <div class="hint">用户在多台 Mac 上使用同一用户名登录，设备会自动归到该用户，用量合并。</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>用户列表</h2>
+          <button class="btn" id="refreshBtn" style="height:28px;font-size:12px">刷新</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>用户名</th><th>创建时间</th><th>设备</th><th class="actions">操作</th></tr></thead>
+            <tbody id="userRows"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div id="overlay" class="overlay hidden">
+  <div class="modal">
+    <div class="modal-head"><h3 id="modalTitle"></h3><button class="icon-btn" id="modalClose">&times;</button></div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-foot" id="modalFoot"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(function () {
+  const API = '/api/admin/users';
+  const TOKEN_KEY = 'cc_admin_token';
+  let token = sessionStorage.getItem(TOKEN_KEY) || '';
+  let users = [];
+
+  const $ = (id) => document.getElementById(id);
+
+  function showLogin(message) {
+    $('app').classList.add('hidden');
+    $('login').classList.remove('hidden');
+    if (message) $('loginError').textContent = message;
+  }
+
+  function showApp() {
+    $('login').classList.add('hidden');
+    $('app').classList.remove('hidden');
+  }
+
+  function toast(message, isError) {
+    const el = $('toast');
+    el.textContent = message;
+    el.classList.toggle('error', !!isError);
+    el.classList.add('show');
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(() => el.classList.remove('show'), 2600);
+  }
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
+
+  function formatTime(value) {
+    if (!value) return '—';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleString('zh-CN', { hour12: false });
+  }
+
+  async function api(path, options) {
+    options = options || {};
+    const headers = Object.assign({
+      'Authorization': 'Bearer ' + token,
+      'Content-Type': 'application/json'
+    }, options.headers || {});
+    let res;
+    try {
+      res = await fetch(path, Object.assign({}, options, { headers }));
+    } catch (e) {
+      throw new Error('无法连接服务');
+    }
+    if (res.status === 401) {
+      sessionStorage.removeItem(TOKEN_KEY);
+      token = '';
+      showLogin('管理员 Token 无效，请重新输入');
+      throw new Error('未授权');
+    }
+    if (!res.ok) {
+      if (res.status === 409) throw new Error('用户名已存在');
+      if (res.status === 404) throw new Error('用户不存在');
+      throw new Error('请求失败（HTTP ' + res.status + '）');
+    }
+    const text = await res.text();
+    return text ? JSON.parse(text) : null;
+  }
+
+  async function loadUsers() {
+    const rows = $('userRows');
+    rows.innerHTML = '<tr><td colspan="5" class="empty">加载中…</td></tr>';
+    try {
+      users = await api(API);
+      renderUsers();
+    } catch (e) {
+      rows.innerHTML = '<tr><td colspan="5" class="empty">' + escapeHtml(e.message) + '</td></tr>';
+    }
+  }
+
+  function renderUsers() {
+    $('statUsers').textContent = users.length;
+    $('statDevices').textContent = users.reduce((sum, u) => sum + (u.deviceCount || 0), 0);
+
+    const rows = $('userRows');
+    if (!users.length) {
+      rows.innerHTML = '<tr><td colspan="5" class="empty">还没有用户，先在左侧创建一个</td></tr>';
+      return;
+    }
+    rows.innerHTML = users.map((u) => (
+      '<tr>' +
+        '<td>' + u.id + '</td>' +
+        '<td>' + escapeHtml(u.username) + '</td>' +
+        '<td>' + escapeHtml(formatTime(u.createdAt)) + '</td>' +
+        '<td><span class="pill">' + (u.deviceCount || 0) + ' 台</span></td>' +
+        '<td class="actions">' +
+          '<button class="btn" data-action="devices" data-id="' + u.id + '" data-name="' + escapeHtml(u.username) + '">设备</button>' +
+          '<button class="btn" data-action="password" data-id="' + u.id + '" data-name="' + escapeHtml(u.username) + '">重置密码</button>' +
+        '</td>' +
+      '</tr>'
+    )).join('');
+  }
+
+  function openModal(title, bodyHtml, footHtml) {
+    $('modalTitle').textContent = title;
+    $('modalBody').innerHTML = bodyHtml;
+    $('modalFoot').innerHTML = footHtml || '';
+    $('overlay').classList.remove('hidden');
+  }
+
+  function closeModal() {
+    $('overlay').classList.add('hidden');
+  }
+
+  async function openDevices(id, name) {
+    openModal('设备 · ' + name, '<div class="empty">加载中…</div>', '');
+    try {
+      const devices = await api(API + '/' + id + '/devices');
+      $('modalBody').innerHTML = devices.length
+        ? devices.map((d) => (
+            '<div class="device-row">' +
+              '<div class="device-id">' + escapeHtml(d.deviceId) + '</div>' +
+              '<div class="device-time">最近 ' + escapeHtml(formatTime(d.lastSeenAt)) + '</div>' +
+            '</div>'
+          )).join('')
+        : '<div class="empty">该用户还没有登记设备</div>';
+    } catch (e) {
+      $('modalBody').innerHTML = '<div class="empty">' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  function openResetPassword(id, name) {
+    openModal('重置密码 · ' + name,
+      '<div class="field"><label>新密码</label><input id="resetPasswordInput" type="password" placeholder="至少 6 位" autocomplete="new-password"></div>' +
+      '<div class="hint">重置后该用户所有已登录设备会失效，需要在客户端重新登录。</div>',
+      '<button class="btn" id="resetCancel">取消</button><button class="btn primary" id="resetConfirm">确认重置</button>');
+    $('resetCancel').onclick = closeModal;
+    $('resetConfirm').onclick = async function () {
+      const password = $('resetPasswordInput').value;
+      if (password.length < 6) { toast('密码至少 6 位', true); return; }
+      this.disabled = true;
+      try {
+        await api(API + '/' + id + '/password', { method: 'POST', body: JSON.stringify({ password }) });
+        closeModal();
+        toast('密码已重置');
+      } catch (e) {
+        toast(e.message, true);
+        this.disabled = false;
+      }
+    };
+    setTimeout(() => $('resetPasswordInput').focus(), 30);
+  }
+
+  async function login() {
+    const input = $('tokenInput');
+    const value = input.value.trim();
+    if (!value) { $('loginError').textContent = '请输入管理员 Token'; return; }
+    token = value;
+    $('loginBtn').disabled = true;
+    $('loginError').textContent = '';
+    try {
+      await api(API);
+      sessionStorage.setItem(TOKEN_KEY, token);
+      showApp();
+      await loadUsers();
+    } catch (e) {
+      if (e.message !== '未授权') $('loginError').textContent = e.message;
+    } finally {
+      $('loginBtn').disabled = false;
+    }
+  }
+
+  async function createUser() {
+    const username = $('newUsername').value.trim();
+    const password = $('newPassword').value;
+    if (!/^[A-Za-z0-9_.-]{2,64}$/.test(username)) {
+      toast('用户名需为 2–64 位字母、数字、_ . -', true);
+      return;
+    }
+    if (password.length < 6) { toast('密码至少 6 位', true); return; }
+    const btn = $('createBtn');
+    btn.disabled = true;
+    try {
+      await api(API, { method: 'POST', body: JSON.stringify({ username, password }) });
+      $('newUsername').value = '';
+      $('newPassword').value = '';
+      toast('用户 ' + username + ' 已创建');
+      await loadUsers();
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // 事件绑定
+  $('loginBtn').onclick = login;
+  $('tokenInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); });
+  $('logoutBtn').onclick = function () {
+    sessionStorage.removeItem(TOKEN_KEY);
+    token = '';
+    $('tokenInput').value = '';
+    showLogin('');
+  };
+  $('createBtn').onclick = createUser;
+  $('newPassword').addEventListener('keydown', (e) => { if (e.key === 'Enter') createUser(); });
+  $('refreshBtn').onclick = loadUsers;
+  $('modalClose').onclick = closeModal;
+  $('overlay').addEventListener('click', (e) => { if (e.target === $('overlay')) closeModal(); });
+  $('userRows').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    const id = Number(btn.dataset.id);
+    const name = btn.dataset.name;
+    if (btn.dataset.action === 'devices') openDevices(id, name);
+    if (btn.dataset.action === 'password') openResetPassword(id, name);
+  });
+
+  // 自动登录
+  if (token) {
+    showApp();
+    loadUsers().catch(() => showLogin('登录已失效'));
+  } else {
+    showLogin('');
+  }
+})();
+</script>
+</body>
+</html>
