@@ -248,6 +248,7 @@ struct PopoverRootView: View {
         let today: DayStats
 
         var body: some View {
+            let creditsPrimary = AppDelegate.shared?.settings.menuBarMetric == .credits
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 5) {
                     Image(systemName: "chart.line.uptrend.xyaxis")
@@ -262,7 +263,9 @@ struct PopoverRootView: View {
                 }
 
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(Design.formatTokens(today.total))
+                    Text(creditsPrimary
+                         ? SettingsViewModel.fmtCredits(vm.todayCredits)
+                         : Design.formatTokens(today.total))
                         .font(.system(size: vm.theme.bigNumberFontSize,
                                       weight: swiftUIFontWeight(vm.theme.bigNumberWeight),
                                       design: .rounded))
@@ -271,9 +274,15 @@ struct PopoverRootView: View {
                         .shadow(color: Color(nsColor: Design.bigNumberColor).opacity(vm.theme.glowAlpha),
                                 radius: vm.theme.glowRadius)
                         .contentTransition(.numericText())
-                        .animation(.easeOut(duration: 0.35), value: today.total)
-                    // 今天有积分使用（Trae）时在大数字后透出当日积分
-                    if vm.todayCredits > 0 {
+                        .animation(.easeOut(duration: 0.35),
+                                   value: creditsPrimary ? vm.todayCredits : Double(today.total))
+                    // 菜单栏显示积分时，主数字换成积分，Token 改为小字
+                    if creditsPrimary {
+                        Text(Design.formatTokens(today.total) + " Token")
+                            .font(.system(size: 11, weight: .medium).monospacedDigit())
+                            .foregroundColor(Color(nsColor: Design.textSecondary))
+                    } else if vm.todayCredits > 0 {
+                        // 今天有积分使用（Trae）时在大数字后透出当日积分
                         Text("\(SettingsViewModel.fmtCredits(vm.todayCredits)) " + L("积分"))
                             .font(.system(size: 11, weight: .medium).monospacedDigit())
                             .foregroundColor(Color(nsColor: Design.textSecondary))
@@ -422,6 +431,7 @@ struct PopoverRootView: View {
 
     private var trendSection: some View {
         let tc = vm.theme.trendIconColors
+        let creditsPrimary = AppDelegate.shared?.settings.menuBarMetric == .credits
         return VStack(alignment: .leading, spacing: 6) {
             Text(L("趋势"))
                 .font(.system(size: 11, weight: .semibold))
@@ -431,25 +441,25 @@ struct PopoverRootView: View {
                                 GridItem(.flexible(), spacing: 8)], spacing: 8) {
                 if let y = vm.yesterday {
                     trendCard(icon: "calendar", color: tc.yesterday, title: L("昨日"),
-                              value: Design.formatTokens(y.total), credits: vm.yesterdayCredits,
+                              tokens: y.total, credits: vm.yesterdayCredits, creditsPrimary: creditsPrimary,
                               delta: vm.yesterdayDelta, series: vm.yesterdayHourly,
                               action: PopoverActions.shared.openHourlyYesterday)
                 }
                 if let w = vm.week {
                     trendCard(icon: "chart.bar", color: tc.week, title: L("近7天"),
-                              value: Design.formatTokens(w.total), credits: vm.weekCredits,
+                              tokens: w.total, credits: vm.weekCredits, creditsPrimary: creditsPrimary,
                               delta: vm.weekDelta, series: vm.weekSeries,
                               action: PopoverActions.shared.openWeek)
                 }
                 if let m = vm.month {
                     trendCard(icon: "calendar.badge.clock", color: tc.month, title: L("近30天"),
-                              value: Design.formatTokens(m.total), credits: vm.monthCredits,
+                              tokens: m.total, credits: vm.monthCredits, creditsPrimary: creditsPrimary,
                               delta: vm.monthDelta, series: vm.monthSeries,
                               action: PopoverActions.shared.openMonth)
                 }
                 if let t = vm.total {
                     trendCard(icon: "sum", color: tc.total, title: L("历史总量"),
-                              value: Design.formatTokens(t.total), credits: vm.totalCredits,
+                              tokens: t.total, credits: vm.totalCredits, creditsPrimary: creditsPrimary,
                               delta: nil, series: vm.historySeries,
                               progress: vm.totalShare, progressLabel: L("近30天"),
                               action: PopoverActions.shared.openMonth)
@@ -460,12 +470,17 @@ struct PopoverRootView: View {
         .padding(.bottom, 6)
     }
 
-    /// 趋势迷你卡：标题 + 环比 badge + 大数值 + 积分小字 + sparkline（历史卡用占比进度条）
-    private func trendCard(icon: String, color: NSColor, title: String, value: String,
-                           credits: Double, delta: Double?, series: [Int64],
+    /// 趋势迷你卡：标题 + 环比 badge + 大数值 + 小字 + sparkline（历史卡用占比进度条）
+    /// 菜单栏显示积分时，大数值切为积分、小字显示 Token；否则保持 Token 为主。
+    private func trendCard(icon: String, color: NSColor, title: String, tokens: Int64,
+                           credits: Double, creditsPrimary: Bool, delta: Double?, series: [Int64],
                            progress: Double? = nil, progressLabel: String? = nil,
                            action: @escaping () -> Void) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        let primary = creditsPrimary ? SettingsViewModel.fmtCredits(credits) : Design.formatTokens(tokens)
+        let secondary = creditsPrimary
+            ? Design.formatTokens(tokens) + " Token"
+            : (credits > 0 ? SettingsViewModel.fmtCredits(credits) + " " + L("积分") : " ")
+        return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 4) {
                 Image(systemName: icon)
                     .font(.system(size: 10))
@@ -485,12 +500,12 @@ struct PopoverRootView: View {
                         .foregroundColor(Color(nsColor: Design.textMuted))
                 }
             }
-            Text(value)
+            Text(primary)
                 .font(.system(size: 17, weight: .semibold, design: .rounded).monospacedDigit())
                 .foregroundColor(Color(nsColor: Design.bigNumberColor))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-            Text(credits > 0 ? SettingsViewModel.fmtCredits(credits) + " " + L("积分") : " ")
+            Text(secondary)
                 .font(.system(size: 9).monospacedDigit())
                 .foregroundColor(Color(nsColor: Design.textMuted))
                 .lineLimit(1)
