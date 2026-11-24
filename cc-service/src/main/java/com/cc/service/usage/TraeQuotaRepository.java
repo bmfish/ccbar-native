@@ -21,6 +21,7 @@ public class TraeQuotaRepository {
                 total_credits = excluded.total_credits,
                 reported_at = excluded.reported_at,
                 updated_at = now()
+            where excluded.reported_at >= trae_account_quota.reported_at
             """;
 
     private final JdbcTemplate jdbcTemplate;
