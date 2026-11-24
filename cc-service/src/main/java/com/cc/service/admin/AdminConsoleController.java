@@ -5,6 +5,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +50,7 @@ public class AdminConsoleController {
             double total,
             double remaining,
             double todayCredits,
+            double usageCredits,
             OffsetDateTime updatedAt) {
     }
 
@@ -258,15 +260,16 @@ public class AdminConsoleController {
     }
 
     private TraeSummary buildTrae(OffsetDateTime todayStart, OffsetDateTime now) {
-        List<TraeAccountView> accounts = new ArrayList<>();
+        Map<String, TraeAccountView> merged = new LinkedHashMap<>();
         double totalRemaining = 0;
         double totalQuota = 0;
         double totalConsumed = 0;
         OffsetDateTime updatedAt = null;
+
         for (AdminConsoleRepository.TraeQuotaRow row
                 : console.traeQuotas(todayStart.toEpochSecond(), now.toEpochSecond())) {
             double remaining = Math.max(0, row.total() - row.consumed());
-            accounts.add(new TraeAccountView(
+            merged.put(traeKey(row.userId(), row.account()), new TraeAccountView(
                     row.userId(),
                     row.username(),
                     row.account(),
@@ -275,6 +278,7 @@ public class AdminConsoleController {
                     row.total(),
                     remaining,
                     row.todayCredits(),
+                    0,
                     row.updatedAt()));
             totalRemaining += remaining;
             totalQuota += row.total();
@@ -283,7 +287,37 @@ public class AdminConsoleController {
                 updatedAt = row.updatedAt();
             }
         }
+
+        // 没有官方账单快照、但近 30 天有用量记录的账号也列出来，避免只显示已上报的槽位
+        for (AdminConsoleRepository.TraeUsageAccountRow row : console.traeUsageAccounts(
+                now.minusDays(30).toEpochSecond(), todayStart.toEpochSecond(), now.toEpochSecond())) {
+            String key = traeKey(row.userId(), row.account());
+            if (merged.containsKey(key)) {
+                continue;
+            }
+            merged.put(key, new TraeAccountView(
+                    row.userId(),
+                    row.username(),
+                    row.account(),
+                    null,
+                    0,
+                    0,
+                    0,
+                    row.todayCredits(),
+                    row.usageCredits(),
+                    null));
+        }
+
+        List<TraeAccountView> accounts = new ArrayList<>(merged.values());
+        accounts.sort(Comparator
+                .comparing((TraeAccountView account) -> account.slot() == null)
+                .thenComparing(account -> account.slot() == null ? Integer.MAX_VALUE : account.slot())
+                .thenComparing(TraeAccountView::account));
         return new TraeSummary(accounts, totalRemaining, totalQuota, totalConsumed, updatedAt);
+    }
+
+    private static String traeKey(long userId, String account) {
+        return userId + "\u0000" + account;
     }
 
     private Trend buildTrend(OffsetDateTime from, OffsetDateTime to) {

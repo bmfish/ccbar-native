@@ -136,6 +136,32 @@ public class AdminConsoleRepository {
                 .list();
     }
 
+    /** 近 N 天有用量、但可能没有官方账单快照的 Trae 账号。 */
+    public List<TraeUsageAccountRow> traeUsageAccounts(long sinceEpoch, long todayStartEpoch, long nowEpoch) {
+        return jdbcClient.sql("""
+                select e.user_id, u.username, e.account,
+                       coalesce(sum(e.credits), 0) as usage_credits,
+                       coalesce(sum(case when e.created_at >= :todayStart and e.created_at < :now
+                                         then e.credits else 0 end), 0) as today_credits
+                from usage_event e
+                join app_user u on u.id = e.user_id
+                where e.source = 'trae'
+                  and coalesce(e.account, '') <> ''
+                  and e.created_at >= :since and e.created_at < :now
+                group by e.user_id, u.username, e.account
+                """)
+                .param("since", sinceEpoch)
+                .param("todayStart", todayStartEpoch)
+                .param("now", nowEpoch)
+                .query((rs, rowNum) -> new TraeUsageAccountRow(
+                        rs.getLong("user_id"),
+                        rs.getString("username"),
+                        rs.getString("account"),
+                        rs.getDouble("usage_credits"),
+                        rs.getDouble("today_credits")))
+                .list();
+    }
+
     public List<ModelAgg> topModels(OffsetDateTime from, OffsetDateTime to, int limit) {
         return jdbcClient.sql("""
                 select coalesce(e.model, '') as model,
@@ -622,6 +648,14 @@ public class AdminConsoleRepository {
             double total,
             OffsetDateTime reportedAt,
             OffsetDateTime updatedAt,
+            double todayCredits) {
+    }
+
+    public record TraeUsageAccountRow(
+            long userId,
+            String username,
+            String account,
+            double usageCredits,
             double todayCredits) {
     }
 

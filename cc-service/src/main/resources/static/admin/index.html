@@ -523,7 +523,7 @@
             <div class="chart-wrap" id="hourlyChart"></div>
           </div>
           <div class="card">
-            <div class="card-head"><h3>Trae 账户积分 <span class="sub">官方账单快照</span></h3></div>
+            <div class="card-head"><h3>Trae 账户积分 <span class="sub">官方账单 / 近30天用量</span></h3></div>
             <div class="card-body" id="traeAccounts"></div>
           </div>
         </div>
@@ -1433,7 +1433,10 @@ function renderOverviewKpis(kpi, trae) {
   $('#kpiTokens').innerHTML = `${compact(kpi.todayTokens)}<span class="unit">Token</span>`;
   $('#kpiTokensFoot').textContent = `今日 ${fmtInt(kpi.todayEvents)} 条同步事件`;
   $('#kpiCredits').textContent = fmtCredits(kpi.todayCredits);
-  $('#kpiCreditsFoot').textContent = accounts.length ? `${fmtInt(accounts.length)} 个账号 · 官方账单` : '等待 ccbar 上报账单';
+  const quotaCount = accounts.filter((account) => account.total > 0).length;
+  $('#kpiCreditsFoot').textContent = accounts.length
+    ? `${fmtInt(accounts.length)} 个账号 · ${fmtInt(quotaCount)} 个有官方账单`
+    : '等待 ccbar 上报账单';
   $('#kpiRemaining').textContent = trae && trae.totalQuota > 0 ? fmtCredits(trae.totalRemaining) : '—';
   $('#kpiRemainingFoot').textContent = trae && trae.totalQuota > 0
     ? `已用 ${fmtCredits(trae.totalConsumed)} / ${fmtCredits(trae.totalQuota)}`
@@ -1519,15 +1522,19 @@ function renderTraeAccounts(trae) {
     return;
   }
   const rows = accounts.map((account) => {
-    const pct = account.total > 0 ? Math.min(100, account.consumed / account.total * 100) : 0;
-    const name = account.slot ? `Trae ${account.slot}` : 'Trae';
+    const hasQuota = account.total > 0;
+    const pct = hasQuota ? Math.min(100, account.consumed / account.total * 100) : 0;
+    const name = account.slot ? `Trae ${account.slot}` : 'Trae 账号';
+    const meta = hasQuota
+      ? `<span>剩余 <b>${fmtCredits(account.remaining)}</b> / ${fmtCredits(account.total)}</span><span>今日 ${fmtCredits(account.todayCredits)}</span>`
+      : `<span>近30天 <b>${fmtCredits(account.usageCredits)}</b> 积分</span><span>仅用量记录</span>`;
     return `<div class="trae-row">
       <div class="top">
         <span class="name">${escapeHtml(name)}<span class="id" title="${escapeHtml(account.account)}">${escapeHtml(shortAccount(account.account))}</span></span>
-        <span class="pct">已用 ${fmtPct(pct, 0)}</span>
+        <span class="pct">${hasQuota ? `已用 ${fmtPct(pct, 0)}` : '未上报账单'}</span>
       </div>
-      <div class="track"><div class="fill" style="width:${pct.toFixed(1)}%;background:var(--series-1)"></div></div>
-      <div class="meta"><span>剩余 <b>${fmtCredits(account.remaining)}</b> / ${fmtCredits(account.total)}</span><span>今日 ${fmtCredits(account.todayCredits)}</span></div>
+      ${hasQuota ? `<div class="track"><div class="fill" style="width:${pct.toFixed(1)}%;background:var(--series-1)"></div></div>` : ''}
+      <div class="meta">${meta}</div>
     </div>`;
   }).join('');
   container.innerHTML = `<div class="trae-list">${rows}</div>
