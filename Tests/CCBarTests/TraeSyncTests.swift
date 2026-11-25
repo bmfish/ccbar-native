@@ -373,13 +373,15 @@ final class TraeSyncTests: XCTestCase {
 
     func testNightSilenceSkipsSync() {
         store.rebuild(configs: [SourceConfig(id: "trae", enabled: true, dbPath: "", credential: "sessionid=fake")])
-        // 夜间静默窗口（本地 0:00–9:00）纯函数
+        // 自动同步窗口外（本地 0:00–9:00、21:00–24:00）纯函数
         var cal = Calendar.current
         cal.timeZone = .current
         XCTAssertTrue(StatsStore.inNightSilence(cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 3, minute: 0))!))
         XCTAssertTrue(StatsStore.inNightSilence(cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 0, minute: 0))!))
         XCTAssertFalse(StatsStore.inNightSilence(cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 9, minute: 0))!))
-        XCTAssertFalse(StatsStore.inNightSilence(cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 23, minute: 0))!))
+        XCTAssertFalse(StatsStore.inNightSilence(cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 20, minute: 59))!))
+        XCTAssertTrue(StatsStore.inNightSilence(cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 21, minute: 0))!))
+        XCTAssertTrue(StatsStore.inNightSilence(cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 23, minute: 0))!))
         // 静默期定时器驱动（非 interactive）直接 return，sourceStatus 保持"连接中…"。
         // 若静默被移除，假凭据会走真实 API 并把状态置为过期——测试即失败，守护有效
         let night = cal.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 3, minute: 0))!
@@ -388,7 +390,7 @@ final class TraeSyncTests: XCTestCase {
     }
 
     func testInteractiveBypassesNightSilence() {
-        // 语义（用户确认）：0–9 点静默只限定时器；点弹窗（interactive）随时要查。
+        // 语义（用户确认）：0–9 点与 21–24 点静默只限定时器；点弹窗（interactive）随时要查。
         // 用 11 点验证 interactive 正常路径不受影响；静默期的 interactive 放行
         // 与定时器一致共用同一个 guard，无法离线断言网络行为，此处守住接口签名。
         store.rebuild(configs: [SourceConfig(id: "trae", enabled: true, dbPath: "", credential: "sessionid=fake")])

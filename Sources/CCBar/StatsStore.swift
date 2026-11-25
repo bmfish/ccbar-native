@@ -700,9 +700,11 @@ final class StatsStore: @unchecked Sendable {
 
     // MARK: Trae 同步（HTTP 源）
 
-    /// 夜间静默窗口（本地 0:00–9:00）：只限定时器驱动的任务；点弹窗（interactive）不受限
+    /// 自动同步窗口外（本地 0:00–9:00、21:00–24:00）：只限定时器驱动的任务；
+    /// 点弹窗（interactive）和设置页「立即同步」（force）不受限
     static func inNightSilence(_ date: Date) -> Bool {
-        Calendar.current.component(.hour, from: date) < 9
+        let hour = Calendar.current.component(.hour, from: date)
+        return hour < 9 || hour >= 21
     }
 
     /// 下次数据水位：无新行保持原值；有行取 max(旧值, min(最新 usage_time, 窗口上界))，
@@ -714,7 +716,7 @@ final class StatsStore: @unchecked Sendable {
 
     /// Trae 用量同步。网络在锁外跑（最长 ~15s×3），入库短临界区。
     /// AppDelegate 定时调用；interactive=true 用于用户点开弹窗的主动刷新（间隔更短）。
-    /// 夜间静默（0:00–9:00 本地时间）只限定时器驱动：定时器不同步；签到另有起始小时设置，
+    /// 自动同步窗口外（0:00–9:00、21:00–24:00 本地时间）只限定时器驱动：定时器不同步；签到另有起始小时设置，
     /// 凌晨会话由首次同步的"水位-2 天"窗口覆盖，不会丢数；
     /// 点弹窗（interactive）不受静默限制，随时可查。
     /// force=true（设置页"立即同步"）：跳过静默与节流，用户明确操作即时生效。
