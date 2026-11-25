@@ -28,6 +28,7 @@ public class UsageQuotaController {
 
     public record QuotaPayload(
             @NotBlank @Size(max = 200) String account,
+            @Size(max = 200) String name,
             @PositiveOrZero Integer slot,
             @PositiveOrZero Double consumed,
             @PositiveOrZero Double total,
@@ -62,6 +63,7 @@ public class UsageQuotaController {
         List<TraeQuotaRepository.QuotaInput> quotas = request.quotas().stream()
                 .map(quota -> new TraeQuotaRepository.QuotaInput(
                         quota.account().trim(),
+                        quota.name() == null ? "" : quota.name().trim(),
                         quota.slot() == null ? 0 : quota.slot(),
                         valueOrZero(quota.consumed()),
                         valueOrZero(quota.total()),

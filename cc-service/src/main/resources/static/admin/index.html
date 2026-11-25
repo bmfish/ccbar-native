@@ -72,6 +72,16 @@
   .login-card .brand { padding: 0 0 20px; }
   .login-card p { color: var(--muted); font-size: 12.5px; margin: 0 0 20px; }
   .login-foot { margin-top: 16px; color: var(--muted); font-size: 11.5px; text-align: center; line-height: 1.7; }
+  .login-tabs {
+    display: flex; gap: 4px; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 9px; padding: 3px; margin-bottom: 18px;
+  }
+  .login-tabs button {
+    flex: 1; height: 30px; border: none; border-radius: 6px; background: transparent;
+    color: var(--muted); cursor: pointer; font-size: 12.5px; white-space: nowrap;
+  }
+  .login-tabs button:hover { color: var(--text); }
+  .login-tabs button.active { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); }
   .error { color: var(--danger); font-size: 12px; min-height: 17px; margin-top: 10px; }
 
   /* 基础控件 */
@@ -232,6 +242,64 @@
   .trae-empty { padding: 10px 2px; color: var(--muted); font-size: 12.5px; line-height: 1.7; }
   .trae-empty b { color: var(--text); font-weight: 500; }
 
+  /* Trae 账户页 */
+  .trae-grid { align-items: start; }
+  .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 18px 0 10px; flex-wrap: wrap; }
+  .section-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
+  .section-head p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  .acct-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .acct-card { padding: 16px 17px 15px; cursor: pointer; }
+  .acct-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .acct-id { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .acct-id .avatar { width: 32px; height: 32px; flex: 0 0 32px; font-size: 12px; }
+  .acct-id b { display: block; font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acct-id span { display: block; color: var(--muted); font-size: 11.5px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acct-balance { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-top: 14px; }
+  .acct-balance .k { color: var(--muted); font-size: 11.5px; margin-right: 4px; }
+  .acct-balance b { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -.2px; }
+  .acct-balance .total { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .acct-balance .pct { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .acct-card .track { margin-top: 7px; }
+  .acct-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .acct-stats span { display: block; color: var(--muted); font-size: 10.5px; }
+  .acct-stats b { display: block; font-size: 13px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .acct-foot { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; margin-top: 12px; }
+  .acct-cell { display: flex; align-items: center; gap: 9px; }
+  .acct-cell b { font-weight: 500; }
+  .acct-cell span { color: var(--muted); font-size: 11px; }
+  .alert-list { display: flex; flex-direction: column; }
+  .alert-row { display: flex; align-items: flex-start; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--border); }
+  .alert-row:last-child { border-bottom: none; }
+  .alert-row .status-dot { margin-top: 5px; }
+  .alert-main { flex: 1; min-width: 0; }
+  .alert-main b { display: block; font-size: 12.5px; font-weight: 500; }
+  .alert-main span { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .alert-time { color: var(--muted); font-size: 10.5px; white-space: nowrap; padding-top: 1px; }
+  .alert-foot { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; padding-top: 12px; }
+
+  /* Trae 账号详情抽屉 */
+  .drawer-overlay {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, .48); z-index: 70;
+    display: flex; justify-content: flex-end;
+  }
+  .drawer {
+    width: min(560px, 100%); height: 100%; background: var(--panel);
+    border-left: 1px solid var(--border); box-shadow: var(--shadow);
+    display: flex; flex-direction: column; animation: drawer-in .18s ease-out;
+  }
+  .drawer-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+    padding: 18px 20px; border-bottom: 1px solid var(--border);
+  }
+  .drawer-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+  .drawer-head .sub { display: block; color: var(--muted); font-size: 11.5px; margin-top: 3px; }
+  .drawer-body { padding: 16px 20px 28px; overflow-y: auto; }
+  .drawer-section { margin-top: 18px; }
+  .drawer-section h4 { margin: 0 0 8px; color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: .4px; }
+  .drawer-empty { color: var(--muted); font-size: 12px; padding: 18px 0; line-height: 1.7; }
+  @keyframes drawer-in { from { transform: translateX(24px); opacity: .6; } to { transform: none; opacity: 1; } }
+  @media (max-width: 860px) { .drawer { width: 100%; } }
+
   /* 表格 */
   .table-wrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
@@ -239,6 +307,7 @@
   th { color: var(--muted); font-weight: 500; font-size: 11.5px; background: var(--panel-2); }
   tbody tr:hover { background: color-mix(in srgb, var(--panel-2) 55%, transparent); }
   tbody tr[data-user-id] { cursor: pointer; }
+  tbody tr[data-trae-account] { cursor: pointer; }
   tbody tr.selected, tbody tr.selected:hover { background: var(--accent-dim); }
   tbody tr:last-child td { border-bottom: none; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -359,6 +428,7 @@
   @media (max-width: 1120px) {
     .kpis { grid-template-columns: repeat(2, 1fr); }
     .grid-main, .grid-half, .split { grid-template-columns: 1fr; }
+    .acct-grid { grid-template-columns: 1fr; }
     .kpi .value { font-size: 24px; }
   }
   @media (max-width: 860px) {
@@ -388,14 +458,31 @@
       <div class="brand-mark">c</div>
       <div class="brand-name">ccBar<span>管理控制台</span></div>
     </div>
-    <p>输入管理员 Token 后进入控制台。Token 保存在本机浏览器中。</p>
-    <div class="field">
-      <label for="tokenInput">管理员 Token</label>
-      <input class="input" id="tokenInput" type="password" autocomplete="current-password" placeholder="API_TOKEN">
+    <p>使用管理员账号登录，或切换到 Token 登录。</p>
+    <div class="login-tabs" id="loginTabs">
+      <button class="active" data-mode="account">账号登录</button>
+      <button data-mode="token">Token 登录</button>
     </div>
-    <button class="btn primary block" id="loginBtn">进入控制台</button>
+    <div id="accountLogin">
+      <div class="field">
+        <label for="adminUsername">用户名</label>
+        <input class="input" id="adminUsername" autocomplete="username" placeholder="管理员账号">
+      </div>
+      <div class="field">
+        <label for="adminPassword">密码</label>
+        <input class="input" id="adminPassword" type="password" autocomplete="current-password" placeholder="登录密码">
+      </div>
+      <button class="btn primary block" id="accountLoginBtn">登录</button>
+    </div>
+    <div id="tokenLogin" class="hidden">
+      <div class="field">
+        <label for="tokenInput">管理员 Token</label>
+        <input class="input" id="tokenInput" type="password" autocomplete="current-password" placeholder="API_TOKEN">
+      </div>
+      <button class="btn primary block" id="loginBtn">进入控制台</button>
+    </div>
     <div class="error" id="loginError"></div>
-    <div class="login-foot">数据来自 cc-service 实时接口<br>Token 可在服务端 API_TOKEN 中查看</div>
+    <div class="login-foot">数据来自 cc-service 实时接口<br>账号会话 7 天有效，可在右上角退出</div>
   </div>
 </div>
 
@@ -411,9 +498,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
       <span>概览</span>
     </div>
-    <div class="nav-item" data-view="users">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c.4-3.4 2.7-5.2 5.5-5.2s5.1 1.8 5.5 5.2"/><path d="M16 5.2a3 3 0 0 1 0 5.6M17.5 14.9c2 .5 3.1 2 3.4 4.3"/></svg>
-      <span>用户与设备</span>
+    <div class="nav-item" data-view="trae">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></svg>
+      <span>Trae</span>
+      <span class="nav-badge" id="traeBadge">—</span>
     </div>
     <div class="nav-item" data-view="usage">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
@@ -424,6 +512,10 @@
       <span>流水明细</span>
     </div>
     <div class="nav-section">资产</div>
+    <div class="nav-item" data-view="users">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c.4-3.4 2.7-5.2 5.5-5.2s5.1 1.8 5.5 5.2"/><path d="M16 5.2a3 3 0 0 1 0 5.6M17.5 14.9c2 .5 3.1 2 3.4 4.3"/></svg>
+      <span>用户管理</span>
+    </div>
     <div class="nav-item" data-view="devices">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2.5" y="5" width="19" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
       <span>设备管理</span>
@@ -449,8 +541,8 @@
     <div class="sidebar-foot">
       <div class="avatar on" id="adminAvatar">A</div>
       <div class="who">
-        <b>管理员</b>
-        <span>API Token 会话</span>
+        <b id="adminName">管理员</b>
+        <span id="adminMeta">API Token 会话</span>
       </div>
       <button class="icon-btn" id="logoutBtn" title="退出登录">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
@@ -523,7 +615,10 @@
             <div class="chart-wrap" id="hourlyChart"></div>
           </div>
           <div class="card">
-            <div class="card-head"><h3>Trae 账户积分 <span class="sub">官方账单 / 近30天用量</span></h3></div>
+            <div class="card-head">
+              <h3>Trae 账号摘要 <span class="sub">余额与异常</span></h3>
+              <button class="btn sm ghost" data-goto="trae">查看 Trae</button>
+            </div>
             <div class="card-body" id="traeAccounts"></div>
           </div>
         </div>
@@ -559,11 +654,117 @@
           </div>
         </div>
       </section>
-      <!-- 用户与设备 -->
+      <!-- Trae 账户 -->
+      <section class="view" id="view-trae">
+        <div class="page-head">
+          <div>
+            <h2>Trae 账户</h2>
+            <p id="traeSummary">加载中…</p>
+          </div>
+          <div class="page-actions">
+            <div class="chips" id="traeChips">
+              <button class="chip" data-days="1">今日</button>
+              <button class="chip active" data-days="7">7 天</button>
+              <button class="chip" data-days="30">30 天</button>
+            </div>
+            <button class="btn" id="traeExportBtn">导出 CSV</button>
+          </div>
+        </div>
+
+        <div class="kpis">
+          <div class="card kpi focus">
+            <div class="label">可用积分</div>
+            <div class="value" id="traeRemaining">—</div>
+            <div class="foot" id="traeRemainingFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">今日消耗</div>
+            <div class="value" id="traeToday">—</div>
+            <div class="foot" id="traeTodayFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">7 日日均</div>
+            <div class="value" id="traeAvg">—</div>
+            <div class="foot" id="traeAvgFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">异常账号</div>
+            <div class="value" id="traeAlertCount">—</div>
+            <div class="foot" id="traeAlertFoot">&nbsp;</div>
+          </div>
+        </div>
+
+        <div class="grid-main trae-grid">
+          <div class="card">
+            <div class="card-head">
+              <h3>积分消耗 <span class="sub" id="traeTrendSub">近 7 天 · 按账号堆叠</span></h3>
+            </div>
+            <div class="chart-wrap" id="traeTrendChart"></div>
+            <div class="legend" id="traeTrendLegend"></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h3>账号健康 <span class="sub" id="traeAlertSub">—</span></h3>
+              <button class="btn sm ghost" id="traeAlertReset">全部账号</button>
+            </div>
+            <div class="card-body" id="traeAlerts"></div>
+          </div>
+        </div>
+
+        <div class="section-head">
+          <div>
+            <h3>账户</h3>
+            <p id="traeAccountSub">—</p>
+          </div>
+          <div class="filters">
+            <select class="select" id="traeUserFilter"><option value="">全部用户</option></select>
+            <select class="select" id="traeStatusFilter">
+              <option value="">全部状态</option>
+              <option value="normal">正常</option>
+              <option value="low_balance">低余额</option>
+              <option value="stale">上报中断</option>
+              <option value="no_bill">未上报账单</option>
+            </select>
+            <div class="chips" id="traeAccountChips">
+              <button class="chip active" data-filter="all">全部</button>
+              <button class="chip" data-filter="billed">有账单</button>
+              <button class="chip" data-filter="unbilled">无账单</button>
+            </div>
+          </div>
+        </div>
+        <div class="acct-grid" id="traeAccountCards"></div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>账户明细 <span class="sub">按剩余积分排序</span></h3>
+          </div>
+          <div class="card-body flush">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>账号</th>
+                    <th>用户</th>
+                    <th class="num">剩余 / 总额</th>
+                    <th class="num">今日</th>
+                    <th class="num" id="traeRangeCol">近 7 天</th>
+                    <th class="num">日均</th>
+                    <th class="num">预计可用</th>
+                    <th>最后上报</th>
+                    <th>状态</th>
+                  </tr>
+                </thead>
+                <tbody id="traeTableRows"><tr class="empty-row"><td colspan="9">加载中…</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- 用户管理 -->
       <section class="view" id="view-users">
         <div class="page-head">
           <div>
-            <h2>用户与设备</h2>
+            <h2>用户管理</h2>
             <p>账号、登记设备与活跃状态，点击整行查看详情</p>
           </div>
           <div class="page-actions">
@@ -644,6 +845,17 @@
             <div class="value" id="usageCredits">—</div>
             <div class="foot" id="usageCreditsFoot">&nbsp;</div>
           </div>
+        </div>
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-head">
+            <h3>每日用量趋势 <span class="sub" id="usageDailySub">按来源堆叠</span></h3>
+            <div class="chips" id="usageDailyMetric">
+              <button class="chip active" data-metric="credits">积分</button>
+              <button class="chip" data-metric="tokens">Token</button>
+            </div>
+          </div>
+          <div class="chart-wrap" id="usageDailyChart"></div>
+          <div class="legend" id="usageDailyLegend"></div>
         </div>
         <div class="grid-half">
           <div class="card">
@@ -1020,6 +1232,7 @@
 </div>
 
 <div id="modalRoot"></div>
+<div id="traeDrawerRoot"></div>
 <div id="toastRoot"></div>
 <script>
 'use strict';
@@ -1039,7 +1252,8 @@ const KIND_NAMES = { weight: '体重', bodyfat: '体脂', height: '身高' };
 const KIND_UNITS = { weight: 'kg', bodyfat: '%', height: 'cm' };
 const VIEW_META = {
   overview: ['概览', '今天的情况'],
-  users: ['用户与设备', '账号、设备与活跃状态'],
+  trae: ['Trae', '账户余额与消耗'],
+  users: ['用户管理', '账号、设备与活跃状态'],
   usage: ['用量分析', 'Token、缓存与积分消耗'],
   flow: ['流水明细', '按时间聚合的同步记录'],
   devices: ['设备管理', '所有登记设备与在线状态'],
@@ -1051,6 +1265,8 @@ const VIEW_META = {
 
 const state = {
   token: localStorage.getItem('cc_admin_token') || '',
+  adminUser: localStorage.getItem('cc_admin_user') || '',
+  loginMode: 'account',
   theme: localStorage.getItem('cc_admin_theme') || 'dark',
   view: 'overview',
   users: [],
@@ -1058,14 +1274,16 @@ const state = {
   selectedUserId: null,
   userFilter: 'all',
   userSearch: '',
-  usage: { days: 7, userId: '', source: '', model: '' },
+  trae: { days: 7, userId: '', status: '', accountFilter: 'all', detailDays: 30 },
+  traeData: null,
+  usage: { days: 7, userId: '', source: '', model: '', metric: 'credits' },
   flow: { range: 'today', anchor: startOfToday(), userId: '', source: '', model: '' },
   health: { days: 30, kind: 'all' },
   audit: { days: 7, page: 1, size: 20, method: '', statusClass: '', path: '' },
   hourlyMetric: 'credits',
   bucketCache: {},
   lastLoaded: {},
-  loading: false
+  loadingViews: {}
 };
 
 /* ---------- 基础工具 ---------- */
@@ -1309,13 +1527,52 @@ function confirmAction(title, message, onConfirm, confirmText = '确定', danger
   });
 }
 
+function applyAdminIdentity() {
+  const name = state.adminUser || '管理员';
+  $('#adminName').textContent = name;
+  $('#adminMeta').textContent = state.adminUser ? '管理员账号会话' : 'API Token 会话';
+  $('#adminAvatar').textContent = name.slice(0, 1).toUpperCase();
+}
+
+function setLoginMode(mode) {
+  state.loginMode = mode;
+  $$('#loginTabs button').forEach((button) => button.classList.toggle('active', button.dataset.mode === mode));
+  $('#accountLogin').classList.toggle('hidden', mode !== 'account');
+  $('#tokenLogin').classList.toggle('hidden', mode !== 'token');
+  setTimeout(() => (mode === 'account' ? $('#adminUsername') : $('#tokenInput')).focus(), 40);
+}
+
+async function authRequest(path, options = {}) {
+  let response;
+  try {
+    response = await fetch('/api' + path, Object.assign({}, options, {
+      headers: Object.assign({ 'Content-Type': 'application/json' }, options.headers || {})
+    }));
+  } catch (error) {
+    throw new ApiError('无法连接服务，请确认服务已启动', 0);
+  }
+  if (!response.ok) {
+    let message = '';
+    try {
+      const data = await response.json();
+      message = data.message || data.error || '';
+    } catch (error) { /* 非 JSON 错误响应 */ }
+    throw new ApiError(message || `请求失败 (${response.status})`, response.status);
+  }
+  if (response.status === 204) return null;
+  return response.json();
+}
+
 function showLogin(message = '') {
   state.token = '';
+  state.adminUser = '';
   localStorage.removeItem('cc_admin_token');
+  localStorage.removeItem('cc_admin_user');
+  applyAdminIdentity();
   $('#login').classList.remove('hidden');
   $('#app').classList.add('hidden');
+  setLoginMode(state.loginMode || 'account');
   $('#loginError').textContent = message;
-  setTimeout(() => $('#tokenInput').focus(), 60);
 }
 
 function showApp() {
@@ -1324,8 +1581,48 @@ function showApp() {
 }
 
 function logout(message = '') {
+  const token = state.token;
+  if (token && state.adminUser) {
+    fetch(API + '/logout', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + token }
+    }).catch(() => {});
+  }
   closeModal();
+  closeTraeDrawer();
   showLogin(message);
+}
+
+async function doAccountLogin() {
+  const username = $('#adminUsername').value.trim();
+  const password = $('#adminPassword').value;
+  if (!username || !password) {
+    $('#loginError').textContent = '请输入用户名和密码';
+    return;
+  }
+  const button = $('#accountLoginBtn');
+  button.disabled = true;
+  $('#loginError').textContent = '';
+  try {
+    const data = await authRequest('/auth/admin-login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password })
+    });
+    state.token = data.token;
+    state.adminUser = data.username;
+    localStorage.setItem('cc_admin_token', data.token);
+    localStorage.setItem('cc_admin_user', data.username);
+    applyAdminIdentity();
+    showApp();
+    await afterLogin();
+  } catch (error) {
+    state.token = '';
+    $('#loginError').textContent = error.status === 401
+      ? '用户名或密码错误'
+      : (error.message || '登录失败');
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function doLogin() {
@@ -1339,8 +1636,11 @@ async function doLogin() {
   $('#loginError').textContent = '';
   try {
     state.token = token;
+    state.adminUser = '';
+    localStorage.removeItem('cc_admin_user');
     await api('/overview');
     localStorage.setItem('cc_admin_token', token);
+    applyAdminIdentity();
     showApp();
     await afterLogin();
   } catch (error) {
@@ -1357,6 +1657,7 @@ async function doLogin() {
 
 const LOADERS = {
   overview: () => loadOverview(),
+  trae: () => loadTrae(),
   users: () => loadUsers(),
   usage: () => loadUsage(),
   flow: () => loadFlow(),
@@ -1368,6 +1669,7 @@ const LOADERS = {
 };
 
 function switchView(view, force = false) {
+  closeTraeDrawer();
   state.view = view;
   const meta = VIEW_META[view] || ['', ''];
   $('#pageTitle').textContent = meta[0];
@@ -1381,15 +1683,15 @@ function switchView(view, force = false) {
 }
 
 async function refreshView(view = state.view) {
-  if (state.loading) return;
-  state.loading = true;
+  if (state.loadingViews[view]) return;
+  state.loadingViews[view] = true;
   try {
     await LOADERS[view]();
     state.lastLoaded[view] = Date.now();
   } catch (error) {
     if (error.status !== 401) toast(error.message || '加载失败', 'error');
   } finally {
-    state.loading = false;
+    state.loadingViews[view] = false;
     updateRefreshHint();
   }
 }
@@ -1425,6 +1727,8 @@ async function loadOverview() {
   renderOverviewStatus(data.server);
   $('#overviewDate').textContent = fmtDate(data.now) + ' · 数据每 30 秒自动刷新';
   $('#deviceBadge').textContent = fmtInt(data.kpi.totalDevices);
+  const traeBadge = $('#traeBadge');
+  if (traeBadge && data.trae) traeBadge.textContent = fmtInt((data.trae.accounts || []).length);
   setServicePill(data.server.status === 'UP');
 }
 
@@ -1521,24 +1825,52 @@ function renderTraeAccounts(trae) {
     container.innerHTML = '<div class="trae-empty"><b>暂无积分账单</b><br>ccbar 完成云同步后，会自动上报 Trae 官方已用 / 总额。</div>';
     return;
   }
-  const rows = accounts.map((account) => {
-    const hasQuota = account.total > 0;
-    const pct = hasQuota ? Math.min(100, account.consumed / account.total * 100) : 0;
-    const name = account.slot ? `Trae ${account.slot}` : 'Trae 账号';
-    const meta = hasQuota
-      ? `<span>剩余 <b>${fmtCredits(account.remaining)}</b> / ${fmtCredits(account.total)}</span><span>今日 ${fmtCredits(account.todayCredits)}</span>`
-      : `<span>近30天 <b>${fmtCredits(account.usageCredits)}</b> 积分</span><span>仅用量记录</span>`;
-    return `<div class="trae-row">
-      <div class="top">
-        <span class="name">${escapeHtml(name)}<span class="id" title="${escapeHtml(account.account)}">${escapeHtml(shortAccount(account.account))}</span></span>
-        <span class="pct">${hasQuota ? `已用 ${fmtPct(pct, 0)}` : '未上报账单'}</span>
-      </div>
-      ${hasQuota ? `<div class="track"><div class="fill" style="width:${pct.toFixed(1)}%;background:var(--series-1)"></div></div>` : ''}
-      <div class="meta">${meta}</div>
-    </div>`;
-  }).join('');
-  container.innerHTML = `<div class="trae-list">${rows}</div>
-    <div class="trae-total"><span class="k">合计剩余 / 总额</span><span class="v">${fmtCredits(trae.totalRemaining)} <span>/ ${fmtCredits(trae.totalQuota)}</span></span></div>`;
+  const now = Date.now();
+  const issues = [];
+  accounts.forEach((account) => {
+    const label = traeLabel(account);
+    const total = Number(account.total || 0);
+    const remaining = Number(account.remaining || 0);
+    const reported = account.updatedAt ? new Date(account.updatedAt).getTime() : 0;
+    if (total > 0 && remaining / total < 0.1) {
+      issues.push({
+        tone: 'warn',
+        title: `余额不足 ${fmtPct(remaining / total * 100, 1)}`,
+        detail: `${label} · 剩 ${fmtCredits(remaining)} / ${fmtCredits(total)}`,
+        time: account.updatedAt
+      });
+    } else if (total <= 0) {
+      issues.push({
+        tone: 'warn',
+        title: '未上报官方账单',
+        detail: `${label} · 近 30 天 ${fmtCredits(account.usageCredits)} 积分`,
+        time: null
+      });
+    } else if (!reported || now - reported > 86400000) {
+      issues.push({
+        tone: 'bad',
+        title: '上报中断',
+        detail: `${label} · ${account.updatedAt ? rel(account.updatedAt) + '上报' : '从未上报'}`,
+        time: account.updatedAt
+      });
+    }
+  });
+  issues.sort((left, right) => (left.tone === 'bad' ? 0 : 1) - (right.tone === 'bad' ? 0 : 1));
+  const shown = issues.slice(0, 3);
+  const rows = shown.map((issue) => `<div class="alert-row">
+    <span class="status-dot ${issue.tone}"></span>
+    <div class="alert-main"><b>${esc(issue.title)}</b><span>${esc(issue.detail)}</span></div>
+    <span class="alert-time">${esc(issue.time ? rel(issue.time) : '—')}</span>
+  </div>`).join('');
+  const more = issues.length > shown.length
+    ? `<div class="alert-foot">另有 ${fmtInt(issues.length - shown.length)} 个问题，查看 Trae</div>` : '';
+  const body = issues.length
+    ? `<div class="alert-list">${rows}</div>${more}`
+    : '<div class="trae-empty"><b>全部正常</b><br>所有 Trae 账号余额与上报状态正常。</div>';
+  const totalRow = trae.totalQuota > 0
+    ? `<div class="trae-total"><span class="k">合计剩余 / 总额</span><span class="v">${fmtCredits(trae.totalRemaining)} <span>/ ${fmtCredits(trae.totalQuota)}</span></span></div>`
+    : '<div class="trae-total"><span class="k">合计剩余 / 总额</span><span class="v">—</span></div>';
+  container.innerHTML = body + totalRow;
 }
 
 function shortAccount(account) {
@@ -1561,10 +1893,10 @@ function niceMax(value) {
   return nice * base;
 }
 
-function renderStackedChart(container, legendElement, trend) {
+function renderStackedChart(container, legendElement, trend, options = {}) {
   const labels = (trend && trend.labels) || [];
   const raw = ((trend && trend.series) || []).map((series) => ({
-    name: sourceName(series.source),
+    name: series.name || sourceName(series.source),
     values: series.data || [],
     total: (series.data || []).reduce((sum, value) => sum + Number(value || 0), 0)
   }));
@@ -1583,13 +1915,13 @@ function renderStackedChart(container, legendElement, trend) {
     .reduce((sum, item) => sum + Number(item.values[index] || 0), 0));
   const max = niceMax(Math.max(0, ...totals));
   if (!labels.length || max <= 0) {
-    container.innerHTML = '<div class="chart-empty">近 7 天暂无同步数据</div>';
+    container.innerHTML = `<div class="chart-empty">${esc(options.emptyText || '近 7 天暂无同步数据')}</div>`;
     legendElement.innerHTML = '';
     return;
   }
 
-  const width = 660;
-  const height = 240;
+  const width = options.width || 660;
+  const height = options.height || 240;
   const left = 40;
   const right = 10;
   const top = 12;
@@ -1598,9 +1930,10 @@ function renderStackedChart(container, legendElement, trend) {
   const plotHeight = height - top - bottom;
   const groupWidth = plotWidth / labels.length;
   const barWidth = Math.min(34, groupWidth * 0.52);
+  const labelStep = labels.length > 20 ? 5 : labels.length > 10 ? 3 : 1;
   const yOf = (value) => top + plotHeight - (value / max) * plotHeight;
 
-  let svg = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="近 7 天同步趋势">`;
+  let svg = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(options.ariaLabel || '同步趋势')}">`;
   for (let index = 0; index <= 4; index++) {
     const value = max * index / 4;
     const y = yOf(value);
@@ -1618,7 +1951,9 @@ function renderStackedChart(container, legendElement, trend) {
       svg += `<rect x="${center - barWidth / 2}" y="${yTop}" width="${barWidth}" height="${barHeight}" rx="2" fill="${item.color}"></rect>`;
       stack += value;
     });
-    svg += `<text x="${center}" y="${height - 9}" text-anchor="middle" fill="var(--muted)" font-size="10">${esc(label)}</text>`;
+    if (index % labelStep === 0 || index === labels.length - 1) {
+      svg += `<text x="${center}" y="${height - 9}" text-anchor="middle" fill="var(--muted)" font-size="10">${esc(label)}</text>`;
+    }
   });
   svg += '</svg>';
 
@@ -1717,6 +2052,506 @@ function exportDaily() {
   downloadBlob(csv, `ccbar-daily-${fmtDate(overview.now)}.csv`);
 }
 
+/* ---------- Trae 账户 ---------- */
+
+const TRAE_STATUS = {
+  normal: { pill: 'ok', dot: 'ok', text: '正常' },
+  low_balance: { pill: 'warn', dot: 'warn', text: '低余额' },
+  stale: { pill: 'bad', dot: 'bad', text: '上报中断' },
+  no_bill: { pill: 'warn', dot: 'warn', text: '未上报账单' },
+  no_data: { pill: 'plain', dot: '', text: '无数据' }
+};
+
+async function loadTrae() {
+  const data = await api('/trae/overview' + qs({ days: state.trae.days }));
+  state.traeData = data;
+  const totals = data.totals;
+  $('#traeSummary').textContent = `${fmtInt(totals.accounts)} 个账号 · ${fmtInt(totals.billedAccounts)} 个有官方账单 · ${fmtInt(totals.alertCount)} 个待处理`;
+  renderTraeKpis(data);
+  renderTraeTrend(data);
+  renderTraeAlerts(data);
+  renderTraeUserOptions(data.accounts);
+  renderTraeAccountViews();
+  const badge = $('#traeBadge');
+  if (badge) badge.textContent = fmtInt(totals.accounts);
+  $('#traeRangeCol').textContent = data.days === 1 ? '今日' : `近 ${data.days} 天`;
+}
+
+function renderTraeKpis(data) {
+  const totals = data.totals;
+  $('#traeRemaining').innerHTML = totals.quota > 0
+    ? `${fmtCredits(totals.remaining)}<span class="unit">积分</span>` : '—';
+  $('#traeRemainingFoot').textContent = totals.quota > 0
+    ? `总额度 ${fmtCredits(totals.quota)} · 整体已用 ${fmtPct(totals.quota > 0 ? totals.consumed * 100 / totals.quota : 0)}`
+    : '等待 ccbar 上报账单';
+  $('#traeToday').textContent = fmtCredits(totals.todayCredits);
+  $('#traeTodayFoot').textContent = `${fmtInt(totals.activeToday)} 个账号有消耗`;
+  $('#traeAvg').textContent = fmtCredits(totals.avgDaily);
+  $('#traeAvgFoot').textContent = totals.daysLeft != null
+    ? `按近 7 天速度可用 ${formatTraeDays(totals.daysLeft)}`
+    : '暂无消耗速度';
+  const alertElement = $('#traeAlertCount');
+  alertElement.innerHTML = `${fmtInt(totals.alertCount)}<span class="unit">个</span>`;
+  alertElement.classList.toggle('bad', totals.alertCount > 0);
+  const counts = { low_balance: 0, stale: 0, no_bill: 0 };
+  (data.alerts || []).forEach((alert) => {
+    counts[alert.type] = (counts[alert.type] || 0) + 1;
+  });
+  const parts = [];
+  if (counts.low_balance) parts.push(`${counts.low_balance} 个低余额`);
+  if (counts.stale) parts.push(`${counts.stale} 个上报中断`);
+  if (counts.no_bill) parts.push(`${counts.no_bill} 个未上报账单`);
+  $('#traeAlertFoot').textContent = parts.length ? parts.join(' · ') : '全部账号状态正常';
+}
+
+function renderTraeTrend(data) {
+  const trend = data.trend || { labels: [], series: [] };
+  const labels = trend.labels || [];
+  const series = (trend.series || []).map((item) => ({
+    source: item.account,
+    name: traeSeriesLabel(item),
+    data: item.data || []
+  }));
+  renderStackedChart($('#traeTrendChart'), $('#traeTrendLegend'), { labels, series }, {
+    emptyText: '暂无积分消耗',
+    ariaLabel: 'Trae 积分消耗趋势'
+  });
+  $('#traeTrendSub').textContent = data.days === 1 ? '今日 · 每小时堆叠' : `近 ${data.days} 天 · 按账号堆叠`;
+}
+
+function traeSeriesLabel(item) {
+  const label = String(item.label || 'Trae');
+  const tail = shortAccount(accountPart(item.account));
+  return !tail || label.includes(tail) ? label : `${label} · ${tail}`;
+}
+
+function accountPart(value) {
+  const text = String(value || '');
+  const index = text.indexOf('\u0000');
+  return index < 0 ? text : text.slice(index + 1);
+}
+
+function renderTraeAlerts(data) {
+  const container = $('#traeAlerts');
+  const alerts = data.alerts || [];
+  $('#traeAlertSub').textContent = alerts.length ? `${fmtInt(alerts.length)} 项待处理` : '暂无异常';
+  if (!alerts.length) {
+    container.innerHTML = '<div class="trae-empty"><b>全部正常</b><br>所有账号余额与上报状态正常。</div>';
+  } else {
+    container.innerHTML = `<div class="alert-list">${alerts.map((alert) => {
+      const tone = alert.severity === 'bad' ? 'bad' : 'warn';
+      const time = alert.type === 'no_bill' ? alert.lastUsageAt : alert.reportedAt;
+      return `<div class="alert-row">
+        <span class="status-dot ${tone}"></span>
+        <div class="alert-main">
+          <b>${esc(traeAlertTitle(alert))}</b>
+          <span>${esc(traeAlertDetail(alert))}</span>
+        </div>
+        <span class="alert-time">${esc(time ? rel(time) : '—')}</span>
+      </div>`;
+    }).join('')}</div>`;
+  }
+  const accounts = data.accounts || [];
+  if (accounts.length) {
+    const normal = accounts.filter((account) => account.status === 'normal').length;
+    const latest = accounts.map((account) => account.reportedAt).filter(Boolean).sort().pop();
+    container.insertAdjacentHTML('beforeend',
+      `<div class="alert-foot"><span class="status-dot ok"></span>${fmtInt(normal)} 个账号上报正常${latest ? ' · 最近同步 ' + esc(rel(latest)) : ''}</div>`);
+  }
+}
+
+function traeAlertTitle(alert) {
+  if (alert.type === 'low_balance') {
+    return `余额不足 ${fmtPct(Math.max(0, 100 - Number(alert.percent || 0)), 1)}`;
+  }
+  if (alert.type === 'stale') return '上报中断';
+  return '未上报官方账单';
+}
+
+function traeAlertDetail(alert) {
+  const tail = shortAccount(alert.account);
+  const accountText = alert.label && alert.label.includes(tail) ? alert.label : `${alert.label} · ${tail}`;
+  if (alert.type === 'low_balance') {
+    return `${accountText} · 剩 ${fmtCredits(alert.remaining)} / ${fmtCredits(alert.total)}`;
+  }
+  if (alert.type === 'stale') {
+    return `${accountText} · 最后上报 ${rel(alert.reportedAt)}`;
+  }
+  return `${accountText} · 近 30 天 ${fmtCredits(alert.monthCredits)} 积分`;
+}
+
+function renderTraeUserOptions(accounts) {
+  const seen = new Map();
+  (accounts || []).forEach((account) => {
+    if (!seen.has(account.userId)) {
+      seen.set(account.userId, { id: account.userId, username: account.username });
+    }
+  });
+  populateSelect($('#traeUserFilter'), Array.from(seen.values()), '全部用户',
+    (user) => user.id, (user) => user.username);
+  state.trae.userId = $('#traeUserFilter').value;
+}
+
+function filteredTraeAccounts() {
+  const accounts = (state.traeData && state.traeData.accounts) || [];
+  return accounts.filter((account) => {
+    if (state.trae.userId && String(account.userId) !== state.trae.userId) return false;
+    if (state.trae.status && account.status !== state.trae.status) return false;
+    if (state.trae.accountFilter === 'billed' && !account.hasQuota) return false;
+    if (state.trae.accountFilter === 'unbilled' && account.hasQuota) return false;
+    return true;
+  });
+}
+
+function renderTraeAccountViews() {
+  const data = state.traeData;
+  if (!data) return;
+  const all = data.accounts || [];
+  const billed = all.filter((account) => account.hasQuota).length;
+  $('#traeAccountSub').textContent = `${fmtInt(billed)} 个有官方账单 · ${fmtInt(all.length - billed)} 个仅用量记录`;
+  const accounts = filteredTraeAccounts();
+  renderTraeAccountCards(accounts);
+  renderTraeTable(accounts);
+}
+
+function renderTraeAccountCards(accounts) {
+  const container = $('#traeAccountCards');
+  if (!accounts.length) {
+    container.innerHTML = '<div class="trae-empty">没有符合条件的账号</div>';
+    return;
+  }
+  container.innerHTML = accounts.map((account) => {
+    const status = traeStatusMeta(account.status);
+    const label = traeLabel(account);
+    const hasQuota = account.hasQuota && account.total > 0;
+    const remainingPercent = hasQuota
+      ? Math.max(0, Math.min(100, account.remaining / account.total * 100)) : 0;
+    const barColor = account.status === 'low_balance' ? 'var(--warning)'
+      : account.status === 'stale' ? 'var(--danger)'
+        : account.status === 'no_bill' || account.status === 'no_data' ? 'var(--border-strong)'
+          : 'var(--series-1)';
+    const stats = hasQuota
+      ? `<div><span>今日</span><b>${fmtCredits(account.todayCredits)}</b></div>
+         <div><span>7 日日均</span><b>${fmtCredits(account.avgDaily)}</b></div>
+         <div><span>预计可用</span><b>${formatTraeDays(account.daysLeft)}</b></div>`
+      : `<div><span>今日</span><b>${fmtCredits(account.todayCredits)}</b></div>
+         <div><span>近 30 天</span><b>${fmtCredits(account.monthCredits)}</b></div>
+         <div><span>最后上报</span><b>—</b></div>`;
+    const foot = hasQuota
+      ? `<span class="status-dot ${status.dot}"></span>${esc(account.reportedAt ? rel(account.reportedAt) + '上报' : '从未上报')}`
+      : `<span class="status-dot"></span>等待 ccbar 上报官方账单${account.lastUsageAt ? ' · 最近用量 ' + esc(rel(account.lastUsageAt)) : ''}`;
+    const tail = shortAccount(account.account);
+    const subParts = [];
+    if (account.slot) subParts.push('槽位 ' + account.slot);
+    if (!label.includes(tail)) subParts.push(tail);
+    subParts.push(account.username || 'default');
+    const sub = subParts.join(' · ');
+    return `<div class="card acct-card" data-trae-user="${account.userId}" data-trae-account="${esc(account.account)}">
+      <div class="acct-head">
+        <div class="acct-id">
+          <div class="avatar ${account.status === 'normal' ? 'on' : ''}">${esc(label.slice(0, 1))}</div>
+          <div><b title="${esc(label)}">${esc(label)}</b><span title="${esc(sub)}">${esc(sub)}</span></div>
+        </div>
+        <span class="pill ${status.pill}">${status.text}</span>
+      </div>
+      <div class="acct-balance">
+        <div><span class="k">${hasQuota ? '剩余积分' : '积分账单'}</span><b>${hasQuota ? fmtCredits(account.remaining) : '—'}</b><span class="total">${hasQuota ? ' / ' + fmtCredits(account.total) : ''}</span></div>
+        <span class="pct">${hasQuota ? '已用 ' + fmtPct(account.percent, 0) : '仅用量记录'}</span>
+      </div>
+      <div class="track"><div class="fill" style="width:${remainingPercent.toFixed(1)}%;background:${barColor}"></div></div>
+      <div class="acct-stats">${stats}</div>
+      <div class="acct-foot">${foot}</div>
+    </div>`;
+  }).join('');
+  $$('#traeAccountCards [data-trae-account]').forEach((card) => {
+    card.addEventListener('click', () => {
+      const account = (state.traeData.accounts || []).find((item) =>
+        item.userId === Number(card.dataset.traeUser) && item.account === card.dataset.traeAccount);
+      if (account) openTraeDrawer(account);
+    });
+  });
+}
+
+function renderTraeTable(accounts) {
+  const tbody = $('#traeTableRows');
+  if (!accounts.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">没有符合条件的账号</td></tr>';
+    return;
+  }
+  const sorted = accounts.slice().sort((left, right) => {
+    if (left.hasQuota !== right.hasQuota) return left.hasQuota ? -1 : 1;
+    return Number(right.remaining || 0) - Number(left.remaining || 0);
+  });
+  tbody.innerHTML = sorted.map((account) => {
+    const status = traeStatusMeta(account.status);
+    const label = traeLabel(account);
+    const hasQuota = account.hasQuota && account.total > 0;
+    const tail = shortAccount(account.account);
+    const subParts = [];
+    if (account.slot) subParts.push('槽位 ' + account.slot);
+    if (!label.includes(tail)) subParts.push(tail);
+    const accountSub = subParts.join(' · ');
+    return `<tr data-trae-user="${account.userId}" data-trae-account="${esc(account.account)}">
+      <td><div class="acct-cell"><b title="${esc(label)}">${esc(label)}</b>${accountSub ? `<span>${esc(accountSub)}</span>` : ''}</div></td>
+      <td>${esc(account.username || '—')}</td>
+      <td class="num">${hasQuota ? fmtCredits(account.remaining) + ' / ' + fmtCredits(account.total) : '—'}</td>
+      <td class="num">${fmtCredits(account.todayCredits)}</td>
+      <td class="num">${fmtCredits(account.rangeCredits)}</td>
+      <td class="num">${fmtCredits(account.avgDaily)}</td>
+      <td class="num">${formatTraeDays(account.daysLeft)}</td>
+      <td class="muted">${esc(account.reportedAt ? rel(account.reportedAt) : '—')}</td>
+      <td><span class="pill ${status.pill}">${status.text}</span></td>
+    </tr>`;
+  }).join('');
+  $$('#traeTableRows tr[data-trae-account]').forEach((row) => {
+    row.addEventListener('click', () => {
+      const account = (state.traeData.accounts || []).find((item) =>
+        item.userId === Number(row.dataset.traeUser) && item.account === row.dataset.traeAccount);
+      if (account) openTraeDrawer(account);
+    });
+  });
+}
+
+function traeStatusMeta(status) {
+  return TRAE_STATUS[status] || TRAE_STATUS.no_data;
+}
+
+function traeLabel(account) {
+  const name = String(account.name || '').trim();
+  if (name) return name;
+  if (account.slot) return 'Trae ' + account.slot;
+  return 'Trae ' + shortAccount(account.account);
+}
+
+function formatTraeDays(value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
+  const days = Number(value);
+  if (days <= 0) return '0 天';
+  if (days < 1) return '< 1 天';
+  if (days >= 1000) return '> 999 天';
+  return days < 10 ? trimZero(days.toFixed(1)) + ' 天' : Math.floor(days) + ' 天';
+}
+
+function exportTrae() {
+  if (!state.traeData) {
+    toast('Trae 数据尚未加载', 'error');
+    return;
+  }
+  const lines = [['账号', '名称', '用户', '剩余', '总额', '今日', '区间消耗', '近 7 天日均', '预计可用天数', '最后上报', '状态']];
+  filteredTraeAccounts().forEach((account) => {
+    lines.push([
+      account.account,
+      traeLabel(account),
+      account.username || '',
+      account.hasQuota ? account.remaining : '',
+      account.hasQuota ? account.total : '',
+      account.todayCredits,
+      account.rangeCredits,
+      account.avgDaily,
+      account.daysLeft == null ? '' : Number(account.daysLeft).toFixed(1),
+      account.reportedAt ? fmtDateTime(account.reportedAt) : '',
+      traeStatusMeta(account.status).text
+    ]);
+  });
+  const csv = '\uFEFF' + lines.map((row) => row.map(csvCell).join(',')).join('\n');
+  downloadBlob(csv, `trae-accounts-${fmtDate(new Date())}.csv`);
+}
+
+/* ---------- Trae 账号详情 ---------- */
+
+async function openTraeDrawer(account) {
+  state.traeDetailAccount = { userId: account.userId, account: account.account };
+  const root = $('#traeDrawerRoot');
+  root.innerHTML = `<div class="drawer-overlay" data-drawer-overlay>
+    <aside class="drawer" role="dialog" aria-modal="true">
+      <div class="drawer-head">
+        <div>
+          <h3>${esc(traeLabel(account))}</h3>
+          <span class="sub">${esc(shortAccount(account.account))} · ${esc(account.username || 'default')}</span>
+        </div>
+        <button class="icon-btn" data-drawer-close title="关闭">×</button>
+      </div>
+      <div class="drawer-body" id="traeDrawerBody"><div class="drawer-empty">加载中…</div></div>
+    </aside>
+  </div>`;
+  const overlay = $('[data-drawer-overlay]', root);
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) closeTraeDrawer();
+  });
+  $$('[data-drawer-close]', root).forEach((button) => button.addEventListener('click', closeTraeDrawer));
+  await loadTraeDetail(account.userId, account.account, state.trae.detailDays || 30);
+}
+
+function closeTraeDrawer() {
+  $('#traeDrawerRoot').innerHTML = '';
+}
+
+async function loadTraeDetail(userId, account, days) {
+  state.trae.detailDays = days;
+  const body = $('#traeDrawerBody');
+  if (!body) return;
+  body.innerHTML = '<div class="drawer-empty">加载中…</div>';
+  try {
+    const data = await api('/trae/account' + qs({ userId, account, days }));
+    if (!body.isConnected) return;
+    renderTraeDrawer(data);
+  } catch (error) {
+    if (error.status !== 401 && body.isConnected) {
+      body.innerHTML = `<div class="drawer-empty">加载失败：${esc(error.message || '未知错误')}</div>`;
+    }
+  }
+}
+
+function renderTraeDrawer(data) {
+  const account = data.account;
+  const root = $('#traeDrawerRoot');
+  $('.drawer-head h3', root).textContent = traeLabel(account);
+  $('.drawer-head .sub', root).textContent =
+    `${shortAccount(account.account)} · ${account.username || 'default'}`;
+  const status = traeStatusMeta(account.status);
+  const hasQuota = account.hasQuota && account.total > 0;
+  const remainingPercent = hasQuota
+    ? Math.max(0, Math.min(100, account.remaining / account.total * 100)) : 0;
+  const balance = hasQuota
+    ? `${fmtCredits(account.remaining)} <span class="total">/ ${fmtCredits(account.total)}</span>`
+    : '—';
+  const body = $('#traeDrawerBody');
+  body.innerHTML = `
+    <div class="acct-head">
+      <div class="acct-balance" style="margin-top:0"><div><span class="k">剩余积分</span><b>${balance}</b></div>
+        <span class="pill ${status.pill}">${status.text}</span></div>
+    </div>
+    <div class="track"><div class="fill" style="width:${remainingPercent.toFixed(1)}%;background:${status.dot === 'warn' ? 'var(--warning)' : status.dot === 'bad' ? 'var(--danger)' : 'var(--series-1)'}"></div></div>
+    <div class="acct-stats">
+      <div><span>今日</span><b>${fmtCredits(account.todayCredits)}</b></div>
+      <div><span>近 7 天日均</span><b>${fmtCredits(account.avgDaily)}</b></div>
+      <div><span>预计可用</span><b>${formatTraeDays(account.daysLeft)}</b></div>
+    </div>
+    <div class="filters" style="margin-top:14px">
+      <div class="chips" id="traeDetailChips">
+        <button class="chip ${data.days === 30 ? 'active' : ''}" data-days="30">近 30 天</button>
+        <button class="chip ${data.days === 90 ? 'active' : ''}" data-days="90">近 90 天</button>
+      </div>
+    </div>
+    <div class="drawer-section">
+      <h4>每日积分消耗</h4>
+      <div class="chart-wrap" id="traeDetailChart"></div>
+      <div class="legend" id="traeDetailLegend"></div>
+    </div>
+    <div class="drawer-section">
+      <h4>余额历史</h4>
+      <div id="traeDetailBalance"></div>
+    </div>
+    <div class="drawer-section">
+      <h4>模型分布</h4>
+      <div class="bar-list" id="traeDetailModels"></div>
+    </div>
+    <div class="drawer-section">
+      <h4>最近流水</h4>
+      <div class="table-wrap" id="traeDetailRecent"></div>
+    </div>`;
+
+  renderStackedChart($('#traeDetailChart'), $('#traeDetailLegend'), {
+    labels: data.labels || [],
+    series: [{ source: 'credits', name: '积分', data: data.dailyCredits || [] }]
+  }, { emptyText: '该时段暂无积分消耗', ariaLabel: 'Trae 账号每日积分消耗', width: 520, height: 220 });
+  renderTraeBalanceHistory(data.quotaHistory || []);
+  renderTraeDetailModels(data.models || []);
+  renderTraeDetailRecent(data.recent || []);
+
+  $('#traeDetailChips').addEventListener('click', (event) => {
+    const chip = event.target.closest('.chip');
+    if (!chip || !state.traeDetailAccount) return;
+    loadTraeDetail(state.traeDetailAccount.userId, state.traeDetailAccount.account,
+      Number(chip.dataset.days) || 30);
+  });
+}
+
+function renderTraeBalanceHistory(points) {
+  const container = $('#traeDetailBalance');
+  if (!container) return;
+  if (!points.length) {
+    container.innerHTML = '<div class="drawer-empty">余额历史从下一次 ccbar 上报开始记录。</div>';
+    return;
+  }
+  const width = 620;
+  const height = 180;
+  const left = 52;
+  const right = 12;
+  const top = 14;
+  const bottom = 28;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const values = points.map((point) => Number(point.remaining || 0));
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const span = Math.max(1, max - min);
+  const xOf = (index) => left + (points.length === 1 ? plotWidth / 2 : plotWidth * index / (points.length - 1));
+  const yOf = (value) => top + plotHeight - ((value - min) / span) * plotHeight;
+  const coords = points.map((point, index) => `${xOf(index).toFixed(1)},${yOf(Number(point.remaining || 0)).toFixed(1)}`);
+  let svg = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Trae 余额历史">`;
+  for (let index = 0; index <= 2; index++) {
+    const value = min + span * index / 2;
+    const y = yOf(value);
+    svg += `<line x1="${left}" y1="${y.toFixed(1)}" x2="${width - right}" y2="${y.toFixed(1)}" stroke="var(--border)" ${index === 0 ? '' : 'stroke-dasharray="3 5"'}/>`;
+    svg += `<text x="${left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" fill="var(--muted)" font-size="10">${fmtCredits(Math.round(value))}</text>`;
+  }
+  svg += `<polyline points="${coords.join(' ')}" fill="none" stroke="var(--series-1)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+  points.forEach((point, index) => {
+    svg += `<circle cx="${xOf(index).toFixed(1)}" cy="${yOf(Number(point.remaining || 0)).toFixed(1)}" r="3" fill="var(--series-1)"/>`;
+  });
+  svg += `<text x="${left}" y="${height - 8}" fill="var(--muted)" font-size="10">${esc(points[0].date)}</text>`;
+  if (points.length > 1) {
+    svg += `<text x="${width - right}" y="${height - 8}" text-anchor="end" fill="var(--muted)" font-size="10">${esc(points[points.length - 1].date)}</text>`;
+  }
+  svg += '</svg>';
+  container.innerHTML = svg;
+}
+
+function renderTraeDetailModels(models) {
+  const container = $('#traeDetailModels');
+  if (!container) return;
+  if (!models.length) {
+    container.innerHTML = '<div class="drawer-empty">该时段暂无模型数据。</div>';
+    return;
+  }
+  const total = models.reduce((sum, model) => sum + Number(model.credits || 0), 0);
+  container.innerHTML = models.map((model, index) => {
+    const percent = total > 0 ? Number(model.credits || 0) * 100 / total : 0;
+    const color = index < 3 ? `var(--series-${index + 1})` : 'var(--border-strong)';
+    return `<div class="bar-row">
+      <div class="top">
+        <span class="name"><i class="dot" style="background:${color}"></i><b>${esc(model.model || '未知模型')}</b></span>
+        <span>${fmtPct(percent)}</span>
+      </div>
+      <div class="track"><div class="fill" style="width:${Math.max(0, Math.min(100, percent))}%;background:${color}"></div></div>
+      <div class="top" style="margin-top:4px">
+        <span class="muted" style="font-size:11px">${compact(model.tokens)} Token</span>
+        <span>${fmtCredits(model.credits)} 积分</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderTraeDetailRecent(rows) {
+  const container = $('#traeDetailRecent');
+  if (!container) return;
+  if (!rows.length) {
+    container.innerHTML = '<div class="drawer-empty">最近没有流水记录。</div>';
+    return;
+  }
+  container.innerHTML = `<table>
+    <thead><tr><th>时间</th><th>模型</th><th class="num">Token</th><th class="num">积分</th><th>设备</th></tr></thead>
+    <tbody>${rows.map((row) => `<tr>
+      <td class="muted">${esc(fmtDateTime(row.at))}</td>
+      <td><span class="mono">${esc(row.model || '—')}</span></td>
+      <td class="num">${compact(row.tokens)}</td>
+      <td class="num">${fmtCredits(row.credits)}</td>
+      <td class="muted mono" title="${esc(row.deviceId || '')}">${esc(shortDevice(row.deviceId))}</td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
 /* ---------- 筛选项 ---------- */
 
 function populateSelect(select, items, placeholder, valueOf, labelOf) {
@@ -1739,7 +2574,7 @@ async function loadOptions() {
   populateSelect($('#flowModel'), options.models, '全部模型', (model) => model, (model) => model);
 }
 
-/* ---------- 用户与设备 ---------- */
+/* ---------- 用户管理 ---------- */
 
 async function loadUsers() {
   const users = await api('/users');
@@ -2016,20 +2851,48 @@ function readUsageFilters() {
     days: Number($('#usageDays').value) || 7,
     userId: $('#usageUser').value,
     source: $('#usageSource').value,
-    model: $('#usageModel').value
+    model: $('#usageModel').value,
+    metric: state.usage.metric || 'credits'
   };
 }
 
 async function loadUsage() {
-  const data = await api('/usage/summary' + usageQuery());
+  const query = usageQuery();
+  const [summaryResult, dailyResult] = await Promise.allSettled([
+    api('/usage/summary' + query),
+    api('/usage/daily' + query)
+  ]);
+  if (summaryResult.status === 'rejected') throw summaryResult.reason;
+  const data = summaryResult.value;
   state.usageData = data;
+  state.usageDaily = dailyResult.status === 'fulfilled' ? dailyResult.value : null;
   renderUsageKpis(data.totals);
   renderUsageSources(data.bySource, data.totals);
   renderUsageModels(data.byModel, data.totals);
   renderUsageRecent(data.recent);
+  renderUsageDaily();
   const days = Math.max(1, Math.ceil((new Date(data.to) - new Date(data.from)) / 86400000));
   $('#usageRange').textContent = `${fmtDate(data.from)} 至 ${fmtDate(data.to)} · ${days} 天`;
   $('#usageSourceSub').textContent = `${(data.bySource || []).length} 个来源`;
+}
+
+function renderUsageDaily() {
+  const daily = state.usageDaily;
+  const metric = state.usage.metric || 'credits';
+  $$('#usageDailyMetric .chip').forEach((chip) => {
+    chip.classList.toggle('active', chip.dataset.metric === metric);
+  });
+  const labels = (daily && daily.labels) || [];
+  const series = ((daily && daily.series) || []).map((item) => ({
+    source: item.source,
+    name: sourceName(item.source),
+    data: (metric === 'tokens' ? item.tokens : item.credits) || []
+  }));
+  renderStackedChart($('#usageDailyChart'), $('#usageDailyLegend'), { labels, series }, {
+    emptyText: '该范围内暂无用量数据',
+    ariaLabel: '每日用量趋势'
+  });
+  $('#usageDailySub').textContent = labels.length ? `近 ${labels.length} 天 · 按来源堆叠` : '按来源堆叠';
 }
 
 function renderUsageKpis(totals) {
@@ -2990,6 +3853,18 @@ function bindEvents() {
   $('#tokenInput').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') doLogin();
   });
+  $('#accountLoginBtn').addEventListener('click', doAccountLogin);
+  ['#adminUsername', '#adminPassword'].forEach((selector) => {
+    $(selector).addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') doAccountLogin();
+    });
+  });
+  $('#loginTabs').addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-mode]');
+    if (!button) return;
+    $('#loginError').textContent = '';
+    setLoginMode(button.dataset.mode);
+  });
 
   $$('.nav-item').forEach((item) => {
     item.addEventListener('click', () => switchView(item.dataset.view));
@@ -3002,7 +3877,10 @@ function bindEvents() {
     if (target) switchView(target.dataset.goto);
   });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') closeModal();
+    if (event.key === 'Escape') {
+      closeModal();
+      closeTraeDrawer();
+    }
     if (event.key === 'Enter' && event.target.closest('.modal') && event.target.tagName !== 'TEXTAREA') {
       const confirm = $('[data-modal-confirm]');
       if (confirm && !confirm.disabled) {
@@ -3020,6 +3898,40 @@ function bindEvents() {
     $$('#hourlyMetric .chip').forEach((item) => item.classList.toggle('active', item === chip));
     if (state.overview) renderHourlyChart(state.overview.hourly);
   });
+
+  $('#traeChips').addEventListener('click', (event) => {
+    const chip = event.target.closest('.chip');
+    if (!chip) return;
+    state.trae.days = Number(chip.dataset.days) || 7;
+    $$('#traeChips .chip').forEach((item) => item.classList.toggle('active', item === chip));
+    refreshView('trae', true);
+  });
+  $('#traeUserFilter').addEventListener('change', () => {
+    state.trae.userId = $('#traeUserFilter').value;
+    renderTraeAccountViews();
+  });
+  $('#traeStatusFilter').addEventListener('change', () => {
+    state.trae.status = $('#traeStatusFilter').value;
+    renderTraeAccountViews();
+  });
+  $('#traeAccountChips').addEventListener('click', (event) => {
+    const chip = event.target.closest('.chip');
+    if (!chip) return;
+    state.trae.accountFilter = chip.dataset.filter;
+    $$('#traeAccountChips .chip').forEach((item) => item.classList.toggle('active', item === chip));
+    renderTraeAccountViews();
+  });
+  $('#traeAlertReset').addEventListener('click', () => {
+    state.trae.userId = '';
+    state.trae.status = '';
+    state.trae.accountFilter = 'all';
+    $('#traeUserFilter').value = '';
+    $('#traeStatusFilter').value = '';
+    $$('#traeAccountChips .chip').forEach((item) =>
+      item.classList.toggle('active', item.dataset.filter === 'all'));
+    renderTraeAccountViews();
+  });
+  $('#traeExportBtn').addEventListener('click', exportTrae);
 
   $('#userSearch').addEventListener('input', applyUserFilter);
   $('#userChips').addEventListener('click', (event) => {
@@ -3041,6 +3953,13 @@ function bindEvents() {
   $('#applyUsageBtn').addEventListener('click', () => {
     readUsageFilters();
     refreshView('usage');
+  });
+  $('#usageDailyMetric').addEventListener('click', (event) => {
+    const chip = event.target.closest('.chip[data-metric]');
+    if (!chip) return;
+    state.usage.metric = chip.dataset.metric;
+    $$('#usageDailyMetric .chip').forEach((item) => item.classList.toggle('active', item === chip));
+    renderUsageDaily();
   });
   $('#exportUsageBtn').addEventListener('click', exportUsage);
 
@@ -3110,9 +4029,10 @@ function bindEvents() {
 
   setInterval(() => {
     updateRefreshHint();
-    if (!document.hidden && state.view === 'overview' && !state.loading
-        && Date.now() - (state.lastLoaded.overview || 0) > 30000) {
-      refreshView('overview');
+    if (document.hidden || state.loadingViews[state.view]) return;
+    const staleAfter = state.view === 'overview' ? 30000 : state.view === 'trae' ? 60000 : 0;
+    if (staleAfter && Date.now() - (state.lastLoaded[state.view] || 0) > staleAfter) {
+      refreshView(state.view);
     }
   }, 5000);
 }
@@ -3120,11 +4040,22 @@ function bindEvents() {
 async function boot() {
   applyTheme(state.theme);
   bindEvents();
+  applyAdminIdentity();
   if (!state.token) {
     showLogin();
     return;
   }
   showApp();
+  try {
+    const me = await api('/me');
+    if (me && me.type === 'account' && me.username) {
+      state.adminUser = me.username;
+      localStorage.setItem('cc_admin_user', me.username);
+      applyAdminIdentity();
+    }
+  } catch (error) {
+    if (error.status === 401) return;
+  }
   try {
     await afterLogin();
   } catch (error) {

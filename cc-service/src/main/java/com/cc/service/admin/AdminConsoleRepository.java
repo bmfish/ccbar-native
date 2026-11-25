@@ -1,5 +1,6 @@
 package com.cc.service.admin;
 
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.List;
@@ -112,7 +113,7 @@ public class AdminConsoleRepository {
 
     public List<TraeQuotaRow> traeQuotas(long todayStartEpoch, long nowEpoch) {
         return jdbcClient.sql("""
-                select q.user_id, u.username, q.account, q.slot,
+                select q.user_id, u.username, q.account, q.name, q.slot,
                        q.consumed_credits, q.total_credits, q.reported_at, q.updated_at,
                        coalesce((select sum(e.credits) from usage_event e
                           where e.user_id = q.user_id and e.account = q.account
@@ -127,6 +128,7 @@ public class AdminConsoleRepository {
                         rs.getLong("user_id"),
                         rs.getString("username"),
                         rs.getString("account"),
+                        rs.getString("name"),
                         rs.getObject("slot", Integer.class),
                         rs.getDouble("consumed_credits"),
                         rs.getDouble("total_credits"),
@@ -159,6 +161,212 @@ public class AdminConsoleRepository {
                         rs.getString("account"),
                         rs.getDouble("usage_credits"),
                         rs.getDouble("today_credits")))
+                .list();
+    }
+
+    /** Trae 账号在指定区间、近 7 天与近 30 天的积分汇总。 */
+    public List<TraeAccountUsageRow> traeAccountUsage(long sinceEpoch, long rangeStartEpoch,
+            long weekStartEpoch, long todayStartEpoch, long monthStartEpoch, long nowEpoch) {
+        return jdbcClient.sql("""
+                select e.user_id, u.username, e.account,
+                       coalesce(sum(case when e.created_at >= :rangeStart then e.credits else 0 end), 0)
+                           as range_credits,
+                       coalesce(sum(case when e.created_at >= :weekStart then e.credits else 0 end), 0)
+                           as week_credits,
+                       coalesce(sum(case when e.created_at >= :todayStart and e.created_at < :now
+                                         then e.credits else 0 end), 0) as today_credits,
+                       coalesce(sum(case when e.created_at >= :monthStart then e.credits else 0 end), 0)
+                           as month_credits,
+                       max(e.created_at) as last_usage_at
+                from usage_event e
+                join app_user u on u.id = e.user_id
+                where e.source = 'trae'
+                  and coalesce(e.account, '') <> ''
+                  and e.created_at >= :since and e.created_at < :now
+                group by e.user_id, u.username, e.account
+                """)
+                .param("since", sinceEpoch)
+                .param("rangeStart", rangeStartEpoch)
+                .param("weekStart", weekStartEpoch)
+                .param("todayStart", todayStartEpoch)
+                .param("monthStart", monthStartEpoch)
+                .param("now", nowEpoch)
+                .query((rs, rowNum) -> new TraeAccountUsageRow(
+                        rs.getLong("user_id"),
+                        rs.getString("username"),
+                        rs.getString("account"),
+                        rs.getDouble("range_credits"),
+                        rs.getDouble("week_credits"),
+                        rs.getDouble("today_credits"),
+                        rs.getDouble("month_credits"),
+                        epochDateTime(rs.getObject("last_usage_at", Long.class))))
+                .list();
+    }
+
+    /** Trae 每日各账号积分消耗，用于趋势图。 */
+    public List<TraeDailyAccountRow> traeDailyByAccount(long fromEpoch, long toEpoch) {
+        return jdbcClient.sql("""
+                select e.user_id,
+                       to_char(to_timestamp(e.created_at) at time zone 'Asia/Shanghai', 'YYYY-MM-DD') as day,
+                       e.account,
+                       coalesce(sum(e.credits), 0) as credits
+                from usage_event e
+                where e.source = 'trae'
+                  and coalesce(e.account, '') <> ''
+                  and e.created_at >= :from and e.created_at < :to
+                group by e.user_id,
+                         to_char(to_timestamp(e.created_at) at time zone 'Asia/Shanghai', 'YYYY-MM-DD'),
+                         e.account
+                order by 2, 1, 3
+                """)
+                .param("from", fromEpoch)
+                .param("to", toEpoch)
+                .query((rs, rowNum) -> new TraeDailyAccountRow(
+                        rs.getLong("user_id"),
+                        rs.getString("day"),
+                        rs.getString("account"),
+                        rs.getDouble("credits")))
+                .list();
+    }
+
+    /** Trae 今日每小时各账号积分消耗，用于「今日」趋势。 */
+    public List<TraeHourAccountRow> traeHourlyByAccount(long fromEpoch, long toEpoch) {
+        return jdbcClient.sql("""
+                select e.user_id,
+                       extract(hour from to_timestamp(e.created_at) at time zone 'Asia/Shanghai')::int as hour,
+                       e.account,
+                       coalesce(sum(e.credits), 0) as credits
+                from usage_event e
+                where e.source = 'trae'
+                  and coalesce(e.account, '') <> ''
+                  and e.created_at >= :from and e.created_at < :to
+                group by e.user_id,
+                         extract(hour from to_timestamp(e.created_at) at time zone 'Asia/Shanghai'),
+                         e.account
+                order by 2, 1, 3
+                """)
+                .param("from", fromEpoch)
+                .param("to", toEpoch)
+                .query((rs, rowNum) -> new TraeHourAccountRow(
+                        rs.getLong("user_id"),
+                        rs.getInt("hour"),
+                        rs.getString("account"),
+                        rs.getDouble("credits")))
+                .list();
+    }
+
+    /** 单个 Trae 账号按天汇总，用于账号详情。 */
+    public List<TraeDayUsageRow> traeAccountDailyUsage(long userId, String account, long fromEpoch, long toEpoch) {
+        return jdbcClient.sql("""
+                select to_char(to_timestamp(e.created_at) at time zone 'Asia/Shanghai', 'YYYY-MM-DD') as day,
+                       coalesce(sum(e.credits), 0) as credits,
+                       coalesce(sum(e.input_tokens + e.output_tokens + e.cache_read_tokens
+                                    + e.cache_creation_tokens), 0) as tokens,
+                       count(*) as events
+                from usage_event e
+                where e.user_id = :userId and e.source = 'trae'
+                  and coalesce(e.account, '') = :account
+                  and e.created_at >= :from and e.created_at < :to
+                group by 1
+                order by 1
+                """)
+                .param("userId", userId)
+                .param("account", account == null ? "" : account)
+                .param("from", fromEpoch)
+                .param("to", toEpoch)
+                .query((rs, rowNum) -> new TraeDayUsageRow(
+                        rs.getString("day"),
+                        rs.getDouble("credits"),
+                        rs.getLong("tokens"),
+                        rs.getLong("events")))
+                .list();
+    }
+
+    public List<ModelAgg> traeAccountModels(long userId, String account, long fromEpoch, long toEpoch, int limit) {
+        return jdbcClient.sql("""
+                select coalesce(e.model, '') as model,
+                       count(*) as events,
+                       coalesce(sum(e.input_tokens + e.output_tokens + e.cache_read_tokens
+                                    + e.cache_creation_tokens), 0) as tokens,
+                       coalesce(sum(e.credits), 0) as credits
+                from usage_event e
+                where e.user_id = :userId and e.source = 'trae'
+                  and coalesce(e.account, '') = :account
+                  and e.created_at >= :from and e.created_at < :to
+                  and coalesce(e.model, '') <> ''
+                group by 1
+                order by credits desc, tokens desc, events desc
+                limit :limit
+                """)
+                .param("userId", userId)
+                .param("account", account == null ? "" : account)
+                .param("from", fromEpoch)
+                .param("to", toEpoch)
+                .param("limit", limit)
+                .query((rs, rowNum) -> new ModelAgg(
+                        rs.getString("model"),
+                        rs.getLong("events"),
+                        rs.getLong("tokens"),
+                        rs.getDouble("credits")))
+                .list();
+    }
+
+    public List<UsageRow> traeAccountRecentEvents(long userId, String account, int limit) {
+        return jdbcClient.sql("select " + USAGE_COLUMNS + """
+                from usage_event e join app_user u on u.id = e.user_id
+                where e.user_id = :userId and e.source = 'trae'
+                  and coalesce(e.account, '') = :account
+                order by e.created_at desc
+                limit :limit
+                """)
+                .param("userId", userId)
+                .param("account", account == null ? "" : account)
+                .param("limit", limit)
+                .query(USAGE_MAPPER)
+                .list();
+    }
+
+    public List<TraeQuotaPointRow> traeQuotaHistory(long userId, String account, long fromEpoch, long toEpoch) {
+        return jdbcClient.sql("""
+                select snapshot_date::text as day, consumed_credits, total_credits, reported_at
+                from trae_quota_snapshot
+                where user_id = :userId and account = :account
+                  and snapshot_date >= (to_timestamp(:from) at time zone 'Asia/Shanghai')::date
+                  and snapshot_date <= (to_timestamp(:to) at time zone 'Asia/Shanghai')::date
+                order by snapshot_date
+                """)
+                .param("userId", userId)
+                .param("account", account == null ? "" : account)
+                .param("from", fromEpoch)
+                .param("to", toEpoch)
+                .query((rs, rowNum) -> new TraeQuotaPointRow(
+                        rs.getString("day"),
+                        rs.getDouble("consumed_credits"),
+                        rs.getDouble("total_credits"),
+                        rs.getObject("reported_at", OffsetDateTime.class)))
+                .list();
+    }
+
+    /** 用量分析：按天、按来源聚合 Token 与积分。 */
+    public List<DaySourceUsageRow> usageDailyBySource(long fromEpoch, long toEpoch,
+            Long userId, String source, String model) {
+        return jdbcClient.sql("""
+                select to_char(to_timestamp(e.created_at) at time zone 'Asia/Shanghai', 'YYYY-MM-DD') as day,
+                       e.source,
+                       coalesce(sum(e.input_tokens + e.output_tokens + e.cache_read_tokens
+                                    + e.cache_creation_tokens), 0) as tokens,
+                       coalesce(sum(e.credits), 0) as credits
+                from usage_event e
+                """ + usageWhere(userId, source, model) + """
+                group by 1, e.source
+                order by 1, e.source
+                """)
+                .params(usageParams(fromEpoch, toEpoch, userId, source, model))
+                .query((rs, rowNum) -> new DaySourceUsageRow(
+                        rs.getString("day"),
+                        rs.getString("source"),
+                        rs.getLong("tokens"),
+                        rs.getDouble("credits")))
                 .list();
     }
 
@@ -573,6 +781,10 @@ public class AdminConsoleRepository {
         return values.isEmpty() ? null : values.get(0);
     }
 
+    private static OffsetDateTime epochDateTime(Long epochSeconds) {
+        return epochSeconds == null ? null : Instant.ofEpochSecond(epochSeconds).atZone(AdminTimes.ZONE).toOffsetDateTime();
+    }
+
     private static final org.springframework.jdbc.core.RowMapper<AdminUserRow> USER_MAPPER =
             (rs, rowNum) -> new AdminUserRow(
                     rs.getLong("id"),
@@ -643,6 +855,7 @@ public class AdminConsoleRepository {
             long userId,
             String username,
             String account,
+            String name,
             Integer slot,
             double consumed,
             double total,
@@ -657,6 +870,32 @@ public class AdminConsoleRepository {
             String account,
             double usageCredits,
             double todayCredits) {
+    }
+
+    public record TraeAccountUsageRow(
+            long userId,
+            String username,
+            String account,
+            double rangeCredits,
+            double weekCredits,
+            double todayCredits,
+            double monthCredits,
+            OffsetDateTime lastUsageAt) {
+    }
+
+    public record TraeDailyAccountRow(long userId, String day, String account, double credits) {
+    }
+
+    public record TraeHourAccountRow(long userId, int hour, String account, double credits) {
+    }
+
+    public record TraeDayUsageRow(String day, double credits, long tokens, long events) {
+    }
+
+    public record TraeQuotaPointRow(String day, double consumed, double total, OffsetDateTime reportedAt) {
+    }
+
+    public record DaySourceUsageRow(String day, String source, long tokens, double credits) {
     }
 
     public record ModelAgg(String model, long events, long tokens, double credits) {
