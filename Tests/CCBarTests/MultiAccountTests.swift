@@ -125,4 +125,48 @@ final class MultiAccountTests: XCTestCase {
         store.metaSet("trae_auth", value: "")
         XCTAssertEqual(store.scalarInt("SELECT COUNT(*) FROM usage_log WHERE source='trae'"), 1)
     }
+
+    // MARK: 积分账单快照 / 缓存重置
+
+    func testQuotaSnapshotsUsePerUIDTimestamp() {
+        store.metaSet("trae_uid", value: "u1")
+        store.metaSet("trae_uid_2", value: "u2")
+        store.metaSet("trae_ent_u1", value: "100|500")
+        store.metaSet("trae_ent_u2", value: "50|300")
+        store.metaSet("trae_ent_at_u1", value: "111")
+        store.metaSet("trae_ent_at_u2", value: "222")
+        let snapshots = store.traeQuotaSnapshots()
+        XCTAssertEqual(snapshots.count, 2)
+        XCTAssertEqual(snapshots.first(where: { $0.uid == "u1" })?.updatedAt, 111)
+        XCTAssertEqual(snapshots.first(where: { $0.uid == "u2" })?.updatedAt, 222)
+    }
+
+    func testQuotaSnapshotsDeduplicateSameUID() {
+        store.metaSet("trae_uid", value: "same")
+        store.metaSet("trae_uid_2", value: "same")
+        store.metaSet("trae_ent_same", value: "1|2")
+        XCTAssertEqual(store.traeQuotaSnapshots().count, 1)
+    }
+
+    func testResetTraeQuotaCacheClearsSnapshots() {
+        store.metaSet("trae_uid", value: "u1")
+        store.metaSet("trae_ent_u1", value: "1|2")
+        store.metaSet("trae_ent_at_u1", value: "3")
+        store.resetTraeQuotaCache()
+        XCTAssertTrue(store.traeQuotaSnapshots().isEmpty)
+        XCTAssertEqual(store.metaGet("trae_uid"), "u1")
+    }
+
+    func testQuotaSwapReasonDetectsIdenticalBalances() {
+        let same: [(slot: Int, uid: String, consumed: Double, total: Double, updatedAt: Int64)] = [
+            (slot: 1, uid: "u1", consumed: 100, total: 500, updatedAt: 1),
+            (slot: 2, uid: "u2", consumed: 100, total: 500, updatedAt: 1),
+        ]
+        XCTAssertNotNil(UsageSync.quotaSwapReason(same))
+        let zero: [(slot: Int, uid: String, consumed: Double, total: Double, updatedAt: Int64)] = [
+            (slot: 1, uid: "u1", consumed: 0, total: 500, updatedAt: 1),
+            (slot: 2, uid: "u2", consumed: 0, total: 500, updatedAt: 1),
+        ]
+        XCTAssertNil(UsageSync.quotaSwapReason(zero))
+    }
 }

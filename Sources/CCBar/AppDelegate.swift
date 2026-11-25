@@ -201,6 +201,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
             (L("近7天用量"), #selector(openDetail)),
             (L("历史总量"), #selector(openAllTimeDetail)),
             (L("复制今日统计"), #selector(copyStats)),
+            (L("重置积分账单缓存"), #selector(resetTraeQuotaCache)),
             (L("设置"), #selector(openSettings)),
             (L("退出"), #selector(quit)),
         ]
@@ -928,6 +929,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         alert.messageText = L("已复制到剪贴板")
         alert.informativeText = L("统计数据已复制，可直接粘贴使用")
         alert.runModal()
+    }
+
+    @objc func resetTraeQuotaCache() {
+        store.resetTraeQuotaCache()
+        sendNotification(title: L("积分账单缓存已重置"),
+                         body: L("下次同步会重新拉取 Trae 官方账单"))
     }
 
     /// source 标识 → 界面显示名（历史聚合行归入 cc-switch）
