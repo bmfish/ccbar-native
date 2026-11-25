@@ -893,6 +893,10 @@ final class StatsStore: @unchecked Sendable {
             metaSet("trae_ent_packs_\(uid)", value: json)
         }
         TraeSync.entPacksCache.removeAll()
+        for (uid, name) in TraeSync.screenNameCache where !uid.isEmpty {
+            metaSet("trae_name_\(uid)", value: name)
+        }
+        TraeSync.screenNameCache.removeAll()
         metaSet(authKey, value: Self.traeAuthToMeta(newAuth))
         // uid 认领：优先用本轮实际使用的 JWT 解出的账号；槽位记忆只作 JWT 解不出时的兜底，
         // 避免把 A 的账单/用量写到 B 名下（换号后旧绑定未清的历史问题）。
@@ -1317,10 +1321,10 @@ final class StatsStore: @unchecked Sendable {
     }
 
     /// 云同步用：Trae 各账号官方账单快照（含 uid 与账单拉取时间）。
-    func traeQuotaSnapshots() -> [(slot: Int, uid: String, consumed: Double, total: Double, updatedAt: Int64)] {
+    func traeQuotaSnapshots() -> [(slot: Int, uid: String, name: String, consumed: Double, total: Double, updatedAt: Int64)] {
         lock.lock(); defer { lock.unlock() }
         guard handle != nil else { return [] }
-        var result: [(slot: Int, uid: String, consumed: Double, total: Double, updatedAt: Int64)] = []
+        var result: [(slot: Int, uid: String, name: String, consumed: Double, total: Double, updatedAt: Int64)] = []
         var seen = Set<String>()
         for (slot, uidKey) in [(1, "trae_uid"), (2, "trae_uid_2")] {
             let uid = metaGet(uidKey)
@@ -1333,7 +1337,8 @@ final class StatsStore: @unchecked Sendable {
                 let legacyKey = slot == 2 ? "trae_ent_at_2" : "trae_ent_at"
                 updatedAt = Int64(Double(metaGet(legacyKey)) ?? 0)
             }
-            result.append((slot: slot, uid: uid, consumed: c, total: t, updatedAt: updatedAt))
+            result.append((slot: slot, uid: uid, name: metaGet("trae_name_\(uid)"),
+                           consumed: c, total: t, updatedAt: updatedAt))
         }
         return result
     }
@@ -1342,7 +1347,7 @@ final class StatsStore: @unchecked Sendable {
     func resetTraeQuotaCache() {
         lock.lock(); defer { lock.unlock() }
         guard handle != nil else { return }
-        exec("DELETE FROM meta WHERE key LIKE 'trae_ent_%' OR key IN ('trae_ent','trae_ent_at','trae_ent_at_2')")
+        exec("DELETE FROM meta WHERE key LIKE 'trae_ent_%' OR key LIKE 'trae_name_%' OR key IN ('trae_ent','trae_ent_at','trae_ent_at_2')")
         ccLog("Trae 积分账单缓存已重置")
     }
 
@@ -1350,7 +1355,7 @@ final class StatsStore: @unchecked Sendable {
     private func removeEntSnapshot(_ uid: String) {
         guard !uid.isEmpty else { return }
         let escaped = uid.replacingOccurrences(of: "'", with: "''")
-        exec("DELETE FROM meta WHERE key IN ('trae_ent_\(escaped)', 'trae_ent_at_\(escaped)')")
+        exec("DELETE FROM meta WHERE key IN ('trae_ent_\(escaped)', 'trae_ent_at_\(escaped)', 'trae_name_\(escaped)')")
     }
 
     static func traeAuthFromMeta(_ raw: String) -> TraeAuth {

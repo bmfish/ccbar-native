@@ -135,10 +135,12 @@ final class MultiAccountTests: XCTestCase {
         store.metaSet("trae_ent_u2", value: "50|300")
         store.metaSet("trae_ent_at_u1", value: "111")
         store.metaSet("trae_ent_at_u2", value: "222")
+        store.metaSet("trae_name_u1", value: "小明")
         let snapshots = store.traeQuotaSnapshots()
         XCTAssertEqual(snapshots.count, 2)
         XCTAssertEqual(snapshots.first(where: { $0.uid == "u1" })?.updatedAt, 111)
         XCTAssertEqual(snapshots.first(where: { $0.uid == "u2" })?.updatedAt, 222)
+        XCTAssertEqual(snapshots.first(where: { $0.uid == "u1" })?.name, "小明")
     }
 
     func testQuotaSnapshotsDeduplicateSameUID() {
@@ -158,14 +160,14 @@ final class MultiAccountTests: XCTestCase {
     }
 
     func testQuotaSwapReasonDetectsIdenticalBalances() {
-        let same: [(slot: Int, uid: String, consumed: Double, total: Double, updatedAt: Int64)] = [
-            (slot: 1, uid: "u1", consumed: 100, total: 500, updatedAt: 1),
-            (slot: 2, uid: "u2", consumed: 100, total: 500, updatedAt: 1),
+        let same: [(slot: Int, uid: String, name: String, consumed: Double, total: Double, updatedAt: Int64)] = [
+            (slot: 1, uid: "u1", name: "", consumed: 100, total: 500, updatedAt: 1),
+            (slot: 2, uid: "u2", name: "", consumed: 100, total: 500, updatedAt: 1),
         ]
         XCTAssertNotNil(UsageSync.quotaSwapReason(same))
-        let zero: [(slot: Int, uid: String, consumed: Double, total: Double, updatedAt: Int64)] = [
-            (slot: 1, uid: "u1", consumed: 0, total: 500, updatedAt: 1),
-            (slot: 2, uid: "u2", consumed: 0, total: 500, updatedAt: 1),
+        let zero: [(slot: Int, uid: String, name: String, consumed: Double, total: Double, updatedAt: Int64)] = [
+            (slot: 1, uid: "u1", name: "", consumed: 0, total: 500, updatedAt: 1),
+            (slot: 2, uid: "u2", name: "", consumed: 0, total: 500, updatedAt: 1),
         ]
         XCTAssertNil(UsageSync.quotaSwapReason(zero))
     }

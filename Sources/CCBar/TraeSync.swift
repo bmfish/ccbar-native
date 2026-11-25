@@ -23,6 +23,7 @@ enum TraeAPI {
     static let tokenPath = "/cloudide/api/v3/common/GetUserToken"
     static let usagePath = "/trae/api/v1/pay/query_user_usage_group_by_session"
     static let entUsagePath = "/trae/api/v2/pay/ide_user_ent_usage"
+    static let userInfoPath = "/cloudide/api/v3/trae/GetUserInfo"
 
     /// 拉取窗口：首次 90 天全量回填，之后水位 - 2 天回看
     static let firstFetchDays = 90
@@ -154,6 +155,9 @@ enum TraeSync {
     ///（fetchOutcome 无存储依赖，靠这个出口交还；键随下轮覆盖）
     nonisolated(unsafe) static var entPacksCache: [String: String] = [:]
 
+    /// 本轮 GetUserInfo 拉到的昵称（uid → ScreenName），由调用方入库 meta。
+    nonisolated(unsafe) static var screenNameCache: [String: String] = [:]
+
     /// 完整同步一次。auth 由调用方加载/保存（StatsStore 持锁读写 meta）。
     /// fetchEnt=false 时跳过积分账单（它 1 小时刷一次就够，减少无谓请求）。
     /// earlyStopBefore：数据水位（上轮完整成功拉到的最大 usage_time）- 重叠。
@@ -258,6 +262,11 @@ enum TraeSync {
                     TraeSync.entPacksCache[packUID] = json
                 }
             }
+        }
+        // 昵称与账单同频（1 小时）刷新；失败静默，不影响用量/账单主流程
+        if fetchEnt, let uid = TraeSync.jwtUID(jwt2), !uid.isEmpty {
+            let name = fetchScreenName(jwt: jwt2)
+            if !name.isEmpty { TraeSync.screenNameCache[uid] = name }
         }
         return .success(rows: rows, consumed: consumed, total: total, truncated: truncated)
     }
@@ -561,6 +570,25 @@ enum TraeSync {
             }
         }
         return nil
+    }
+
+    /// 拉账号昵称（GetUserInfo.ScreenName）。失败静默返回空。
+    /// 该接口鉴权头是 X-Cloudide-Token，不是 Authorization。
+    static func fetchScreenName(jwt: String) -> String {
+        guard !jwt.isEmpty else { return "" }
+        let (data, http, _, _) = post(
+            url: TraeAPI.base + TraeAPI.userInfoPath,
+            body: "{}",
+            timeout: 10,
+            extraHeaders: ["X-Cloudide-Token": jwt])
+        guard http == 200, let data,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = obj["Result"] as? [String: Any],
+              let name = result["ScreenName"] as? String else {
+            ccLog("Trae 昵称拉取失败: http=\(http ?? 0)")
+            return ""
+        }
+        return name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// 同步 POST（信号量等待，调用方在后台串行队列）。

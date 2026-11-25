@@ -245,6 +245,7 @@ enum UsageSync {
 
     private struct QuotaSnapshot: Encodable {
         let account: String
+        let name: String
         let slot: Int
         let consumed: Double
         let total: Double
@@ -274,6 +275,7 @@ enum UsageSync {
         let quotas = snapshots.map { snapshot in
             QuotaSnapshot(
                 account: snapshot.uid,
+                name: snapshot.name,
                 slot: snapshot.slot,
                 consumed: snapshot.consumed,
                 total: snapshot.total,
@@ -302,7 +304,7 @@ enum UsageSync {
 
     /// 多个不同账号的账单完全相同 → 疑似串号，跳过本轮上传（consumed=0 的新账号放行）。
     static func quotaSwapReason(
-        _ snapshots: [(slot: Int, uid: String, consumed: Double, total: Double, updatedAt: Int64)]
+        _ snapshots: [(slot: Int, uid: String, name: String, consumed: Double, total: Double, updatedAt: Int64)]
     ) -> String? {
         var byPair: [String: Set<String>] = [:]
         for snapshot in snapshots where snapshot.consumed > 0 {
