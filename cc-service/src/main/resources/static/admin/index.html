@@ -448,6 +448,12 @@
     .mini-stats { grid-template-columns: 1fr; }
     .toast { left: 14px; right: 14px; max-width: none; }
   }
+
+  /* 票据 */
+  .kpis.k5 { grid-template-columns: repeat(5, 1fr); }
+  @media (max-width: 1120px) {
+    .kpis.k5 { grid-template-columns: repeat(2, 1fr); }
+  }
 </style>
 </head>
 <body>
@@ -524,6 +530,15 @@
     <div class="nav-item" data-view="health">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.4 6.6a4.8 4.8 0 0 0-6.8 0L12 8.2l-1.6-1.6a4.8 4.8 0 1 0-6.8 6.8L12 21l8.4-7.6a4.8 4.8 0 0 0 0-6.8Z"/></svg>
       <span>健康管理</span>
+    </div>
+    <div class="nav-section">票据</div>
+    <div class="nav-item" data-view="travel">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="6" y="3.5" width="12" height="13" rx="3"/><path d="M6 10h12"/><circle cx="9.3" cy="13.3" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.7" cy="13.3" r="1.1" fill="currentColor" stroke="none"/><path d="M8.5 16.5 6 20.5M15.5 16.5 18 20.5M6 20.5h12"/></svg>
+      <span>旅行统计</span>
+    </div>
+    <div class="nav-item" data-view="tickets">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3.5 8A1.5 1.5 0 0 1 5 6.5h14A1.5 1.5 0 0 1 20.5 8v2.2a1.8 1.8 0 0 0 0 3.6V16a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 16v-2.2a1.8 1.8 0 0 0 0-3.6Z"/><path d="M12 7.2v1.6M12 11.2v1.6M12 15.2v1.6"/></svg>
+      <span>票据管理</span>
     </div>
     <div class="nav-section">运维</div>
     <div class="nav-item" data-view="push">
@@ -663,8 +678,8 @@
           </div>
           <div class="page-actions">
             <div class="chips" id="traeChips">
-              <button class="chip" data-days="1">今日</button>
-              <button class="chip active" data-days="7">7 天</button>
+              <button class="chip active" data-days="1">今日</button>
+              <button class="chip" data-days="7">7 天</button>
               <button class="chip" data-days="30">30 天</button>
             </div>
             <button class="btn" id="traeExportBtn">导出 CSV</button>
@@ -678,12 +693,12 @@
             <div class="foot" id="traeRemainingFoot">&nbsp;</div>
           </div>
           <div class="card kpi">
-            <div class="label">今日消耗</div>
+            <div class="label" id="traeTodayLabel">今日消耗</div>
             <div class="value" id="traeToday">—</div>
             <div class="foot" id="traeTodayFoot">&nbsp;</div>
           </div>
           <div class="card kpi">
-            <div class="label">7 日日均</div>
+            <div class="label" id="traeAvgLabel">7 日日均</div>
             <div class="value" id="traeAvg">—</div>
             <div class="foot" id="traeAvgFoot">&nbsp;</div>
           </div>
@@ -697,7 +712,7 @@
         <div class="grid-main trae-grid">
           <div class="card">
             <div class="card-head">
-              <h3>积分消耗 <span class="sub" id="traeTrendSub">近 7 天 · 按账号堆叠</span></h3>
+              <h3>积分消耗 <span class="sub" id="traeTrendSub">今日 · 每小时堆叠</span></h3>
             </div>
             <div class="chart-wrap" id="traeTrendChart"></div>
             <div class="legend" id="traeTrendLegend"></div>
@@ -747,7 +762,7 @@
                     <th>用户</th>
                     <th class="num">剩余 / 总额</th>
                     <th class="num">今日</th>
-                    <th class="num" id="traeRangeCol">近 7 天</th>
+                    <th class="num" id="traeRangeCol">今日</th>
                     <th class="num">日均</th>
                     <th class="num">预计可用</th>
                     <th>最后上报</th>
@@ -1053,6 +1068,151 @@
         </div>
       </section>
 
+      <!-- 旅行统计 -->
+      <section class="view" id="view-travel">
+        <div class="page-head">
+          <div>
+            <h2>旅行统计</h2>
+            <p>来自 12306 购票邮件的车票数据，候选票根在「票据管理」中确认</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn" data-goto="tickets">票据管理</button>
+          </div>
+        </div>
+
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-body" style="display:flex;gap:16px;flex-wrap:wrap;align-items:center" id="travelSyncBar">同步状态加载中…</div>
+        </div>
+
+        <div class="kpis k5">
+          <div class="card kpi focus">
+            <div class="label">总旅程</div>
+            <div class="value" id="travelTrips">—</div>
+            <div class="foot" id="travelTripsFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">途经车站</div>
+            <div class="value" id="travelStations">—</div>
+            <div class="foot">出发/到达去重</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">到访城市</div>
+            <div class="value" id="travelCities">—</div>
+            <div class="foot">城市去重</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">总里程 (km)</div>
+            <div class="value" id="travelKm">—</div>
+            <div class="foot" id="travelKmFoot">&nbsp;</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">总花费 (元)</div>
+            <div class="value" id="travelCost">—</div>
+            <div class="foot" id="travelCostFoot">&nbsp;</div>
+          </div>
+        </div>
+
+        <div class="grid-half">
+          <div class="card">
+            <div class="card-head"><h3>年度乘车次数</h3></div>
+            <div class="chart-wrap" id="travelYearlyChart"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>近 12 月乘车次数</h3></div>
+            <div class="chart-wrap" id="travelMonthlyChart"></div>
+          </div>
+        </div>
+
+        <div class="grid-half">
+          <div class="card">
+            <div class="card-head"><h3>出发时段分布 <span class="sub">8 档</span></h3></div>
+            <div class="chart-wrap" id="travelHoursChart"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>乘车之最</h3></div>
+            <div class="card-body" id="travelHighlights">加载中…</div>
+          </div>
+        </div>
+
+        <div class="grid-half">
+          <div class="card">
+            <div class="card-head"><h3>常走线路 TOP5</h3></div>
+            <div class="card-body"><div class="bar-list" id="travelTopRoutes"><span class="muted">加载中…</span></div></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>到访城市 TOP5</h3></div>
+            <div class="card-body"><div class="bar-list" id="travelTopCities"><span class="muted">加载中…</span></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 票据管理 -->
+      <section class="view" id="view-tickets">
+        <div class="page-head">
+          <div>
+            <h2>票据管理</h2>
+            <p>12306 邮件同步控制、候选票根确认与正式票根查询</p>
+          </div>
+        </div>
+
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-body" style="display:flex;gap:16px;flex-wrap:wrap;align-items:center" id="ticketSyncBar">同步状态加载中…</div>
+        </div>
+
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-head">
+            <h3>候选票根 <span class="sub" id="candidateSub">待确认</span></h3>
+            <div class="page-actions">
+              <div class="chips" id="candidateFilterChips">
+                <button class="chip active" data-cfilter="pending">待确认</button>
+                <button class="chip" data-cfilter="all">全部</button>
+              </div>
+              <button class="btn sm" id="importAllCandidatesBtn" disabled>全部导入</button>
+            </div>
+          </div>
+          <div class="card-body flush">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>乘车日</th><th>车次</th><th>区间</th><th>席别</th><th>车厢/座位</th><th class="num">票价</th><th>乘车人</th><th>抓取时间</th><th class="actions">操作</th></tr>
+                </thead>
+                <tbody id="candidateRows"><tr class="empty-row"><td colspan="9">加载中…</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>正式票根</h3>
+            <span class="sub" id="ticketTotalSub"></span>
+          </div>
+          <div class="card-body" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <input class="input" id="ticketQuery" placeholder="搜索车次 / 车站 / 乘车人" style="max-width:240px">
+            <select class="select" id="ticketStatus">
+              <option value="">全部状态</option>
+              <option value="normal">正常</option>
+              <option value="refunded">已退票</option>
+              <option value="changed">已改签</option>
+            </select>
+            <button class="btn" id="ticketSearchBtn">查询</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>乘车日</th><th>开车时刻</th><th>车次</th><th>出发 → 到达</th><th>车厢/座位</th><th>席别</th><th class="num">票价</th><th>乘车人</th><th>状态</th><th>时间</th></tr>
+              </thead>
+              <tbody id="ticketRows"><tr class="empty-row"><td colspan="10">加载中…</td></tr></tbody>
+            </table>
+          </div>
+          <div class="card-body" style="display:flex;justify-content:flex-end;gap:8px;align-items:center">
+            <button class="btn sm ghost" id="ticketsPrev">上一页</button>
+            <span class="meta" id="ticketsPageInfo"></span>
+            <button class="btn sm ghost" id="ticketsNext">下一页</button>
+          </div>
+        </div>
+      </section>
+
       <!-- 访问审计 -->
       <section class="view" id="view-audit">
         <div class="page-head">
@@ -1258,6 +1418,8 @@ const VIEW_META = {
   flow: ['流水明细', '按时间聚合的同步记录'],
   devices: ['设备管理', '所有登记设备与在线状态'],
   health: ['健康管理', '体重、体脂与身高记录'],
+  travel: ['旅行统计', '12306 邮件同步的车票数据'],
+  tickets: ['票据管理', '票根候选确认与同步控制'],
   push: ['推送管理', 'Bark 定时推送任务'],
   audit: ['访问审计', 'API 请求记录与访问统计'],
   system: ['系统状态', '服务健康与数据维护']
@@ -1274,11 +1436,14 @@ const state = {
   selectedUserId: null,
   userFilter: 'all',
   userSearch: '',
-  trae: { days: 7, userId: '', status: '', accountFilter: 'all', detailDays: 30 },
+  trae: { days: 1, userId: '', status: '', accountFilter: 'all', detailDays: 30 },
   traeData: null,
   usage: { days: 7, userId: '', source: '', model: '', metric: 'credits' },
   flow: { range: 'today', anchor: startOfToday(), userId: '', source: '', model: '' },
   health: { days: 30, kind: 'all' },
+  tickets: { query: '', status: '', page: 1, size: 50, candidateFilter: 'pending' },
+  travelSync: null,
+  travelSyncPollTimer: null,
   audit: { days: 7, page: 1, size: 20, method: '', statusClass: '', path: '' },
   hourlyMetric: 'credits',
   bucketCache: {},
@@ -1663,6 +1828,8 @@ const LOADERS = {
   flow: () => loadFlow(),
   devices: () => loadDevices(),
   health: () => loadHealth(),
+  travel: () => loadTravel(),
+  tickets: () => loadTickets(),
   push: () => loadPush(),
   audit: () => loadAudit(),
   system: () => loadSystem()
@@ -1704,7 +1871,7 @@ function updateRefreshHint() {
 }
 
 async function afterLogin() {
-  const results = await Promise.allSettled([loadOptions(), loadUsers()]);
+  const results = await Promise.allSettled([loadOptions()]);
   results.forEach((result) => {
     if (result.status === 'rejected' && result.reason.status !== 401) {
       toast(result.reason.message || '初始化失败', 'error');
@@ -2079,16 +2246,26 @@ async function loadTrae() {
 
 function renderTraeKpis(data) {
   const totals = data.totals;
+  const days = Number(data.days) || state.trae.days || 7;
   $('#traeRemaining').innerHTML = totals.quota > 0
     ? `${fmtCredits(totals.remaining)}<span class="unit">积分</span>` : '—';
   $('#traeRemainingFoot').textContent = totals.quota > 0
     ? `总额度 ${fmtCredits(totals.quota)} · 整体已用 ${fmtPct(totals.quota > 0 ? totals.consumed * 100 / totals.quota : 0)}`
     : '等待 ccbar 上报账单';
-  $('#traeToday').textContent = fmtCredits(totals.todayCredits);
-  $('#traeTodayFoot').textContent = `${fmtInt(totals.activeToday)} 个账号有消耗`;
-  $('#traeAvg').textContent = fmtCredits(totals.avgDaily);
-  $('#traeAvgFoot').textContent = totals.daysLeft != null
-    ? `按近 7 天速度可用 ${formatTraeDays(totals.daysLeft)}`
+  const rangeCredits = days === 1 ? totals.todayCredits : totals.rangeCredits;
+  const activeRange = (data.accounts || [])
+    .filter((account) => Number(account.rangeCredits || 0) > 0).length;
+  $('#traeTodayLabel').textContent = days === 1 ? '今日消耗' : `近 ${days} 天消耗`;
+  $('#traeToday').textContent = fmtCredits(rangeCredits);
+  $('#traeTodayFoot').textContent = `${fmtInt(activeRange)} 个账号有消耗`;
+  const rangeAvg = days === 1 ? totals.avgDaily : (totals.rangeCredits / days);
+  const daysLeft = days === 1
+    ? totals.daysLeft
+    : (rangeAvg > 0 && totals.quota > 0 ? totals.remaining / rangeAvg : null);
+  $('#traeAvgLabel').textContent = days === 1 ? '7 日日均' : `${days} 日日均`;
+  $('#traeAvg').textContent = fmtCredits(rangeAvg);
+  $('#traeAvgFoot').textContent = daysLeft != null
+    ? `${days === 1 ? '按近 7 天速度' : '按区间速度'}可用 ${formatTraeDays(daysLeft)}`
     : '暂无消耗速度';
   const alertElement = $('#traeAlertCount');
   alertElement.innerHTML = `${fmtInt(totals.alertCount)}<span class="unit">个</span>`;
@@ -3752,6 +3929,402 @@ function deletePushTask(task) {
   );
 }
 
+/* ---------- 票据 ---------- */
+
+function fmtYuan(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '—';
+  return '¥' + number.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function ticketStatusMeta(status) {
+  if (status === 'refunded') return { text: '已退票', pill: 'bad' };
+  if (status === 'changed') return { text: '已改签', pill: 'warn' };
+  return { text: '正常', pill: 'ok' };
+}
+
+function ticketDepartTime(value) {
+  if (!value) return '—';
+  const match = String(value).match(/(\d{1,2}:\d{2})/);
+  return match ? match[1] : String(value);
+}
+
+function renderTravelSyncBar(container, sync, withActions) {
+  if (!container) return;
+  const data = sync || {};
+  const emailText = data.credentialsConfigured === false
+    ? '<span class="muted">未配置 TRAVEL_MAIL_EMAIL / TRAVEL_MAIL_AUTH_CODE</span>'
+    : (data.email ? esc(data.email) : '<span class="muted">未配置</span>');
+  const rows = [
+    ['邮箱账号', emailText],
+    ['乘车人', data.owner ? esc(data.owner) : '<span class="muted">—</span>'],
+    ['上次同步', data.lastSyncAt ? esc(fmtDateTime(data.lastSyncAt)) : '<span class="muted">从未同步</span>'],
+    ['待确认候选', fmtInt(data.pendingCandidates || 0) + ' 条']
+  ];
+  let html = `<span class="pill ${data.running ? 'warn' : 'ok'}">${data.running ? '同步进行中' : '空闲'}</span>`;
+  html += rows.map(([key, value]) =>
+    `<span><span class="muted">${key}</span><b class="num" style="margin-left:5px">${value}</b></span>`).join('');
+  if (withActions) {
+    html += `<span class="page-actions" style="margin-left:auto">
+      <button class="btn primary sm" data-travel-sync="incremental" ${data.running ? 'disabled' : ''}>${data.running ? '同步中…' : '立即同步'}</button>
+      <button class="btn sm" data-travel-sync="full" ${data.running ? 'disabled' : ''}>全量重新同步</button>
+    </span>`;
+  } else {
+    html += `<button class="btn sm ghost" style="margin-left:auto" data-goto="tickets">去同步</button>`;
+  }
+  container.innerHTML = html;
+}
+
+function setTravelSyncButtons(running) {
+  $$('[data-travel-sync]').forEach((button) => {
+    button.disabled = running;
+    if (button.dataset.travelSync === 'incremental') {
+      button.textContent = running ? '同步中…' : '立即同步';
+    }
+  });
+}
+
+function startTravelSyncPolling() {
+  stopTravelSyncPolling();
+  const since = (state.travelSync && state.travelSync.lastSyncAt) || '';
+  state.travelSyncPollTimer = setInterval(async () => {
+    let status;
+    try {
+      status = await api('/travel/sync/status');
+    } catch (error) {
+      if (error.status === 401) stopTravelSyncPolling();
+      return;
+    }
+    state.travelSync = status;
+    renderTravelSyncBar($('#travelSyncBar'), status, false);
+    renderTravelSyncBar($('#ticketSyncBar'), status, true);
+    if (status.running) return;
+    stopTravelSyncPolling();
+    setTravelSyncButtons(false);
+    const finished = status.lastSyncAt && status.lastSyncAt !== since;
+    if (finished && status.lastResult) {
+      const summary = status.lastResult;
+      toast('同步完成（' + (summary.mode === 'full' ? '全量' : '增量') + '）：邮件 '
+        + fmtInt(summary.mailsFetched) + ' / 匹配 ' + fmtInt(summary.mailsMatched)
+        + ' · 新候选 ' + fmtInt(summary.candidatesCreated)
+        + ' · 导入 ' + fmtInt(summary.ticketsImported)
+        + ' · 退票 ' + fmtInt(summary.refunds)
+        + ' · 改签 ' + fmtInt(summary.changes));
+    }
+    if (finished && (state.view === 'travel' || state.view === 'tickets')) {
+      refreshView(state.view);
+    }
+  }, 4000);
+}
+
+function stopTravelSyncPolling() {
+  if (state.travelSyncPollTimer) {
+    clearInterval(state.travelSyncPollTimer);
+    state.travelSyncPollTimer = null;
+  }
+}
+
+async function travelSync(mode) {
+  if (state.travelSync && state.travelSync.running) {
+    toast('同步已在进行中', 'error');
+    return;
+  }
+  setTravelSyncButtons(true);
+  try {
+    const result = await api('/travel/sync', { method: 'POST', body: JSON.stringify({ mode }) });
+    toast((result && result.message) || '同步已启动');
+    startTravelSyncPolling();
+  } catch (error) {
+    if (error.status === 409) toast(error.message || '同步已在进行中', 'error');
+    else if (error.status !== 401) toast(error.message || '同步启动失败', 'error');
+    setTravelSyncButtons(false);
+  }
+}
+
+function renderTravelKpis(data) {
+  const totals = data.totals || {};
+  $('#travelTrips').textContent = fmtInt(totals.trips);
+  $('#travelTripsFoot').textContent = `今年 ${fmtInt(totals.thisYearCount)} 次 · 本月 ${fmtInt(totals.thisMonthCount)} 次`;
+  $('#travelStations').textContent = fmtInt(totals.stations);
+  $('#travelCities').textContent = fmtInt(totals.cities);
+  $('#travelKm').textContent = fmtInt(totals.totalKm);
+  $('#travelKmFoot').textContent = '累计行驶公里';
+  $('#travelCost').textContent = totals.totalCost == null ? '—' : fmtYuan(totals.totalCost);
+  $('#travelCostFoot').textContent = '累计票价支出';
+}
+
+function renderTravelBarChart(container, items, options = {}) {
+  if (!container) return;
+  const list = (items || []).map((item) => ({ label: String(item.label || ''), value: Number(item.count || 0) }));
+  if (!list.length || list.every((item) => item.value <= 0)) {
+    container.innerHTML = `<div class="chart-empty">${esc(options.emptyText || '暂无数据')}</div>`;
+    return;
+  }
+  const width = 560;
+  const height = 230;
+  const left = 40;
+  const right = 12;
+  const top = 18;
+  const bottom = 30;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const max = niceMax(Math.max(...list.map((item) => item.value)));
+  const groupWidth = plotWidth / list.length;
+  const barWidth = Math.min(42, groupWidth * 0.55);
+  const labelStep = list.length > 16 ? 3 : list.length > 10 ? 2 : 1;
+  const yOf = (value) => top + plotHeight - (value / max) * plotHeight;
+
+  let svg = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(options.ariaLabel || '柱状图')}">`;
+  for (let index = 0; index <= 4; index++) {
+    const value = max * index / 4;
+    const y = yOf(value);
+    svg += `<line x1="${left}" y1="${y.toFixed(1)}" x2="${width - right}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="1" ${index === 0 ? '' : 'stroke-dasharray="3 5"'}/>`;
+    svg += `<text x="${left - 8}" y="${(y + 3.5).toFixed(1)}" text-anchor="end" fill="var(--muted)" font-size="10">${fmtInt(Math.round(value))}</text>`;
+  }
+  list.forEach((item, index) => {
+    const center = left + groupWidth * index + groupWidth / 2;
+    if (item.value > 0) {
+      const barHeight = Math.max(2, (item.value / max) * plotHeight);
+      const yTop = top + plotHeight - barHeight;
+      svg += `<rect x="${(center - barWidth / 2).toFixed(1)}" y="${yTop.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="3" fill="var(--accent)" opacity="0.82"></rect>`;
+      if (list.length <= 16) {
+        svg += `<text x="${center.toFixed(1)}" y="${(yTop - 5).toFixed(1)}" text-anchor="middle" fill="var(--muted)" font-size="10">${fmtInt(item.value)}</text>`;
+      }
+    }
+    if (index % labelStep === 0 || index === list.length - 1) {
+      svg += `<text x="${center.toFixed(1)}" y="${height - 9}" text-anchor="middle" fill="var(--muted)" font-size="10">${esc(item.label)}</text>`;
+    }
+  });
+  svg += '</svg>';
+  container.innerHTML = svg;
+}
+
+function renderTravelCharts(data) {
+  renderTravelBarChart($('#travelYearlyChart'), data.yearly || [], { ariaLabel: '年度乘车次数', emptyText: '暂无乘车记录' });
+  renderTravelBarChart(
+    $('#travelMonthlyChart'),
+    (data.monthly || []).map((item) => ({ label: String(item.label || '').slice(2), count: item.count })),
+    { ariaLabel: '近 12 月乘车次数', emptyText: '近 12 月暂无乘车记录' }
+  );
+  renderTravelBarChart($('#travelHoursChart'), data.hours || [], { ariaLabel: '出发时段分布', emptyText: '暂无出发时段数据' });
+}
+
+function travelHighlightCard(title, item) {
+  if (!item || !item.trainNo) {
+    return `<div style="border:1px dashed var(--border);border-radius:10px;padding:10px 12px;min-width:0">
+      <div class="muted" style="font-size:11px">${esc(title)}</div>
+      <div class="muted" style="font-size:12.5px;margin-top:4px">暂无数据</div>
+    </div>`;
+  }
+  const route = `${item.fromStation || '—'} → ${item.toStation || '—'}`;
+  const details = [
+    item.rideDate ? esc(String(item.rideDate).slice(0, 10)) : '',
+    item.km ? fmtInt(item.km) + ' km' : '',
+    item.price != null ? fmtYuan(item.price) : ''
+  ].filter(Boolean).join(' · ');
+  return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;min-width:0">
+    <div class="muted" style="font-size:11px">${esc(title)}</div>
+    <div style="font-weight:600;font-size:13px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.trainNo)} ${esc(route)}</div>
+    <div class="muted" style="font-size:11.5px;margin-top:3px">${details || '—'}</div>
+  </div>`;
+}
+
+function renderTravelHighlights(highlights) {
+  const container = $('#travelHighlights');
+  if (!container) return;
+  const data = highlights || {};
+  container.innerHTML = `<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">
+    ${travelHighlightCard('最近一次', data.latest)}
+    ${travelHighlightCard('最早一张', data.earliest)}
+    ${travelHighlightCard('单程最远', data.longest)}
+    ${travelHighlightCard('最贵一张', data.priciest)}
+  </div>`;
+}
+
+function renderTravelTopRoutes(routes) {
+  const container = $('#travelTopRoutes');
+  if (!container) return;
+  if (!routes.length) {
+    container.innerHTML = '<div class="muted" style="font-size:12.5px">暂无线路数据</div>';
+    return;
+  }
+  const max = Math.max(...routes.map((route) => Number(route.count || 0)));
+  container.innerHTML = routes.map((route) => {
+    const percent = max > 0 ? Number(route.count || 0) * 100 / max : 0;
+    return `<div class="bar-row">
+      <div class="top">
+        <span class="name"><b>${esc(route.route || '—')}</b></span>
+        <span>${fmtInt(route.count)} 次${route.km ? ` · ${fmtInt(route.km)} km` : ''}</span>
+      </div>
+      <div class="track"><div class="fill" style="width:${Math.max(2, Math.min(100, percent)).toFixed(1)}%;background:var(--accent)"></div></div>
+    </div>`;
+  }).join('');
+}
+
+function renderTravelTopCities(cities) {
+  const container = $('#travelTopCities');
+  if (!container) return;
+  if (!cities.length) {
+    container.innerHTML = '<div class="muted" style="font-size:12.5px">暂无城市数据</div>';
+    return;
+  }
+  const max = Math.max(...cities.map((city) => Number(city.count || 0)));
+  container.innerHTML = cities.map((city) => {
+    const percent = max > 0 ? Number(city.count || 0) * 100 / max : 0;
+    return `<div class="bar-row">
+      <div class="top">
+        <span class="name"><b>${esc(city.city || '—')}</b></span>
+        <span>${fmtInt(city.count)} 次</span>
+      </div>
+      <div class="track"><div class="fill" style="width:${Math.max(2, Math.min(100, percent)).toFixed(1)}%;background:var(--series-1)"></div></div>
+    </div>`;
+  }).join('');
+}
+
+async function loadTravel() {
+  const [data, syncStatus] = await Promise.all([
+    api('/travel/overview'),
+    api('/travel/sync/status')
+  ]);
+  state.travelData = data;
+  if (syncStatus) state.travelSync = syncStatus;
+  renderTravelKpis(data);
+  renderTravelCharts(data);
+  renderTravelHighlights(data.highlights || {});
+  renderTravelTopRoutes(data.topRoutes || []);
+  renderTravelTopCities(data.topCities || []);
+  renderTravelSyncBar($('#travelSyncBar'), syncStatus, false);
+  if (syncStatus && syncStatus.running) startTravelSyncPolling();
+}
+
+function ticketQueryString() {
+  const params = new URLSearchParams({
+    page: String(state.tickets.page),
+    size: String(state.tickets.size)
+  });
+  if (state.tickets.query) params.set('query', state.tickets.query);
+  if (state.tickets.status) params.set('status', state.tickets.status);
+  return '/travel/tickets?' + params.toString();
+}
+
+async function loadTickets() {
+  const [ticketsData, candidatesData, syncStatus] = await Promise.all([
+    api(ticketQueryString()),
+    api('/travel/candidates'),
+    api('/travel/sync/status')
+  ]);
+  state.travelSync = syncStatus;
+  state.candidatesData = candidatesData;
+  renderTravelSyncBar($('#ticketSyncBar'), syncStatus, true);
+  if (syncStatus && syncStatus.running) startTravelSyncPolling();
+  renderCandidates(candidatesData);
+  renderTickets(ticketsData);
+}
+
+async function loadTicketsTable() {
+  const data = await api(ticketQueryString());
+  renderTickets(data);
+}
+
+function searchTickets() {
+  state.tickets.query = $('#ticketQuery').value.trim();
+  state.tickets.status = $('#ticketStatus').value;
+  state.tickets.page = 1;
+  loadTicketsTable().catch((error) => {
+    if (error.status !== 401) toast(error.message || '加载失败', 'error');
+  });
+}
+
+function renderCandidates(data) {
+  const tbody = $('#candidateRows');
+  if (!tbody) return;
+  const all = (data && data.candidates) || [];
+  const isPending = (item) => !item.imported && !item.dismissed;
+  const pending = data && data.pending != null
+    ? Number(data.pending)
+    : all.filter(isPending).length;
+  const showAll = state.tickets.candidateFilter === 'all';
+  const candidates = showAll ? all : all.filter(isPending);
+  $('#candidateSub').textContent = all.length
+    ? `共 ${fmtInt(data.total || all.length)} 条 · 待确认 ${fmtInt(pending)} 条`
+    : '待确认';
+  const importAllButton = $('#importAllCandidatesBtn');
+  if (importAllButton) {
+    importAllButton.disabled = !pending;
+    importAllButton.textContent = pending ? `全部导入 (${fmtInt(pending)})` : '全部导入';
+  }
+  if (!candidates.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">${showAll ? '暂无候选票根' : '暂无待确认候选'}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = candidates.map((item) => {
+    const seat = [item.coach, item.seat].filter(Boolean).join(' / ') || '—';
+    return `<tr${item.imported || item.dismissed ? ' style="opacity:.55"' : ''}>
+      <td>${esc(String(item.rideDate || '—').slice(0, 10))}</td>
+      <td><span class="mono">${esc(item.trainNo || '—')}</span></td>
+      <td>${esc(item.fromStation || '—')} → ${esc(item.toStation || '—')}</td>
+      <td>${esc(item.seatClass || '—')}</td>
+      <td>${esc(seat)}</td>
+      <td class="num">${fmtYuan(item.price)}</td>
+      <td>${esc(item.passenger || '—')}</td>
+      <td class="muted">${item.fetchedAt ? esc(fmtDateTime(item.fetchedAt)) : '—'}</td>
+      <td class="actions">${item.imported
+        ? '<span class="pill ok">已导入</span>'
+        : item.dismissed
+          ? '<span class="pill plain">已忽略</span>'
+          : `<button class="btn sm primary" data-candidate-action="import" data-id="${esc(item.id)}">导入</button>
+             <button class="btn sm ghost" data-candidate-action="dismiss" data-id="${esc(item.id)}">忽略</button>`}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function importCandidates(ids) {
+  const result = await api('/travel/candidates/import', { method: 'POST', body: JSON.stringify({ ids }) });
+  toast(`已导入 ${fmtInt((result && result.imported) || 0)} 张票根`);
+  await loadTickets();
+}
+
+async function dismissCandidates(ids) {
+  const result = await api('/travel/candidates/dismiss', { method: 'POST', body: JSON.stringify({ ids }) });
+  toast(`已忽略 ${fmtInt((result && result.dismissed) || 0)} 条候选`);
+  await loadTickets();
+}
+
+function renderTickets(data) {
+  const tbody = $('#ticketRows');
+  if (!tbody) return;
+  const tickets = (data && data.tickets) || [];
+  const total = Number((data && data.total) || 0);
+  $('#ticketTotalSub').textContent = total ? `共 ${fmtInt(total)} 条` : '';
+  if (!tickets.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">没有匹配的票根</td></tr>';
+  } else {
+    tbody.innerHTML = tickets.map((item) => {
+      const status = ticketStatusMeta(item.status);
+      const seat = [item.coach, item.seat].filter(Boolean).join(' / ') || '—';
+      return `<tr>
+        <td>${esc(String(item.rideDate || '—').slice(0, 10))}</td>
+        <td class="num">${esc(ticketDepartTime(item.departTime))}</td>
+        <td><span class="mono">${esc(item.trainNo || '—')}</span></td>
+        <td>${esc(item.fromStation || '—')} → ${esc(item.toStation || '—')}</td>
+        <td>${esc(seat)}</td>
+        <td>${esc(item.seatClass || '—')}</td>
+        <td class="num">${fmtYuan(item.price)}</td>
+        <td>${esc(item.passenger || '—')}</td>
+        <td><span class="pill ${status.pill}">${status.text}</span></td>
+        <td class="muted">${item.createdAt ? esc(fmtDateTime(item.createdAt)) : '—'}</td>
+      </tr>`;
+    }).join('');
+  }
+  const size = Number((data && data.size) || state.tickets.size) || state.tickets.size;
+  const pages = Math.max(1, Math.ceil(total / size));
+  state.tickets.page = Number((data && data.page) || state.tickets.page);
+  $('#ticketsPageInfo').textContent = `第 ${state.tickets.page} / ${pages} 页`;
+  $('#ticketsPrev').disabled = state.tickets.page <= 1;
+  $('#ticketsNext').disabled = state.tickets.page >= pages;
+}
+
 /* ---------- 访问审计 ---------- */
 
 function auditStatusPill(status) {
@@ -4025,6 +4598,58 @@ function bindEvents() {
     else if (button.dataset.pushAction === 'edit') openPushEditor(task);
     else if (button.dataset.pushAction === 'toggle') togglePushTask(task);
     else if (button.dataset.pushAction === 'delete') deletePushTask(task);
+  });
+
+  $('#ticketSearchBtn').addEventListener('click', searchTickets);
+  $('#ticketQuery').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') searchTickets();
+  });
+  $('#ticketStatus').addEventListener('change', searchTickets);
+  $('#ticketsPrev').addEventListener('click', () => {
+    if (state.tickets.page <= 1) return;
+    state.tickets.page -= 1;
+    loadTicketsTable().catch((error) => {
+      if (error.status !== 401) toast(error.message || '加载失败', 'error');
+    });
+  });
+  $('#ticketsNext').addEventListener('click', () => {
+    state.tickets.page += 1;
+    loadTicketsTable().catch((error) => {
+      if (error.status !== 401) toast(error.message || '加载失败', 'error');
+    });
+  });
+  $('#candidateRows').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-candidate-action]');
+    if (!button) return;
+    const action = button.dataset.candidateAction === 'import' ? importCandidates : dismissCandidates;
+    action([button.dataset.id]).catch((error) => {
+      if (error.status !== 401) toast(error.message || '操作失败', 'error');
+    });
+  });
+  $('#importAllCandidatesBtn').addEventListener('click', () => {
+    const ids = ((state.candidatesData && state.candidatesData.candidates) || [])
+      .filter((item) => !item.imported)
+      .map((item) => item.id);
+    if (!ids.length) return;
+    importCandidates(ids).catch((error) => {
+      if (error.status !== 401) toast(error.message || '操作失败', 'error');
+    });
+  });
+  $('#candidateFilterChips').addEventListener('click', (event) => {
+    const chip = event.target.closest('.chip');
+    if (!chip) return;
+    state.tickets.candidateFilter = chip.dataset.cfilter === 'all' ? 'all' : 'pending';
+    $$('#candidateFilterChips .chip').forEach((item) => item.classList.toggle('active', item === chip));
+    renderCandidates(state.candidatesData);
+  });
+  document.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-travel-sync]');
+    if (!button) return;
+    if (button.dataset.travelSync === 'full') {
+      confirmAction('全量重新同步', '全量同步会重新拉取并解析全部历史邮件，耗时较长，确定继续吗？', () => travelSync('full'), '开始同步', false);
+    } else {
+      travelSync('incremental');
+    }
   });
 
   setInterval(() => {
