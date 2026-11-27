@@ -92,6 +92,33 @@ public class PushService {
         }
     }
 
+    /**
+     * 事件式推送（如新票根提醒）：直接发往所有启用任务的 Bark 地址（去重），
+     * 不占用任务调度、不写任务的 lastSentAt。返回成功发送的地址数。
+     */
+    public synchronized int sendEventNotification(String title, String body, String group) {
+        Set<String> urls = repository.findEnabled().stream()
+                .map(PushTask::barkUrl)
+                .filter(StringUtils::hasText)
+                .map(String::trim)
+                .collect(Collectors.toSet());
+        if (urls.isEmpty()) {
+            log.info("事件推送「{}」跳过：没有启用的推送任务", title);
+            return 0;
+        }
+        int sent = 0;
+        for (String url : urls) {
+            try {
+                barkClient.sendToUrl(url, title, body, group);
+                sent++;
+            } catch (Exception exception) {
+                log.warn("事件推送「{}」发送失败: {}", title, messageOf(exception));
+            }
+        }
+        log.info("事件推送「{}」已发送 {}/{} 个设备", title, sent, urls.size());
+        return sent;
+    }
+
     static boolean isDue(PushTask task, OffsetDateTime now) {
         if (!task.enabled() || !StringUtils.hasText(task.barkUrl())) {
             return false;

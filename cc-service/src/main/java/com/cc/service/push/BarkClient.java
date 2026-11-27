@@ -28,7 +28,12 @@ public class BarkClient {
     }
 
     public void send(PushTask task, String message) {
-        URI uri = buildUri(task, message);
+        sendToUrl(task.barkUrl(), task.title(), message, task.groupName());
+    }
+
+    /** 事件式推送：直接按 Bark 地址发送，不经过推送任务调度。 */
+    public void sendToUrl(String barkUrl, String title, String message, String group) {
+        URI uri = buildUri(barkUrl, title, message, group);
         try {
             String response = client.get().uri(uri).retrieve().body(String.class);
             if (response == null || response.isBlank()) {
@@ -48,15 +53,15 @@ public class BarkClient {
         }
     }
 
-    private URI buildUri(PushTask task, String message) {
-        String base = task.barkUrl().trim();
+    private URI buildUri(String barkUrl, String title, String message, String group) {
+        String base = barkUrl.trim();
         while (base.endsWith("/")) {
             base = base.substring(0, base.length() - 1);
         }
         var builder = UriComponentsBuilder.fromUriString(base)
-                .pathSegment(task.title(), message);
-        if (StringUtils.hasText(task.groupName())) {
-            builder.queryParam("group", task.groupName());
+                .pathSegment(title, message);
+        if (StringUtils.hasText(group)) {
+            builder.queryParam("group", group);
         }
         return builder.build().encode().toUri();
     }

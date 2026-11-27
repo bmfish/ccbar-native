@@ -32,9 +32,9 @@ app:
     # 12306 邮件同步（高铁笔记移植）；enabled=false 时不做任何同步
     enabled: ${TRAVEL_SYNC_ENABLED:false}
     # 定时检查间隔（毫秒），实际同步受 min-interval-minutes 节流
-    check-interval-ms: ${TRAVEL_CHECK_INTERVAL_MS:300000}
-    # 距上次成功同步不足该分钟数则跳过（对应 iOS 端 10 分钟节流）
-    min-interval-minutes: ${TRAVEL_MIN_INTERVAL_MINUTES:10}
+    check-interval-ms: ${TRAVEL_CHECK_INTERVAL_MS:1800000}
+    # 距上次成功同步不足该分钟数则跳过自动同步
+    min-interval-minutes: ${TRAVEL_MIN_INTERVAL_MINUTES:30}
     mail:
       # QQ 邮箱 IMAP；填 127.0.0.1 或 8025 端口时自动走明文（联调用 scripts/mock_imap.py）
       host: ${TRAVEL_MAIL_HOST:imap.qq.com}

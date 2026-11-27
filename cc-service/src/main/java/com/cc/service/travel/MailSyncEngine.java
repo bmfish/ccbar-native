@@ -26,6 +26,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import com.cc.service.admin.AdminTimes;
+import com.cc.service.push.PushService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.mail.Address;
@@ -96,6 +97,7 @@ public class MailSyncEngine {
 
     private final TravelRepository repository;
     private final ObjectMapper objectMapper;
+    private final PushService pushService;
 
     private final String host;
     private final int port;
@@ -111,6 +113,7 @@ public class MailSyncEngine {
     public MailSyncEngine(
             TravelRepository repository,
             ObjectMapper objectMapper,
+            PushService pushService,
             @Value("${app.travel.mail.host:imap.qq.com}") String host,
             @Value("${app.travel.mail.port:993}") int port,
             @Value("${app.travel.mail.email:}") String email,
@@ -118,9 +121,10 @@ public class MailSyncEngine {
             @Value("${app.travel.mail.owner:}") String owner,
             @Value("${app.travel.fetch.batch-size:20}") int batchSize,
             @Value("${app.travel.fetch.timeout-ms:90000}") int timeoutMs,
-            @Value("${app.travel.min-interval-minutes:10}") int minIntervalMinutes) {
+            @Value("${app.travel.min-interval-minutes:30}") int minIntervalMinutes) {
         this.repository = repository;
         this.objectMapper = objectMapper;
+        this.pushService = pushService;
         this.host = host;
         this.port = port;
         this.email = email == null ? "" : email.trim();
@@ -169,13 +173,21 @@ public class MailSyncEngine {
             throw new IllegalStateException("未配置邮箱账号或授权码（TRAVEL_MAIL_EMAIL / TRAVEL_MAIL_AUTH_CODE）");
         }
         long started = System.currentTimeMillis();
+        log.info("12306 邮件同步开始（{}，水位 {}）", fullHistory ? "全量" : "增量", sinceDate(fullHistory));
         List<ParsedMail> mails = new ArrayList<>();
+        int folderCount = 0;
 
         try (IMAPStore store = openStore()) {
             sendIdCommand(store);
             String since = sinceDate(fullHistory);
-            for (String folderName : listFolderNames(store)) {
+            List<String> folders = listFolderNames(store);
+            folderCount = folders.size();
+            for (String folderName : folders) {
+                int before = mails.size();
                 fetchFolder(store, folderName, since, mails);
+                if (mails.size() > before) {
+                    log.info("12306 文件夹 {} 命中 {} 封", folderName, mails.size() - before);
+                }
             }
         } catch (Exception e) {
             if (e instanceof RuntimeException re) {
@@ -183,6 +195,7 @@ public class MailSyncEngine {
             }
             throw new IllegalStateException("邮件同步失败：" + e.getMessage(), e);
         }
+        log.info("12306 邮件拉取完成：{} 个文件夹，{} 封待解析", folderCount, mails.size());
 
         // 阶段一：邮件按发件时间升序（先老后新，改签取最后一封）
         mails.sort(Comparator.comparing(ParsedMail::sentDate,
@@ -254,16 +267,35 @@ public class MailSyncEngine {
         long changeMarked = repository.markTicketsChanged(changedKeys);
 
         // 自动导入：车次+出发+到达+日期 齐全的候选直接转正式票根，残缺的留待人工确认
-        long imported = importCompleteCandidates();
+        TravelRepository.ImportResult importResult = importCompleteCandidates();
 
         SyncSummary summary = new SyncSummary(fullHistory ? "full" : "incremental",
-                mails.size(), mailsMatched, candidatesCreated, imported,
+                mails.size(), mailsMatched, candidatesCreated, importResult.imported(),
                 refundMarked, changeMarked,
                 System.currentTimeMillis() - started, AdminTimes.now());
         repository.markSynced(email, owner, fullHistory, toJson(summary), AdminTimes.now());
         log.info("12306 邮件同步完成：{} 封邮件，新增候选 {}，导入 {}，退票标记 {}，改签标记 {}",
-                mails.size(), candidatesCreated, imported, refundMarked, changeMarked);
+                mails.size(), candidatesCreated, importResult.imported(),
+                refundMarked, changeMarked);
+
+        // 增量同步发现新票根时推送提醒（全量重同步是维护操作，不推送避免刷屏）
+        if (!fullHistory && importResult.imported() > 0) {
+            pushNewTickets(importResult.imported(), importResult.samples());
+        }
         return summary;
+    }
+
+    private void pushNewTickets(int imported, List<String> samples) {
+        String preview = String.join("；", samples.subList(0, Math.min(samples.size(), 3)));
+        if (samples.size() > 3) {
+            preview += " 等";
+        }
+        try {
+            pushService.sendEventNotification("新票据",
+                    "同步新增 " + imported + " 张票根：" + preview, "旅行票据");
+        } catch (Exception e) {
+            log.warn("新票根推送失败: {}", e.getMessage());
+        }
     }
 
     /* ---------- IMAP 连接 ---------- */
@@ -572,8 +604,9 @@ public class MailSyncEngine {
     /* ---------- 候选导入与水位 ---------- */
 
     /** 要素齐全（车次+出发+到达+日期）的候选自动转正式票根。 */
-    private long importCompleteCandidates() {
-        long imported = 0;
+    private TravelRepository.ImportResult importCompleteCandidates() {
+        int imported = 0;
+        List<String> samples = new ArrayList<>();
         List<Long> processed = new ArrayList<>();
         for (TravelRepository.CandidateRow row : repository.allCandidates()) {
             if (row.imported() || row.dismissed()) {
@@ -589,14 +622,15 @@ public class MailSyncEngine {
             processed.add(row.id());
             if (inserted) {
                 imported++;
+                samples.add(TravelRepository.describeCandidate(row));
             }
         }
         repository.markCandidatesImported(processed);
-        return imported;
+        return new TravelRepository.ImportResult(imported, samples);
     }
 
     /** 手动确认导入（允许要素残缺，但至少要有乘车日期）。 */
-    public long importCandidates(List<Long> ids) {
+    public TravelRepository.ImportResult importCandidates(List<Long> ids) {
         return repository.importCandidates(ids);
     }
 

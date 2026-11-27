@@ -66,6 +66,10 @@ public class TravelRepository {
     public record TicketPage(long total, List<TicketRow> tickets) {
     }
 
+    /** 导入结果：成功入库数 + 新票样例描述（推送文案用）。 */
+    public record ImportResult(int imported, List<String> samples) {
+    }
+
     private final JdbcClient jdbc;
 
     public TravelRepository(JdbcClient jdbcClient) {
@@ -334,9 +338,10 @@ public class TravelRepository {
                 .single();
     }
 
-    /** 人工确认导入：候选转正式票根（至少要有乘车日期），返回成功入库数。 */
-    public int importCandidates(List<Long> ids) {
+    /** 人工确认导入：候选转正式票根（至少要有乘车日期），返回入库数与新票样例。 */
+    public ImportResult importCandidates(List<Long> ids) {
         int inserted = 0;
+        List<String> samples = new java.util.ArrayList<>();
         for (CandidateRow row : candidatesByIds(ids)) {
             if (row.rideDate() == null) {
                 continue;
@@ -346,10 +351,22 @@ public class TravelRepository {
                     row.seatClass(), row.price(), row.passenger(), row.source());
             if (ok) {
                 inserted++;
+                samples.add(describeCandidate(row));
             }
         }
         markCandidatesImported(ids);
-        return inserted;
+        return new ImportResult(inserted, samples);
+    }
+
+    /** 新票样例文案：车次 出发→到达(MM-dd)。 */
+    static String describeCandidate(CandidateRow row) {
+        String date = row.rideDate() == null ? "" : row.rideDate().format(java.time.format.DateTimeFormatter.ofPattern("MM-dd"));
+        return orBlank(row.trainNo()) + " " + orBlank(row.fromStation()) + "→"
+                + orBlank(row.toStation()) + "（" + date + "）";
+    }
+
+    private static String orBlank(String value) {
+        return value == null ? "" : value.trim();
     }
 
     /* ---------- 同步水位 ---------- */

@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.cc.service.admin.AdminTimes;
+import com.cc.service.push.PushService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -170,12 +172,15 @@ public class AdminTravelController {
     private final TravelRepository repository;
     private final MailSyncEngine engine;
     private final ObjectMapper objectMapper;
+    private final PushService pushService;
     private final ExecutorService syncExecutor;
 
-    public AdminTravelController(TravelRepository repository, MailSyncEngine engine, ObjectMapper objectMapper) {
+    public AdminTravelController(TravelRepository repository, MailSyncEngine engine,
+            ObjectMapper objectMapper, PushService pushService) {
         this.repository = repository;
         this.engine = engine;
         this.objectMapper = objectMapper;
+        this.pushService = pushService;
         ThreadFactory factory = new ThreadFactory() {
             private final AtomicInteger seq = new AtomicInteger();
 
@@ -319,9 +324,20 @@ public class AdminTravelController {
     }
 
     @PostMapping("/candidates/import")
-    public ImportResponse importCandidates(@RequestBody ImportRequest request) {
-        int imported = repository.importCandidates(request.ids() == null ? List.of() : request.ids());
-        return new ImportResponse(imported);
+    public ResponseEntity<ImportResponse> importCandidates(@RequestBody ImportRequest request) {
+        TravelRepository.ImportResult result =
+                repository.importCandidates(request.ids() == null ? List.of() : request.ids());
+        if (result.imported() > 0) {
+            try {
+                String preview = String.join("；", result.samples().subList(0,
+                        Math.min(result.samples().size(), 3)));
+                pushService.sendEventNotification("新票据",
+                        "确认导入 " + result.imported() + " 张票根：" + preview, "旅行票据");
+            } catch (Exception e) {
+                log.warn("人工导入推送失败: {}", e.getMessage());
+            }
+        }
+        return ResponseEntity.ok(new ImportResponse(result.imported()));
     }
 
     @PostMapping("/candidates/dismiss")
@@ -332,13 +348,16 @@ public class AdminTravelController {
 
     /** 异步触发同步：全量可能拉取几千封邮件，统一后台执行，前端轮询 /sync/status。 */
     @PostMapping("/sync")
-    public SyncResponse sync(@RequestBody(required = false) SyncRequest request) {
+    public ResponseEntity<SyncResponse> sync(@RequestBody(required = false) SyncRequest request) {
         boolean full = request != null && "full".equalsIgnoreCase(request.mode());
         if (engine.isRunning()) {
-            throw new IllegalStateException("同步已在进行中");
+            return ResponseEntity.status(409).body(new SyncResponse(false,
+                    full ? "full" : "incremental", false, "同步已在进行中"));
         }
         if (!engine.credentialsConfigured()) {
-            throw new IllegalStateException("未配置邮箱账号或授权码（TRAVEL_MAIL_EMAIL / TRAVEL_MAIL_AUTH_CODE）");
+            return ResponseEntity.badRequest().body(new SyncResponse(false,
+                    full ? "full" : "incremental", false,
+                    "未配置邮箱账号或授权码（TRAVEL_MAIL_EMAIL / TRAVEL_MAIL_AUTH_CODE）"));
         }
         syncExecutor.submit(() -> {
             try {
@@ -347,8 +366,8 @@ public class AdminTravelController {
                 log.error("12306 邮件同步失败: {}", e.getMessage());
             }
         });
-        return new SyncResponse(true, full ? "full" : "incremental", true,
-                full ? "全量同步已启动，历史邮件较多，请稍候查看进度" : "同步已启动");
+        return ResponseEntity.ok(new SyncResponse(true, full ? "full" : "incremental", true,
+                full ? "全量同步已启动，历史邮件较多，请稍候查看进度" : "同步已启动"));
     }
 
     @GetMapping("/sync/status")
