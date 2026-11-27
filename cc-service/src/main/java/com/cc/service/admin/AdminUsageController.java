@@ -9,6 +9,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -88,6 +89,16 @@ public class AdminUsageController {
     public record BucketItemsResponse(long total, int limit, List<UsageRowView> items) {
     }
 
+    public record DailySeries(String source, List<Long> tokens, List<Double> credits) {
+    }
+
+    public record DailyResponse(
+            OffsetDateTime from,
+            OffsetDateTime to,
+            List<String> labels,
+            List<DailySeries> series) {
+    }
+
     private final AdminConsoleRepository console;
     private final UserRepository users;
 
@@ -124,6 +135,61 @@ public class AdminUsageController {
                 .map(this::toView)
                 .toList();
         return new SummaryResponse(range.from(), range.to(), totals, bySource, byModel, recent);
+    }
+
+    @GetMapping("/daily")
+    public DailyResponse daily(
+            @RequestParam(defaultValue = "7") int days,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) OffsetDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) OffsetDateTime to,
+            @RequestParam(required = false) Long userId,
+            @RequestParam(required = false) String source,
+            @RequestParam(required = false) String model) {
+        Range range = resolve(days, from, to);
+        List<String> keys = new ArrayList<>();
+        List<String> labels = new ArrayList<>();
+        LocalDate start = range.from().toLocalDate();
+        LocalDate end = range.to().toLocalDate();
+        for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(1)) {
+            keys.add(date.toString());
+            labels.add(date.format(DateTimeFormatter.ofPattern("MM-dd")));
+        }
+
+        Map<String, long[]> tokens = new LinkedHashMap<>();
+        Map<String, double[]> credits = new LinkedHashMap<>();
+        for (AdminConsoleRepository.DaySourceUsageRow row : console.usageDailyBySource(
+                range.fromEpoch(), range.toEpoch(), userId, source, model)) {
+            int index = keys.indexOf(row.day());
+            if (index < 0) {
+                continue;
+            }
+            tokens.computeIfAbsent(row.source(), ignored -> new long[keys.size()])[index] += row.tokens();
+            credits.computeIfAbsent(row.source(), ignored -> new double[keys.size()])[index] += row.credits();
+        }
+
+        List<DailySeries> series = new ArrayList<>();
+        for (Map.Entry<String, long[]> entry : tokens.entrySet()) {
+            List<Long> tokenValues = new ArrayList<>(entry.getValue().length);
+            for (long value : entry.getValue()) {
+                tokenValues.add(value);
+            }
+            double[] creditValues = credits.getOrDefault(entry.getKey(), new double[keys.size()]);
+            List<Double> creditList = new ArrayList<>(creditValues.length);
+            for (double value : creditValues) {
+                creditList.add(value);
+            }
+            series.add(new DailySeries(entry.getKey(), tokenValues, creditList));
+        }
+        series.sort((left, right) -> Double.compare(sum(right.credits()), sum(left.credits())));
+        return new DailyResponse(range.from(), range.to(), labels, series);
+    }
+
+    private static double sum(List<Double> values) {
+        double total = 0;
+        for (double value : values) {
+            total += value;
+        }
+        return total;
     }
 
     @GetMapping("/flow")

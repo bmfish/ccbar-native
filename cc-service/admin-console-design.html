@@ -1,0 +1,1398 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CC 管理控制台 · 设计稿</title>
+<style>
+  :root {
+    --bg: #0e1210;
+    --sidebar: #111613;
+    --panel: #161b18;
+    --panel-2: #1c231f;
+    --border: #29312b;
+    --border-strong: #39443c;
+    --text: #e9efeb;
+    --muted: #8d978f;
+    --accent: #3ddc84;
+    --accent-dim: rgba(61, 220, 132, .12);
+    --accent-on: #07140c;
+    --danger: #ff6b6b;
+    --danger-dim: rgba(255, 107, 107, .12);
+    --warning: #f2b544;
+    --series-1: #3ddc84;
+    --series-2: #2a8f5d;
+    --series-3: #78bdf5;
+    --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+    --radius: 10px;
+    --radius-card: 14px;
+  }
+  html[data-theme="light"] {
+    --bg: #f3f6f3;
+    --sidebar: #ffffff;
+    --panel: #ffffff;
+    --panel-2: #f1f5f2;
+    --border: #e0e7e1;
+    --border-strong: #cfd9d1;
+    --text: #18211b;
+    --muted: #64736a;
+    --accent: #0f9d58;
+    --accent-dim: rgba(15, 157, 88, .10);
+    --accent-on: #ffffff;
+    --danger: #d93d3d;
+    --danger-dim: rgba(217, 61, 61, .10);
+    --warning: #b77a10;
+    --series-1: #0f9d58;
+    --series-2: #8ad8ad;
+    --series-3: #3b82f6;
+    --shadow: 0 16px 42px rgba(20, 40, 28, .08);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  .hidden { display: none !important; }
+  .mono { font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+
+  /* 布局 */
+  .app { display: flex; min-height: 100vh; }
+  .sidebar {
+    width: 224px; flex: 0 0 224px; background: var(--sidebar);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; padding: 18px 12px;
+    position: sticky; top: 0; height: 100vh;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 22px; }
+  .brand-mark {
+    width: 26px; height: 26px; border-radius: 8px; background: var(--accent);
+    color: var(--accent-on); font-weight: 700; font-size: 14px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .brand-name { font-weight: 600; font-size: 14px; letter-spacing: .2px; }
+  .brand-name span { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 5px; }
+  .nav-section { color: var(--muted); font-size: 11px; letter-spacing: .8px; padding: 14px 12px 6px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px; margin-bottom: 2px;
+    border-radius: 8px; color: var(--muted); cursor: pointer; user-select: none;
+    border: 1px solid transparent; transition: background .12s, color .12s;
+  }
+  .nav-item:hover { background: var(--panel-2); color: var(--text); }
+  .nav-item.active { background: var(--accent-dim); color: var(--accent); border-color: transparent; }
+  .nav-item svg { flex: 0 0 16px; }
+  .sidebar-foot { margin-top: auto; border-top: 1px solid var(--border); padding: 14px 10px 4px; display: flex; align-items: center; gap: 10px; }
+  .sidebar-foot .who { flex: 1; min-width: 0; }
+  .sidebar-foot .who b { display: block; font-size: 12.5px; font-weight: 500; }
+  .sidebar-foot .who span { display: block; font-size: 11px; color: var(--muted); }
+
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .topbar {
+    height: 62px; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 26px; border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: blur(10px); position: sticky; top: 0; z-index: 10;
+  }
+  .topbar h1 { font-size: 15.5px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  .topbar .sub { color: var(--muted); font-size: 12px; margin-left: 10px; }
+  .topbar .right { display: flex; align-items: center; gap: 10px; }
+  .meta { color: var(--muted); font-size: 12px; }
+
+  .content { width: 100%; max-width: 1240px; margin: 0 auto; padding: 22px 26px 64px; }
+  .view { display: none; }
+  .view.active { display: block; }
+  .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+  .page-head h2 { font-size: 19px; margin: 0 0 3px; font-weight: 600; letter-spacing: .2px; }
+  .page-head p { margin: 0; color: var(--muted); font-size: 12.5px; }
+
+  /* 卡片 */
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius-card); box-shadow: 0 1px 0 rgba(255, 255, 255, .02) inset;
+  }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 18px 0; }
+  .card-head h3 { margin: 0; font-size: 13.5px; font-weight: 600; }
+  .card-head .sub { color: var(--muted); font-size: 11.5px; font-weight: 400; margin-left: 8px; }
+  .card-body { padding: 16px 18px 18px; }
+
+  /* KPI */
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
+  .kpi { padding: 16px 17px 15px; position: relative; overflow: hidden; }
+  .kpi .label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .kpi .value { font-size: 27px; font-weight: 650; letter-spacing: -.4px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .kpi .foot { color: var(--muted); font-size: 11.5px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .kpi .foot b { color: var(--accent); font-weight: 500; }
+  .kpi .foot .warn { color: var(--warning); }
+
+  /* 栅格 */
+  .grid-main { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr); gap: 12px; margin-bottom: 12px; }
+  .grid-half { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  /* 图表 */
+  .chart-wrap { padding: 12px 12px 6px; }
+  .chart-wrap svg { width: 100%; height: auto; display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; padding: 0 6px 6px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11.5px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+
+  /* 状态行 */
+  .status-list { display: flex; flex-direction: column; }
+  .status-row { display: flex; align-items: center; justify-content: space-between; padding: 11px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  .status-row:last-child { border-bottom: none; }
+  .status-row .k { color: var(--muted); }
+  .status-row .v { display: inline-flex; align-items: center; gap: 7px; font-variant-numeric: tabular-nums; }
+
+  /* 条形列表 */
+  .bar-list { display: flex; flex-direction: column; gap: 13px; }
+  .bar-row .top { display: flex; justify-content: space-between; font-size: 12.5px; margin-bottom: 5px; }
+  .bar-row .top span:last-child { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .track { height: 6px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
+  .fill { height: 100%; border-radius: 999px; }
+
+  /* 表格 */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 11.5px; background: var(--panel-2); }
+  tbody tr:hover { background: color-mix(in srgb, var(--panel-2) 55%, transparent); }
+  tbody tr[data-name] { cursor: pointer; }
+  tbody tr.selected, tbody tr.selected:hover { background: var(--accent-dim); }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.actions { text-align: right; }
+  .flow-group { cursor: pointer; }
+  .flow-group .chev { color: var(--muted); transition: transform .15s; margin-right: 7px; vertical-align: -1px; }
+  .flow-group.open .chev { transform: rotate(90deg); }
+  .flow-detail-row td { padding: 0; background: var(--panel-2); }
+  .flow-detail-inner { padding: 10px 16px 14px 38px; }
+  .flow-detail-inner th { background: transparent; padding: 8px 12px; font-size: 11px; }
+  .flow-detail-inner td { padding: 8px 12px; font-size: 12px; }
+  .flow-detail-inner tbody tr:last-child td { border-bottom: none; }
+  .flow-summary { display: flex; align-items: baseline; gap: 18px; padding: 12px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  .flow-summary b { font-size: 16px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .flow-summary span { color: var(--muted); }
+  tr.empty-row td { text-align: center; color: var(--muted); padding: 32px 16px; }
+  .user-cell { display: flex; align-items: center; gap: 9px; }
+  .avatar {
+    width: 28px; height: 28px; border-radius: 50%; background: var(--panel-2);
+    border: 1px solid var(--border); color: var(--muted);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+  }
+  .avatar.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+  .user-cell .name { font-weight: 500; }
+  .user-cell .id { color: var(--muted); font-size: 11px; margin-left: 2px; }
+
+  /* 徽标 */
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px;
+    border-radius: 999px; font-size: 11px; border: 1px solid transparent;
+    background: var(--panel-2); color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+  .pill.ok { color: var(--accent); background: var(--accent-dim); }
+  .pill.warn { color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, transparent); }
+  .pill.bad { color: var(--danger); background: var(--danger-dim); }
+  .pill.blue { color: var(--series-3); background: color-mix(in srgb, var(--series-3) 12%, transparent); }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .status-dot.on { background: var(--accent); }
+  .status-dot.off { background: var(--muted); }
+
+  /* 按钮 / 输入 */
+  .btn {
+    height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel); color: var(--text); cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px;
+    transition: background .12s, border-color .12s;
+  }
+  .btn:hover { background: var(--panel-2); border-color: var(--border-strong); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-on); font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.05); }
+  .btn.ghost { background: transparent; }
+  .btn.sm { height: 26px; padding: 0 9px; font-size: 11.5px; }
+  .btn.icon { width: 32px; padding: 0; justify-content: center; }
+  .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 30%, var(--border)); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+  .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .toolbar .grow { flex: 1; }
+  .input, .select {
+    height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel); color: var(--text); outline: none;
+  }
+  .input:focus, .select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+  .input.search { width: 230px; }
+  .chip {
+    height: 30px; padding: 0 11px; border-radius: 999px; border: 1px solid var(--border);
+    background: transparent; color: var(--muted); cursor: pointer; font-size: 12px;
+  }
+  .chip:hover { color: var(--text); }
+  .chip.active { background: var(--accent-dim); color: var(--accent); border-color: transparent; }
+
+  /* 左右分栏 */
+  .split { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 12px; align-items: start; }
+  .detail { padding: 18px; position: sticky; top: 78px; }
+  .detail-head { display: flex; align-items: center; gap: 11px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+  .detail-head .avatar { width: 38px; height: 38px; font-size: 13px; }
+  .detail-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
+  .detail-head .sub { color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+  .mini-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+  .mini-stats div { background: var(--panel-2); border-radius: 8px; padding: 9px 10px; }
+  .mini-stats .k { color: var(--muted); font-size: 10.5px; }
+  .mini-stats .v { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 1px; }
+  .kv-list { display: flex; flex-direction: column; gap: 7px; font-size: 12.5px; }
+  .kv { display: flex; justify-content: space-between; gap: 12px; }
+  .kv span:first-child { color: var(--muted); }
+  .kv span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .detail-empty { color: var(--muted); font-size: 12px; padding: 10px 0 4px; }
+  .section-label { color: var(--muted); font-size: 11px; letter-spacing: .6px; margin: 16px 0 8px; }
+  .device-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+  .device-item:last-child { border-bottom: none; }
+  .device-item .name { font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
+  .device-item .meta2 { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .detail-actions { display: flex; gap: 8px; margin-top: 16px; }
+  .detail-actions .btn { flex: 1; justify-content: center; }
+
+  /* 用量 */
+  .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
+  .summary .card { padding: 15px 16px; }
+  .summary .k { color: var(--muted); font-size: 11.5px; }
+  .summary .v { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; letter-spacing: -.3px; }
+  .summary .v small { font-size: 11px; color: var(--muted); font-weight: 400; margin-left: 3px; letter-spacing: 0; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .filters label { color: var(--muted); font-size: 11.5px; margin-right: 2px; }
+  .filters .spacer { flex: 1; }
+
+  /* 系统 */
+  .sys-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
+  .sys-card { padding: 15px 16px; }
+  .sys-card .k { color: var(--muted); font-size: 11.5px; display: flex; align-items: center; gap: 6px; }
+  .sys-card .v { font-size: 17px; font-weight: 600; margin-top: 5px; }
+  .sys-card .v small { font-size: 11px; color: var(--muted); font-weight: 400; }
+  .code {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 15px; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px; line-height: 1.7; color: var(--muted); overflow-x: auto; white-space: pre;
+  }
+  .code b { color: var(--accent); font-weight: 500; }
+  .danger-zone { border-color: color-mix(in srgb, var(--danger) 24%, var(--border)); }
+  .danger-zone h3 { color: var(--danger); }
+
+  /* 弹窗 / Toast */
+  .mask {
+    position: fixed; inset: 0; background: rgba(5, 9, 7, .62); backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 40;
+  }
+  .modal {
+    width: 420px; max-width: 100%; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; box-shadow: var(--shadow);
+  }
+  .modal-head { display: flex; justify-content: space-between; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+  .modal-head h3 { margin: 0; font-size: 14px; }
+  .modal-body { padding: 18px; }
+  .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 0 18px 18px; }
+  .field { margin-bottom: 13px; }
+  .field label { display: block; color: var(--muted); font-size: 11.5px; margin-bottom: 5px; }
+  .field .input { width: 100%; }
+  .icon-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 18px; line-height: 1; padding: 2px 6px; }
+  .icon-btn:hover { color: var(--text); }
+  #toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(8px);
+    background: var(--panel); border: 1px solid var(--border-strong); color: var(--text);
+    padding: 9px 15px; border-radius: 9px; font-size: 12.5px; box-shadow: var(--shadow);
+    opacity: 0; pointer-events: none; transition: .18s; z-index: 50;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .hint { color: var(--muted); font-size: 11.5px; }
+  .divider { height: 1px; background: var(--border); margin: 16px 0; }
+
+  @media (max-width: 1080px) {
+    .sidebar { width: 64px; flex-basis: 64px; padding: 16px 8px; }
+    .brand { padding: 2px 4px 18px; justify-content: center; }
+    .brand-name, .nav-section, .nav-label, .sidebar-foot .who { display: none; }
+    .nav-item { justify-content: center; padding: 10px; }
+    .sidebar-foot { justify-content: center; }
+    .grid-main { grid-template-columns: 1fr; }
+    .split { grid-template-columns: 1fr; }
+    .detail { position: static; }
+    .kpis, .summary, .sys-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 760px) {
+    .topbar { padding: 0 16px; }
+    .topbar .sub, .topbar .meta { display: none; }
+    .content { padding: 18px 16px 48px; }
+    .grid-half { grid-template-columns: 1fr; }
+    .kpis, .summary, .sys-grid { grid-template-columns: 1fr 1fr; }
+    .input.search { width: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">c</div>
+      <div class="brand-name">ccBar<span>控制台</span></div>
+    </div>
+
+    <div class="nav-section">运营</div>
+    <div class="nav-item active" data-nav="overview">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5" rx="1.2"/><rect x="9" y="2" width="5" height="5" rx="1.2"/><rect x="2" y="9" width="5" height="5" rx="1.2"/><rect x="9" y="9" width="5" height="5" rx="1.2"/></svg>
+      <span class="nav-label">概览</span>
+    </div>
+    <div class="nav-item" data-nav="users">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="6" cy="5.5" r="2.4"/><path d="M1.8 13.4c.5-2.4 2.2-3.7 4.2-3.7s3.7 1.3 4.2 3.7"/><path d="M11 4.2a2 2 0 0 1 0 3.9M12.3 13.4c-.2-1.5-.7-2.6-1.6-3.4"/></svg>
+      <span class="nav-label">用户与设备</span>
+    </div>
+    <div class="nav-item" data-nav="usage">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 13.2V9.4M6 13.2V6.2M10 13.2V3.4M14 13.2V7.8"/></svg>
+      <span class="nav-label">用量分析</span>
+    </div>
+    <div class="nav-item" data-nav="flow">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 2.5h8v11l-2-1.2-2 1.2-2-1.2-2 1.2V2.5Z"/><path d="M6 5.5h4M6 8h4"/></svg>
+      <span class="nav-label">流水明细</span>
+    </div>
+    <div class="nav-item" data-nav="devices">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="8" rx="1.5"/><path d="M5.5 13.5h5M8 11v2.5"/></svg>
+      <span class="nav-label">设备管理</span>
+    </div>
+    <div class="nav-item" data-nav="health">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 8.4h3l1.4-3 2.2 5.6 1.4-2.6H14"/></svg>
+      <span class="nav-label">健康管理</span>
+    </div>
+
+    <div class="nav-section">系统</div>
+    <div class="nav-item" data-nav="system">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2.5" width="12" height="4" rx="1.2"/><rect x="2" y="9.5" width="12" height="4" rx="1.2"/><path d="M4.6 4.5h.01M4.6 11.5h.01"/></svg>
+      <span class="nav-label">系统状态</span>
+    </div>
+
+    <div class="sidebar-foot">
+      <div class="avatar on">A</div>
+      <div class="who"><b>管理员</b><span>API Token</span></div>
+      <button class="btn icon ghost" id="logoutBtn" title="退出">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M6.5 3H3.8A1.3 1.3 0 0 0 2.5 4.3v7.4A1.3 1.3 0 0 0 3.8 13h2.7M10 5l3 3-3 3M13 8H6"/></svg>
+      </button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div><h1 id="pageTitle">概览</h1><span class="sub" id="pageSub">服务与同步状态一览</span></div>
+      <div class="right">
+        <span class="pill ok"><span class="status-dot on"></span>服务正常</span>
+        <span class="meta" id="refreshHint">更新于 2 分钟前</span>
+        <button class="btn" id="refreshBtn">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.2 7A5.4 5.4 0 1 0 13 10"/><path d="M13.4 3.4V7H10"/></svg>
+          刷新
+        </button>
+        <button class="btn icon" id="themeBtn" title="切换明暗主题">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="3.2"/><path d="M8 1.2v1.4M8 13.4v1.4M1.2 8h1.4M13.4 8h1.4M3.2 3.2l1 1M11.8 11.8l1 1M12.8 3.2l-1 1M4.2 11.8l-1 1"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="content">
+
+      <!-- 概览 -->
+      <section class="view active" id="view-overview">
+        <div class="page-head">
+          <div><h2>今天的情况</h2><p>2026-11-22 · 数据每 30 秒自动刷新</p></div>
+          <button class="btn"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2v8M5 7l3 3 3-3M2.5 12.5h11"/></svg>导出日报</button>
+        </div>
+
+        <div class="kpis">
+          <div class="card kpi">
+            <div class="label">用户总数</div>
+            <div class="value">12</div>
+            <div class="foot"><b>+2</b> 本周新增</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">登记设备</div>
+            <div class="value">18</div>
+            <div class="foot"><b>5 台在线</b> · 13 台离线</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">今日同步事件</div>
+            <div class="value">7,312</div>
+            <div class="foot">近 7 天 43,208 条</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">今日用量</div>
+            <div class="value">1.28M</div>
+            <div class="foot">Token · <b>2,146 积分</b></div>
+          </div>
+        </div>
+
+        <div class="grid-main">
+          <div class="card">
+            <div class="card-head">
+              <h3>近 7 天同步趋势<span class="sub">按数据来源</span></h3>
+              <span class="hint mono">11-16 → 11-22</span>
+            </div>
+            <div class="chart-wrap">
+              <svg viewBox="0 0 660 240" role="img" aria-label="近 7 天同步事件堆叠柱状图">
+                <g stroke="var(--border)" stroke-width="1">
+                  <line x1="36" y1="10" x2="652" y2="10"/>
+                  <line x1="36" y1="60.5" x2="652" y2="60.5"/>
+                  <line x1="36" y1="111" x2="652" y2="111"/>
+                  <line x1="36" y1="161.5" x2="652" y2="161.5"/>
+                  <line x1="36" y1="212" x2="652" y2="212"/>
+                </g>
+                <g fill="var(--muted)" font-size="10.5" text-anchor="end">
+                  <text x="30" y="13">8k</text>
+                  <text x="30" y="64">6k</text>
+                  <text x="30" y="114">4k</text>
+                  <text x="30" y="165">2k</text>
+                  <text x="30" y="215">0</text>
+                </g>
+                <g fill="var(--series-1)">
+                  <rect x="63" y="131" width="34" height="81" rx="2"/>
+                  <rect x="151" y="141" width="34" height="71" rx="2"/>
+                  <rect x="239" y="108" width="34" height="104" rx="2"/>
+                  <rect x="327" y="116" width="34" height="96" rx="2"/>
+                  <rect x="415" y="96" width="34" height="116" rx="2"/>
+                  <rect x="503" y="113" width="34" height="99" rx="2"/>
+                  <rect x="591" y="101" width="34" height="111" rx="2"/>
+                </g>
+                <g fill="var(--series-2)">
+                  <rect x="63" y="101" width="34" height="30" rx="2"/>
+                  <rect x="151" y="118" width="34" height="23" rx="2"/>
+                  <rect x="239" y="68" width="34" height="40" rx="2"/>
+                  <rect x="327" y="81" width="34" height="35" rx="2"/>
+                  <rect x="415" y="50" width="34" height="46" rx="2"/>
+                  <rect x="503" y="75" width="34" height="38" rx="2"/>
+                  <rect x="591" y="58" width="34" height="43" rx="2"/>
+                </g>
+                <g fill="var(--series-3)">
+                  <rect x="63" y="86" width="34" height="15" rx="2"/>
+                  <rect x="151" y="105" width="34" height="13" rx="2"/>
+                  <rect x="239" y="45" width="34" height="23" rx="2"/>
+                  <rect x="327" y="61" width="34" height="20" rx="2"/>
+                  <rect x="415" y="22" width="34" height="28" rx="2"/>
+                  <rect x="503" y="51" width="34" height="24" rx="2"/>
+                  <rect x="591" y="28" width="34" height="30" rx="2"/>
+                </g>
+                <g fill="var(--muted)" font-size="10.5" text-anchor="middle">
+                  <text x="80" y="230">11-16</text>
+                  <text x="168" y="230">11-17</text>
+                  <text x="256" y="230">11-18</text>
+                  <text x="344" y="230">11-19</text>
+                  <text x="432" y="230">11-20</text>
+                  <text x="520" y="230">11-21</text>
+                  <text x="608" y="230">11-22</text>
+                </g>
+              </svg>
+            </div>
+            <div class="legend">
+              <span><i class="dot" style="background:var(--series-1)"></i>cc-switch</span>
+              <span><i class="dot" style="background:var(--series-2)"></i>ZCode</span>
+              <span><i class="dot" style="background:var(--series-3)"></i>Trae</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>服务状态</h3><span class="pill ok"><span class="status-dot on"></span>UP</span></div>
+            <div class="card-body" style="padding-top:6px">
+              <div class="status-list">
+                <div class="status-row"><span class="k">API 服务</span><span class="v"><span class="status-dot on"></span>正常</span></div>
+                <div class="status-row"><span class="k">数据库</span><span class="v"><span class="status-dot on"></span>PostgreSQL</span></div>
+                <div class="status-row"><span class="k">迁移版本</span><span class="v mono">V4</span></div>
+                <div class="status-row"><span class="k">运行时长</span><span class="v">12 天 3 小时</span></div>
+                <div class="status-row"><span class="k">最近同步</span><span class="v">2 分钟前</span></div>
+                <div class="status-row"><span class="k">今日活跃设备</span><span class="v"><b style="color:var(--accent);font-weight:600">5</b> / 18</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-half">
+          <div class="card">
+            <div class="card-head"><h3>Top 模型<span class="sub">近 7 天 Token 占比</span></h3></div>
+            <div class="card-body">
+              <div class="bar-list">
+                <div class="bar-row"><div class="top"><span>DeepSeek-V4.1-Flash</span><span>38%</span></div><div class="track"><div class="fill" style="width:38%;background:var(--series-1)"></div></div></div>
+                <div class="bar-row"><div class="top"><span>GLM-5.3-Flash</span><span>27%</span></div><div class="track"><div class="fill" style="width:27%;background:var(--series-1)"></div></div></div>
+                <div class="bar-row"><div class="top"><span>Claude-Sonnet-4.6</span><span>21%</span></div><div class="track"><div class="fill" style="width:21%;background:var(--series-2)"></div></div></div>
+                <div class="bar-row"><div class="top"><span>MiniMax-M3.1</span><span>14%</span></div><div class="track"><div class="fill" style="width:14%;background:var(--series-3)"></div></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>最近同步设备</h3><a href="#" class="hint" data-nav="devices" style="color:var(--accent);text-decoration:none">全部设备</a></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>用户</th><th>设备</th><th>最近同步</th><th>状态</th></tr></thead>
+                <tbody>
+                  <tr><td><div class="user-cell"><span class="avatar on">A</span><span class="name">alice</span></div></td><td class="mono">A1B2…F9</td><td>2 分钟前</td><td><span class="pill ok"><span class="status-dot on"></span>在线</span></td></tr>
+                  <tr><td><div class="user-cell"><span class="avatar on">D</span><span class="name">default</span></div></td><td class="mono">7F0A…2C</td><td>6 分钟前</td><td><span class="pill ok"><span class="status-dot on"></span>在线</span></td></tr>
+                  <tr><td><div class="user-cell"><span class="avatar">B</span><span class="name">bob</span></div></td><td class="mono">C3D4…21</td><td>3 小时前</td><td><span class="pill">离线</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 用户与设备 -->
+      <section class="view" id="view-users">
+        <div class="page-head">
+          <div><h2>用户与设备</h2><p>管理账号、设备归属与登录凭据</p></div>
+          <button class="btn primary" id="createUserBtn">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3v10M3 8h10"/></svg>
+            创建用户
+          </button>
+        </div>
+
+        <div class="toolbar">
+          <input class="input search" id="userSearch" placeholder="搜索用户名…">
+          <button class="chip active" data-filter="all">全部 12</button>
+          <button class="chip" data-filter="with">有设备 9</button>
+          <button class="chip" data-filter="none">零设备 3</button>
+          <span class="grow"></span>
+          <button class="btn" id="refreshUsers">刷新</button>
+        </div>
+
+        <div class="split">
+          <div class="card">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>用户</th><th>设备</th><th>最近活跃</th><th>今日用量</th><th>状态</th><th class="actions">操作</th></tr></thead>
+                <tbody id="userRows">
+                  <tr data-name="alice" data-devices="2">
+                    <td><div class="user-cell"><span class="avatar on">A</span><span><span class="name">alice</span><span class="id">#1</span></span></div></td>
+                    <td><span class="pill blue">2 台</span></td>
+                    <td>2 分钟前</td>
+                    <td>128.4k tok · 86 积分</td>
+                    <td><span class="pill ok"><span class="status-dot on"></span>在线</span></td>
+                    <td class="actions"><button class="btn sm ghost" data-demo>设备</button><button class="btn sm ghost" data-demo>重置密码</button></td>
+                  </tr>
+                  <tr data-name="bob" data-devices="1">
+                    <td><div class="user-cell"><span class="avatar">B</span><span><span class="name">bob</span><span class="id">#2</span></span></div></td>
+                    <td><span class="pill">1 台</span></td>
+                    <td>3 小时前</td>
+                    <td>42.1k tok · 28 积分</td>
+                    <td><span class="pill">离线</span></td>
+                    <td class="actions"><button class="btn sm ghost" data-demo>设备</button><button class="btn sm ghost" data-demo>重置密码</button></td>
+                  </tr>
+                  <tr data-name="default" data-devices="1">
+                    <td><div class="user-cell"><span class="avatar on">D</span><span><span class="name">default</span><span class="id">#0</span></span></div></td>
+                    <td><span class="pill blue">1 台</span></td>
+                    <td>1 分钟前</td>
+                    <td>312.0k tok · 210 积分</td>
+                    <td><span class="pill ok"><span class="status-dot on"></span>在线</span></td>
+                    <td class="actions"><button class="btn sm ghost" data-demo>设备</button><button class="btn sm ghost" data-demo>重置密码</button></td>
+                  </tr>
+                  <tr data-name="david" data-devices="3">
+                    <td><div class="user-cell"><span class="avatar">D</span><span><span class="name">david</span><span class="id">#3</span></span></div></td>
+                    <td><span class="pill blue">3 台</span></td>
+                    <td>昨天</td>
+                    <td>96.7k tok · 64 积分</td>
+                    <td><span class="pill">离线</span></td>
+                    <td class="actions"><button class="btn sm ghost" data-demo>设备</button><button class="btn sm ghost" data-demo>重置密码</button></td>
+                  </tr>
+                  <tr data-name="erin" data-devices="1">
+                    <td><div class="user-cell"><span class="avatar">E</span><span><span class="name">erin</span><span class="id">#4</span></span></div></td>
+                    <td><span class="pill">1 台</span></td>
+                    <td>5 天前</td>
+                    <td>8.2k tok · 6 积分</td>
+                    <td><span class="pill warn">离线较久</span></td>
+                    <td class="actions"><button class="btn sm ghost" data-demo>设备</button><button class="btn sm ghost" data-demo>重置密码</button></td>
+                  </tr>
+                  <tr data-name="frank" data-devices="1">
+                    <td><div class="user-cell"><span class="avatar">F</span><span><span class="name">frank</span><span class="id">#5</span></span></div></td>
+                    <td><span class="pill">1 台</span></td>
+                    <td>12 天前</td>
+                    <td>—</td>
+                    <td><span class="pill bad">已禁用</span></td>
+                    <td class="actions"><button class="btn sm ghost" data-demo>设备</button><button class="btn sm ghost" data-demo>重置密码</button></td>
+                  </tr>
+                  <tr data-name="carol" data-devices="0">
+                    <td><div class="user-cell"><span class="avatar">C</span><span><span class="name">carol</span><span class="id">#6</span></span></div></td>
+                    <td><span class="pill">0 台</span></td>
+                    <td>—</td>
+                    <td>—</td>
+                    <td><span class="pill">未激活</span></td>
+                    <td class="actions"><button class="btn sm ghost" data-demo>设备</button><button class="btn sm ghost" data-demo>重置密码</button></td>
+                  </tr>
+                  <tr class="empty-row hidden" id="userEmpty"><td colspan="6">没有匹配的用户</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card detail" id="userDetail">
+            <div class="detail-head">
+              <div class="avatar on" id="detailAvatar">A</div>
+              <div style="flex:1"><h3 id="detailName">alice</h3><div class="sub" id="detailSub">ID #1 · 创建于 2026-10-12</div></div>
+              <span class="pill ok" id="detailStatus"><span class="status-dot on"></span>在线</span>
+            </div>
+            <div class="mini-stats">
+              <div><div class="k">设备</div><div class="v" id="detailDeviceCount">2</div></div>
+              <div><div class="k">今日 Token</div><div class="v" id="detailTodayTokens">128.4k</div></div>
+              <div><div class="k">今日积分</div><div class="v" id="detailTodayCredits">86</div></div>
+            </div>
+
+            <div class="section-label">账号信息</div>
+            <div class="kv-list">
+              <div class="kv"><span>用户 ID</span><span class="mono" id="detailUserId">#1</span></div>
+              <div class="kv"><span>创建时间</span><span id="detailCreated">2026-10-12</span></div>
+              <div class="kv"><span>最近活跃</span><span id="detailLastActive">2 分钟前</span></div>
+              <div class="kv"><span>近 7 天用量</span><span id="detailWeekTokens">742k Token</span></div>
+            </div>
+
+            <div class="section-label">设备列表 <span id="detailDeviceHint" style="float:right;letter-spacing:0">2 台</span></div>
+            <div id="detailDevices">
+              <div class="device-item">
+                <div>
+                  <div class="name"><span class="status-dot on"></span>MacBook Pro</div>
+                  <div class="meta2 mono">A1B2C3D4…9F0E</div>
+                  <div class="meta2">首次 10-12 · 最近 2 分钟前</div>
+                </div>
+                <button class="btn sm ghost" data-copy="A1B2C3D4-0000-0000-0000-000000009F0E">复制</button>
+              </div>
+              <div class="device-item">
+                <div>
+                  <div class="name"><span class="status-dot off"></span>iMac</div>
+                  <div class="meta2 mono">C3D4E5F6…0021</div>
+                  <div class="meta2">首次 10-20 · 最近 3 天前</div>
+                </div>
+                <button class="btn sm ghost" data-copy="C3D4E5F6-0000-0000-0000-000000000021">复制</button>
+              </div>
+            </div>
+            <div class="detail-actions">
+              <button class="btn sm" data-demo>重置密码</button>
+              <button class="btn sm danger" id="detailToggle" data-demo>禁用账号</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 用量分析 -->
+      <section class="view" id="view-usage">
+        <div class="page-head">
+          <div><h2>用量分析</h2><p>按用户、来源与模型查看同步上来的用量</p></div>
+          <button class="btn" data-demo>导出 CSV</button>
+        </div>
+
+        <div class="filters">
+          <label>时间</label>
+          <select class="select"><option>近 7 天</option><option>近 30 天</option><option>本月</option></select>
+          <label>用户</label>
+          <select class="select"><option>全部用户</option><option>alice</option><option>default</option><option>bob</option></select>
+          <label>来源</label>
+          <select class="select"><option>全部来源</option><option>cc-switch</option><option>ZCode</option><option>Trae</option></select>
+          <label>模型</label>
+          <select class="select"><option>全部模型</option><option>DeepSeek-V4.1-Flash</option><option>GLM-5.3-Flash</option></select>
+          <span class="spacer"></span>
+          <button class="btn" data-demo>应用筛选</button>
+        </div>
+
+        <div class="summary">
+          <div class="card"><div class="k">输入 Token</div><div class="v">8.42<small>M</small></div></div>
+          <div class="card"><div class="k">输出 Token</div><div class="v">0.96<small>M</small></div></div>
+          <div class="card"><div class="k">缓存读取</div><div class="v">61.7<small>M</small></div></div>
+          <div class="card"><div class="k">积分 / 金额</div><div class="v">2,146<small>· $38.20</small></div></div>
+        </div>
+
+        <div class="grid-half" style="margin-bottom:12px">
+          <div class="card">
+            <div class="card-head"><h3>按来源<span class="sub">事件数占比</span></h3></div>
+            <div class="card-body">
+              <div class="bar-list">
+                <div class="bar-row"><div class="top"><span>cc-switch</span><span>4,521 条 · 62%</span></div><div class="track"><div class="fill" style="width:62%;background:var(--series-1)"></div></div></div>
+                <div class="bar-row"><div class="top"><span>ZCode</span><span>1,748 条 · 24%</span></div><div class="track"><div class="fill" style="width:24%;background:var(--series-2)"></div></div></div>
+                <div class="bar-row"><div class="top"><span>Trae</span><span>1,043 条 · 14%</span></div><div class="track"><div class="fill" style="width:14%;background:var(--series-3)"></div></div></div>
+              </div>
+              <div class="divider"></div>
+              <div class="status-list">
+                <div class="status-row"><span class="k">日均事件</span><span class="v">6,172 条</span></div>
+                <div class="status-row"><span class="k">覆盖设备</span><span class="v">11 台</span></div>
+                <div class="status-row"><span class="k">最近上报</span><span class="v">2 分钟前</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>按模型<span class="sub">近 7 天</span></h3></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>模型</th><th class="num">Token</th><th class="num">积分</th></tr></thead>
+                <tbody>
+                  <tr><td>DeepSeek-V4.1-Flash</td><td class="num">27.1M</td><td class="num">812</td></tr>
+                  <tr><td>GLM-5.3-Flash</td><td class="num">19.3M</td><td class="num">604</td></tr>
+                  <tr><td>Claude-Sonnet-4.6</td><td class="num">15.0M</td><td class="num">486</td></tr>
+                  <tr><td>MiniMax-M3.1</td><td class="num">10.0M</td><td class="num">244</td></tr>
+                  <tr><td>其他</td><td class="num mono">—</td><td class="num mono">—</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>明细<span class="sub">最新 5 条同步事件</span></h3><button class="btn sm ghost" data-demo>查看全部</button></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>时间</th><th>用户</th><th>来源</th><th>模型</th><th class="num">输入</th><th class="num">输出</th><th class="num">缓存</th><th class="num">积分</th></tr></thead>
+              <tbody>
+                <tr><td>10:52:14</td><td>alice</td><td>cc-switch</td><td>DeepSeek-V4.1-Flash</td><td class="num">12,480</td><td class="num">1,206</td><td class="num">84,320</td><td class="num">2.4</td></tr>
+                <tr><td>10:51:02</td><td>default</td><td>Trae</td><td>GLM-5.3-Flash</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">6.5</td></tr>
+                <tr><td>10:49:37</td><td>alice</td><td>ZCode</td><td>Claude-Sonnet-4.6</td><td class="num">8,640</td><td class="num">942</td><td class="num">32,100</td><td class="num">4.8</td></tr>
+                <tr><td>10:47:55</td><td>bob</td><td>cc-switch</td><td>DeepSeek-V4.1-Flash</td><td class="num">5,210</td><td class="num">418</td><td class="num">18,760</td><td class="num">0.9</td></tr>
+                <tr><td>10:45:20</td><td>david</td><td>Trae</td><td>MiniMax-M3.1</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">1.7</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 流水明细 -->
+      <section class="view" id="view-flow">
+        <div class="page-head">
+          <div><h2>流水明细</h2><p>按请求查看同步上来的用量记录</p></div>
+          <button class="btn" data-demo>导出流水</button>
+        </div>
+
+        <div class="filters">
+          <button class="chip active">今日</button>
+          <button class="chip">近 7 天</button>
+          <button class="chip">近 30 天</button>
+          <button class="chip">全部</button>
+          <span class="spacer"></span>
+          <select class="select"><option>全部用户</option><option>default</option><option>alice</option><option>bob</option></select>
+          <select class="select"><option>全部来源</option><option>Trae</option><option>cc-switch</option><option>ZCode</option></select>
+          <select class="select"><option>全部模型</option><option>DeepSeek-V4.1-Flash</option><option>GLM-5.3-Flash</option></select>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>按时段聚合<span class="sub">点击行展开逐笔</span></h3>
+            <div style="display:flex;align-items:center;gap:6px">
+              <button class="btn sm ghost" data-demo>‹</button>
+              <span class="hint">今天</span>
+              <button class="btn sm ghost" data-demo>›</button>
+            </div>
+          </div>
+          <div class="flow-summary">
+            <div><span>今天合计</span> <b>185.84</b> 积分</div>
+            <div><span>·</span> <b>0</b> tokens</div>
+            <div><span>·</span> <b>50</b> 次请求</div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>时段</th><th class="num">次数</th><th class="num">积分</th><th class="num">Tokens</th></tr></thead>
+              <tbody>
+                <tr class="flow-group">
+                  <td><svg class="chev" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3l5 5-5 5"/></svg>08:00 — 09:00</td>
+                  <td class="num">5</td>
+                  <td class="num" style="color:var(--accent)">7.33</td>
+                  <td class="num">0</td>
+                </tr>
+                <tr class="flow-detail-row hidden">
+                  <td colspan="4">
+                    <div class="flow-detail-inner">
+                      <table>
+                        <thead><tr><th>时间</th><th>用户</th><th>来源</th><th>模型</th><th class="num">输入</th><th class="num">输出</th><th class="num">缓存</th><th class="num">积分</th></tr></thead>
+                        <tbody>
+                          <tr><td>08:12:06</td><td>default</td><td>Trae</td><td>DeepSeek-V4.1-Flash</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">1.20</td></tr>
+                          <tr><td>08:47:31</td><td>default</td><td>Trae</td><td>GLM-5.3-Flash</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">2.30</td></tr>
+                        </tbody>
+                      </table>
+                      <div class="hint" style="padding:8px 12px 0">仅展示前 2 条，展开全部 5 条</div>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr class="flow-group open">
+                  <td><svg class="chev" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3l5 5-5 5"/></svg>09:00 — 10:00<span class="pill warn" style="margin-left:8px">占全天 40%</span></td>
+                  <td class="num">26</td>
+                  <td class="num" style="color:var(--accent)">74.57</td>
+                  <td class="num">0</td>
+                </tr>
+                <tr class="flow-detail-row">
+                  <td colspan="4">
+                    <div class="flow-detail-inner">
+                      <table>
+                        <thead><tr><th>时间</th><th>用户</th><th>来源</th><th>模型</th><th class="num">输入</th><th class="num">输出</th><th class="num">缓存</th><th class="num">积分</th></tr></thead>
+                        <tbody>
+                          <tr><td>09:03:12</td><td>default</td><td>Trae</td><td>DeepSeek-V4.1-Flash</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">2.40</td></tr>
+                          <tr><td>09:11:48</td><td>default</td><td>Trae</td><td>GLM-5.3-Flash</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">3.20</td></tr>
+                          <tr><td>09:22:05</td><td>default</td><td>Trae</td><td>Claude-Sonnet-4.6</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">4.80</td></tr>
+                          <tr><td>09:36:40</td><td>default</td><td>Trae</td><td>DeepSeek-V4.1-Flash</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">1.90</td></tr>
+                        </tbody>
+                      </table>
+                      <div class="hint" style="padding:8px 12px 0">仅展示前 4 条，展开全部 26 条</div>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr class="flow-group">
+                  <td><svg class="chev" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3l5 5-5 5"/></svg>10:00 — 11:00<span class="pill warn" style="margin-left:8px">占全天 43%</span></td>
+                  <td class="num">14</td>
+                  <td class="num" style="color:var(--accent)">80.54</td>
+                  <td class="num">0</td>
+                </tr>
+                <tr class="flow-detail-row hidden">
+                  <td colspan="4">
+                    <div class="flow-detail-inner">
+                      <table>
+                        <thead><tr><th>时间</th><th>用户</th><th>来源</th><th>模型</th><th class="num">输入</th><th class="num">输出</th><th class="num">缓存</th><th class="num">积分</th></tr></thead>
+                        <tbody>
+                          <tr><td>10:05:24</td><td>default</td><td>Trae</td><td>Claude-Sonnet-4.6</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">6.50</td></tr>
+                          <tr><td>10:33:09</td><td>default</td><td>Trae</td><td>DeepSeek-V4.1-Flash</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">3.80</td></tr>
+                        </tbody>
+                      </table>
+                      <div class="hint" style="padding:8px 12px 0">仅展示前 2 条，展开全部 14 条</div>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr class="flow-group">
+                  <td><svg class="chev" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3l5 5-5 5"/></svg>11:00 — 12:00</td>
+                  <td class="num">5</td>
+                  <td class="num" style="color:var(--accent)">23.39</td>
+                  <td class="num">0</td>
+                </tr>
+                <tr class="flow-detail-row hidden">
+                  <td colspan="4">
+                    <div class="flow-detail-inner">
+                      <table>
+                        <thead><tr><th>时间</th><th>用户</th><th>来源</th><th>模型</th><th class="num">输入</th><th class="num">输出</th><th class="num">缓存</th><th class="num">积分</th></tr></thead>
+                        <tbody>
+                          <tr><td>11:08:52</td><td>default</td><td>Trae</td><td>GLM-5.3-Flash</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">4.20</td></tr>
+                          <tr><td>11:41:17</td><td>default</td><td>Trae</td><td>DeepSeek-V4.1-Flash</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">2.60</td></tr>
+                        </tbody>
+                      </table>
+                      <div class="hint" style="padding:8px 12px 0">仅展示前 2 条，展开全部 5 条</div>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 设备管理 -->
+      <section class="view" id="view-devices">
+        <div class="page-head">
+          <div><h2>设备管理</h2><p>所有用户登记过的设备与活跃状态</p></div>
+          <button class="btn danger" data-demo>清理离线设备</button>
+        </div>
+
+        <div class="summary" style="grid-template-columns:repeat(3,1fr)">
+          <div class="card"><div class="k">在线设备</div><div class="v">5</div></div>
+          <div class="card"><div class="k">24 小时内活跃</div><div class="v">9</div></div>
+          <div class="card"><div class="k">超过 7 天离线</div><div class="v">4</div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>全部设备<span class="sub">按最近活跃排序</span></h3><span class="hint">在线判定：5 分钟内上报</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>设备</th><th>归属用户</th><th>首次登记</th><th>最近活跃</th><th>状态</th><th class="num">事件数</th><th class="actions">操作</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">A1B2C3D4…9F0E</td><td>alice</td><td>2026-10-12</td><td>2 分钟前</td><td><span class="pill ok"><span class="status-dot on"></span>在线</span></td><td class="num">8,421</td><td class="actions"><button class="btn sm ghost" data-copy="A1B2C3D4-0000-0000-0000-000000009F0E">复制</button></td></tr>
+                <tr><td class="mono">7F0A11B2…2C4D</td><td>default</td><td>2026-09-28</td><td>6 分钟前</td><td><span class="pill ok"><span class="status-dot on"></span>在线</span></td><td class="num">21,904</td><td class="actions"><button class="btn sm ghost" data-copy="7F0A11B2-0000-0000-0000-000000002C4D">复制</button></td></tr>
+                <tr><td class="mono">C3D4E5F6…0021</td><td>alice</td><td>2026-10-20</td><td>3 天前</td><td><span class="pill">离线</span></td><td class="num">3,110</td><td class="actions"><button class="btn sm ghost" data-copy="C3D4E5F6-0000-0000-0000-000000000021">复制</button></td></tr>
+                <tr><td class="mono">B7E8F901…AA10</td><td>bob</td><td>2026-11-02</td><td>3 小时前</td><td><span class="pill">离线</span></td><td class="num">1,208</td><td class="actions"><button class="btn sm ghost" data-copy="B7E8F901-0000-0000-0000-00000000AA10">复制</button></td></tr>
+                <tr><td class="mono">D9C0B1A2…7711</td><td>erin</td><td>2026-08-15</td><td>5 天前</td><td><span class="pill warn">离线较久</span></td><td class="num">904</td><td class="actions"><button class="btn sm ghost" data-copy="D9C0B1A2-0000-0000-0000-000000007711">复制</button></td></tr>
+                <tr><td class="mono">E2F3A4B5…9900</td><td>frank</td><td>2026-07-01</td><td>12 天前</td><td><span class="pill bad">已禁用</span></td><td class="num">642</td><td class="actions"><button class="btn sm ghost" data-copy="E2F3A4B5-0000-0000-0000-000000009900">复制</button></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 健康管理 -->
+      <section class="view" id="view-health">
+        <div class="page-head">
+          <div><h2>健康管理</h2><p>体重、体脂与身高的同步数据</p></div>
+          <button class="btn primary" id="addHealthBtn">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3v10M3 8h10"/></svg>
+            新增记录
+          </button>
+        </div>
+
+        <div class="filters">
+          <label>类型</label>
+          <select class="select"><option>全部类型</option><option>体重</option><option>体脂率</option><option>身高</option></select>
+          <label>时间</label>
+          <select class="select"><option>近 30 天</option><option>近 90 天</option><option>全部</option></select>
+          <span class="spacer"></span>
+          <span class="hint mono">/api/health/samples</span>
+        </div>
+
+        <div class="kpis">
+          <div class="card kpi">
+            <div class="label">最新体重</div>
+            <div class="value">68.4 <span style="font-size:13px;color:var(--muted);font-weight:400">kg</span></div>
+            <div class="foot">较上周 <b>-0.6 kg</b></div>
+          </div>
+          <div class="card kpi">
+            <div class="label">体脂率</div>
+            <div class="value">18.2<span style="font-size:15px;color:var(--muted);font-weight:400">%</span></div>
+            <div class="foot">较上周 <b>-0.3%</b></div>
+          </div>
+          <div class="card kpi">
+            <div class="label">身高</div>
+            <div class="value">176 <span style="font-size:13px;color:var(--muted);font-weight:400">cm</span></div>
+            <div class="foot">最近更新 11-02</div>
+          </div>
+          <div class="card kpi">
+            <div class="label">BMI</div>
+            <div class="value">22.1</div>
+            <div class="foot">正常范围 18.5–24.0</div>
+          </div>
+        </div>
+
+        <div class="grid-main">
+          <div class="card">
+            <div class="card-head">
+              <h3>体重趋势<span class="sub">近 30 天</span></h3>
+              <span class="pill ok">较上月 -1.0 kg</span>
+            </div>
+            <div class="chart-wrap">
+              <svg viewBox="0 0 660 220" role="img" aria-label="近 30 天体重趋势折线图">
+                <g stroke="var(--border)" stroke-width="1">
+                  <line x1="36" y1="12" x2="652" y2="12"/>
+                  <line x1="36" y1="72" x2="652" y2="72"/>
+                  <line x1="36" y1="132" x2="652" y2="132"/>
+                  <line x1="36" y1="192" x2="652" y2="192"/>
+                </g>
+                <g fill="var(--muted)" font-size="10.5" text-anchor="end">
+                  <text x="30" y="15">70</text>
+                  <text x="30" y="75">69</text>
+                  <text x="30" y="135">68</text>
+                  <text x="30" y="195">67</text>
+                </g>
+                <path d="M36 48 L97.6 66 L159.2 78 L220.8 84 L282.4 102 L344 96 L405.6 114 L467.2 108 L528.8 120 L590.4 114 L652 108 L652 192 L36 192 Z"
+                      fill="var(--series-1)" opacity=".08"/>
+                <path d="M36 48 L97.6 66 L159.2 78 L220.8 84 L282.4 102 L344 96 L405.6 114 L467.2 108 L528.8 120 L590.4 114 L652 108"
+                      fill="none" stroke="var(--series-1)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <circle cx="652" cy="108" r="4" fill="var(--accent)" stroke="var(--panel)" stroke-width="2"/>
+                <text x="644" y="98" text-anchor="end" fill="var(--accent)" font-size="11" font-weight="600">68.4</text>
+                <g fill="var(--muted)" font-size="10.5">
+                  <text x="36" y="212" text-anchor="start">10-24</text>
+                  <text x="159.2" y="212" text-anchor="middle">10-30</text>
+                  <text x="282.4" y="212" text-anchor="middle">11-05</text>
+                  <text x="405.6" y="212" text-anchor="middle">11-11</text>
+                  <text x="528.8" y="212" text-anchor="middle">11-17</text>
+                  <text x="652" y="212" text-anchor="end">11-22</text>
+                </g>
+              </svg>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>数据概览</h3><span class="pill blue">825 条</span></div>
+            <div class="card-body" style="padding-top:6px">
+              <div class="status-list">
+                <div class="status-row"><span class="k">体重记录</span><span class="v">412 条</span></div>
+                <div class="status-row"><span class="k">体脂记录</span><span class="v">389 条</span></div>
+                <div class="status-row"><span class="k">身高记录</span><span class="v">24 条</span></div>
+                <div class="status-row"><span class="k">数据来源</span><span class="v">2 个</span></div>
+                <div class="status-row"><span class="k">覆盖天数</span><span class="v">214 天</span></div>
+                <div class="status-row"><span class="k">最近同步</span><span class="v">今天 07:32</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>最近记录<span class="sub">最新 5 条</span></h3><button class="btn sm ghost" data-demo>查看全部</button></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>记录时间</th><th>类型</th><th class="num">数值</th><th>来源</th></tr></thead>
+              <tbody>
+                <tr><td>今天 07:32</td><td><span class="pill blue">体重</span></td><td class="num">68.4 kg</td><td>小米体脂秤</td></tr>
+                <tr><td>今天 07:32</td><td><span class="pill">体脂率</span></td><td class="num">18.2%</td><td>小米体脂秤</td></tr>
+                <tr><td>昨天 07:28</td><td><span class="pill blue">体重</span></td><td class="num">68.3 kg</td><td>小米体脂秤</td></tr>
+                <tr><td>11-20 07:30</td><td><span class="pill">体脂率</span></td><td class="num">18.4%</td><td>小米体脂秤</td></tr>
+                <tr><td>11-02 21:10</td><td><span class="pill warn">身高</span></td><td class="num">176 cm</td><td>手动录入</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 系统状态 -->
+      <section class="view" id="view-system">
+        <div class="page-head">
+          <div><h2>系统状态</h2><p>服务健康、数据库与维护操作</p></div>
+          <button class="btn" id="checkHealth">重新检查</button>
+        </div>
+
+        <div class="sys-grid">
+          <div class="card sys-card"><div class="k"><span class="status-dot on"></span>API 服务</div><div class="v">UP</div></div>
+          <div class="card sys-card"><div class="k"><span class="status-dot on"></span>数据库</div><div class="v">UP <small>PostgreSQL</small></div></div>
+          <div class="card sys-card"><div class="k">迁移版本</div><div class="v mono">V4</div></div>
+          <div class="card sys-card"><div class="k">运行时长</div><div class="v">12 天 <small>3 小时</small></div></div>
+        </div>
+
+        <div class="grid-half">
+          <div class="card">
+            <div class="card-head"><h3>健康检查<span class="sub">GET /api/health</span></h3><span class="pill ok">200</span></div>
+            <div class="card-body">
+              <div class="code">{
+  "status": "<b>UP</b>",
+  "db": "<b>UP</b>",
+  "time": "2026-11-22T10:52:31+08:00"
+}</div>
+              <div class="hint" style="margin-top:10px">每 30 秒刷新一次，异常时顶栏状态会变为「服务异常」。</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>运行信息</h3></div>
+            <div class="card-body">
+              <div class="status-list">
+                <div class="status-row"><span class="k">服务版本</span><span class="v mono">cc-service 1.4.0</span></div>
+                <div class="status-row"><span class="k">构建时间</span><span class="v">2026-11-20 18:20</span></div>
+                <div class="status-row"><span class="k">数据库连接池</span><span class="v">3 / 10</span></div>
+                <div class="status-row"><span class="k">usage_event 行数</span><span class="v">43,208</span></div>
+                <div class="status-row"><span class="k">最近备份</span><span class="v">今天 03:00</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card danger-zone" style="margin-top:12px">
+          <div class="card-head"><h3>维护操作</h3></div>
+          <div class="card-body">
+            <div class="status-row" style="border:none;padding-top:0">
+              <div><div style="font-size:12.5px">清理 90 天前的同步事件</div><div class="hint">仅删除 usage_event 历史行，不影响用户与设备。</div></div>
+              <button class="btn danger" data-demo>清理数据</button>
+            </div>
+            <div class="divider"></div>
+            <div class="status-row" style="border:none;padding:0">
+              <div><div style="font-size:12.5px">导出数据库备份</div><div class="hint">生成 SQL 快照并下载到本地。</div></div>
+              <button class="btn" data-demo>导出备份</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<!-- 创建用户弹窗 -->
+<div class="mask hidden" id="createMask">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>创建用户</h3>
+      <button class="icon-btn" id="createClose">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="field"><label>用户名</label><input class="input" id="newUsername" placeholder="2–64 位，字母数字 _ . -"></div>
+      <div class="field"><label>初始密码</label><input class="input" id="newPassword" type="password" placeholder="至少 6 位"></div>
+      <div class="hint">用户在任意设备用同一用户名登录后，用量会自动合并。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="createCancel">取消</button>
+      <button class="btn primary" id="createConfirm">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新增健康记录弹窗 -->
+<div class="mask hidden" id="healthMask">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>新增健康记录</h3>
+      <button class="icon-btn" id="healthClose">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>类型</label>
+        <select class="select" id="healthKind" style="width:100%">
+          <option value="weight">体重（kg）</option>
+          <option value="bodyfat">体脂率（0–1）</option>
+          <option value="height">身高（cm）</option>
+        </select>
+      </div>
+      <div class="field"><label>记录时间</label><input class="input" id="healthTime" type="datetime-local"></div>
+      <div class="field"><label>数值</label><input class="input" id="healthValue" type="number" step="0.01" placeholder="例如 68.4"></div>
+      <div class="field"><label>来源</label><input class="input" id="healthSource" placeholder="例如 小米体脂秤"></div>
+      <div class="hint">体脂率请填写 0–1 之间的小数，例如 0.182。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="healthCancel">取消</button>
+      <button class="btn primary" id="healthConfirm">保存</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var meta = {
+    overview: ['概览', '服务与同步状态一览'],
+    users: ['用户与设备', '管理账号、设备归属与登录凭据'],
+    usage: ['用量分析', '按用户、来源和模型查看同步用量'],
+    flow: ['流水明细', '按请求查询同步上来的用量记录'],
+    devices: ['设备管理', '所有用户登记过的设备与活跃状态'],
+    health: ['健康管理', '体重、体脂与身高的同步数据'],
+    system: ['系统状态', '服务健康、数据库与维护操作']
+  };
+
+  function toast(message) {
+    var el = document.getElementById('toast');
+    el.textContent = message;
+    el.classList.add('show');
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(function () { el.classList.remove('show'); }, 2200);
+  }
+
+  function switchView(key) {
+    var section = document.getElementById('view-' + key);
+    if (!section) return;
+    document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
+    section.classList.add('active');
+    document.querySelectorAll('[data-nav]').forEach(function (item) {
+      item.classList.toggle('active', item.getAttribute('data-nav') === key);
+    });
+    var info = meta[key] || meta.overview;
+    document.getElementById('pageTitle').textContent = info[0];
+    document.getElementById('pageSub').textContent = info[1];
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  document.addEventListener('click', function (e) {
+    var nav = e.target.closest('[data-nav]');
+    if (nav) {
+      e.preventDefault();
+      switchView(nav.getAttribute('data-nav'));
+      return;
+    }
+    var copyBtn = e.target.closest('[data-copy]');
+    if (copyBtn) {
+      var text = copyBtn.getAttribute('data-copy');
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { toast('设备 ID 已复制'); });
+      } else {
+        toast('设备 ID：' + text);
+      }
+      return;
+    }
+    if (e.target.closest('[data-demo]')) {
+      toast('设计稿演示：该操作尚未接入后端');
+    }
+  });
+
+  document.getElementById('themeBtn').addEventListener('click', function () {
+    root.setAttribute('data-theme', root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+    toast(root.getAttribute('data-theme') === 'dark' ? '已切换到深色' : '已切换到浅色');
+  });
+
+  document.getElementById('refreshBtn').addEventListener('click', function () {
+    document.getElementById('refreshHint').textContent = '刚刚更新';
+    toast('状态已刷新');
+  });
+
+  document.getElementById('logoutBtn').addEventListener('click', function () {
+    toast('设计稿演示：退出登录');
+  });
+
+  var createMask = document.getElementById('createMask');
+  function closeCreate() { createMask.classList.add('hidden'); }
+  document.getElementById('createUserBtn').addEventListener('click', function () {
+    createMask.classList.remove('hidden');
+    setTimeout(function () { document.getElementById('newUsername').focus(); }, 30);
+  });
+  document.getElementById('createClose').addEventListener('click', closeCreate);
+  document.getElementById('createCancel').addEventListener('click', closeCreate);
+  createMask.addEventListener('click', function (e) { if (e.target === createMask) closeCreate(); });
+  document.getElementById('createConfirm').addEventListener('click', function () {
+    var name = document.getElementById('newUsername').value.trim();
+    if (!/^[A-Za-z0-9_.-]{2,64}$/.test(name)) { toast('用户名需为 2–64 位字母、数字、_ . -'); return; }
+    closeCreate();
+    toast('已创建用户 ' + name + '（演示）');
+  });
+
+  var healthMask = document.getElementById('healthMask');
+  function closeHealth() { healthMask.classList.add('hidden'); }
+  document.getElementById('addHealthBtn').addEventListener('click', function () {
+    healthMask.classList.remove('hidden');
+    var now = new Date();
+    var local = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    document.getElementById('healthTime').value = local;
+    setTimeout(function () { document.getElementById('healthValue').focus(); }, 30);
+  });
+  document.getElementById('healthClose').addEventListener('click', closeHealth);
+  document.getElementById('healthCancel').addEventListener('click', closeHealth);
+  healthMask.addEventListener('click', function (e) { if (e.target === healthMask) closeHealth(); });
+  document.getElementById('healthConfirm').addEventListener('click', function () {
+    var value = parseFloat(document.getElementById('healthValue').value);
+    if (!isFinite(value)) { toast('请输入有效的数值'); return; }
+    var kind = document.getElementById('healthKind').selectedOptions[0].textContent;
+    closeHealth();
+    toast('已新增' + kind + '记录 ' + value + '（演示）');
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { closeCreate(); closeHealth(); }
+    if (e.key === 'Enter') {
+      if (!createMask.classList.contains('hidden')) {
+        document.getElementById('createConfirm').click();
+      } else if (!healthMask.classList.contains('hidden')) {
+        document.getElementById('healthConfirm').click();
+      }
+    }
+  });
+
+  var activeFilter = 'all';
+  var search = document.getElementById('userSearch');
+  function filterRows() {
+    var q = search.value.trim().toLowerCase();
+    var visible = 0;
+    document.querySelectorAll('#userRows tr[data-name]').forEach(function (row) {
+      var name = row.getAttribute('data-name');
+      var devices = Number(row.getAttribute('data-devices'));
+      var okName = !q || name.indexOf(q) >= 0;
+      var okFilter = activeFilter === 'all' || (activeFilter === 'with' ? devices > 0 : devices === 0);
+      var show = okName && okFilter;
+      row.classList.toggle('hidden', !show);
+      if (show) visible += 1;
+    });
+    document.getElementById('userEmpty').classList.toggle('hidden', visible > 0);
+  }
+  search.addEventListener('input', filterRows);
+  document.querySelectorAll('[data-filter]').forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      activeFilter = chip.getAttribute('data-filter');
+      document.querySelectorAll('[data-filter]').forEach(function (c) { c.classList.toggle('active', c === chip); });
+      filterRows();
+    });
+  });
+  document.getElementById('refreshUsers').addEventListener('click', function () {
+    toast('用户列表已刷新');
+  });
+
+  var userData = {
+    alice: {
+      initial: 'A', id: '#1', created: '2026-10-12', lastActive: '2 分钟前',
+      status: '在线', statusClass: 'ok', devices: 2,
+      todayTokens: '128.4k', todayCredits: '86', weekTokens: '742k Token', disabled: false,
+      deviceList: [
+        { name: 'MacBook Pro', online: true, shortId: 'A1B2C3D4…9F0E', fullId: 'A1B2C3D4-0000-0000-0000-000000009F0E', first: '10-12', last: '2 分钟前' },
+        { name: 'iMac', online: false, shortId: 'C3D4E5F6…0021', fullId: 'C3D4E5F6-0000-0000-0000-000000000021', first: '10-20', last: '3 天前' }
+      ]
+    },
+    default: {
+      initial: 'D', id: '#0', created: '2026-09-28', lastActive: '1 分钟前',
+      status: '在线', statusClass: 'ok', devices: 1,
+      todayTokens: '312.0k', todayCredits: '210', weekTokens: '1.82M Token', disabled: false,
+      deviceList: [
+        { name: 'Mac mini', online: true, shortId: '7F0A11B2…2C4D', fullId: '7F0A11B2-0000-0000-0000-000000002C4D', first: '09-28', last: '1 分钟前' }
+      ]
+    },
+    bob: {
+      initial: 'B', id: '#2', created: '2026-10-20', lastActive: '3 小时前',
+      status: '离线', statusClass: '', devices: 1,
+      todayTokens: '42.1k', todayCredits: '28', weekTokens: '214k Token', disabled: false,
+      deviceList: [
+        { name: 'ThinkPad X1', online: false, shortId: 'B7E8F901…AA10', fullId: 'B7E8F901-0000-0000-0000-00000000AA10', first: '11-02', last: '3 小时前' }
+      ]
+    },
+    david: {
+      initial: 'D', id: '#3', created: '2026-10-25', lastActive: '昨天',
+      status: '离线', statusClass: '', devices: 3,
+      todayTokens: '96.7k', todayCredits: '64', weekTokens: '486k Token', disabled: false,
+      deviceList: [
+        { name: 'MacBook Air', online: false, shortId: '1A2B3C4D…5511', fullId: '1A2B3C4D-0000-0000-0000-000000005511', first: '10-25', last: '昨天' },
+        { name: 'Mac mini', online: false, shortId: '9E8D7C6B…4422', fullId: '9E8D7C6B-0000-0000-0000-000000004422', first: '10-27', last: '2 天前' },
+        { name: 'MacBook Pro', online: false, shortId: '5F4E3D2C…7733', fullId: '5F4E3D2C-0000-0000-0000-000000007733', first: '11-01', last: '5 天前' }
+      ]
+    },
+    erin: {
+      initial: 'E', id: '#4', created: '2026-08-15', lastActive: '5 天前',
+      status: '离线较久', statusClass: 'warn', devices: 1,
+      todayTokens: '8.2k', todayCredits: '6', weekTokens: '32k Token', disabled: false,
+      deviceList: [
+        { name: 'MacBook Pro', online: false, shortId: 'D9C0B1A2…7711', fullId: 'D9C0B1A2-0000-0000-0000-000000007711', first: '08-15', last: '5 天前' }
+      ]
+    },
+    frank: {
+      initial: 'F', id: '#5', created: '2026-07-01', lastActive: '12 天前',
+      status: '已禁用', statusClass: 'bad', devices: 1,
+      todayTokens: '—', todayCredits: '—', weekTokens: '0', disabled: true,
+      deviceList: [
+        { name: 'MacBook Pro', online: false, shortId: 'E2F3A4B5…9900', fullId: 'E2F3A4B5-0000-0000-0000-000000009900', first: '07-01', last: '12 天前' }
+      ]
+    },
+    carol: {
+      initial: 'C', id: '#6', created: '2026-11-21', lastActive: '—',
+      status: '未激活', statusClass: '', devices: 0,
+      todayTokens: '—', todayCredits: '—', weekTokens: '0', disabled: false,
+      deviceList: []
+    }
+  };
+
+  function selectUser(name) {
+    var u = userData[name];
+    if (!u) return;
+    document.querySelectorAll('#userRows tr[data-name]').forEach(function (row) {
+      row.classList.toggle('selected', row.getAttribute('data-name') === name);
+    });
+    var avatar = document.getElementById('detailAvatar');
+    avatar.textContent = u.initial;
+    avatar.className = 'avatar' + (u.statusClass === 'ok' ? ' on' : '');
+    document.getElementById('detailName').textContent = name;
+    document.getElementById('detailSub').textContent = 'ID ' + u.id + ' · 创建于 ' + u.created;
+    var pill = document.getElementById('detailStatus');
+    pill.className = 'pill' + (u.statusClass ? ' ' + u.statusClass : '');
+    pill.innerHTML = (u.statusClass === 'ok' ? '<span class="status-dot on"></span>' : '') + u.status;
+    document.getElementById('detailDeviceCount').textContent = u.devices;
+    document.getElementById('detailTodayTokens').textContent = u.todayTokens;
+    document.getElementById('detailTodayCredits').textContent = u.todayCredits;
+    document.getElementById('detailUserId').textContent = u.id;
+    document.getElementById('detailCreated').textContent = u.created;
+    document.getElementById('detailLastActive').textContent = u.lastActive;
+    document.getElementById('detailWeekTokens').textContent = u.weekTokens;
+    document.getElementById('detailDeviceHint').textContent = u.devices + ' 台';
+    var list = document.getElementById('detailDevices');
+    if (!u.deviceList.length) {
+      list.innerHTML = '<div class="detail-empty">该用户还没有登录过任何设备</div>';
+    } else {
+      list.innerHTML = u.deviceList.map(function (d) {
+        return '<div class="device-item"><div>' +
+          '<div class="name"><span class="status-dot ' + (d.online ? 'on' : 'off') + '"></span>' + d.name + '</div>' +
+          '<div class="meta2 mono">' + d.shortId + '</div>' +
+          '<div class="meta2">首次 ' + d.first + ' · 最近 ' + d.last + '</div>' +
+          '</div><button class="btn sm ghost" data-copy="' + d.fullId + '">复制</button></div>';
+      }).join('');
+    }
+    document.getElementById('detailToggle').textContent = u.disabled ? '启用账号' : '禁用账号';
+  }
+
+  document.getElementById('userRows').addEventListener('click', function (e) {
+    var row = e.target.closest('tr[data-name]');
+    if (row) selectUser(row.getAttribute('data-name'));
+  });
+  selectUser('alice');
+
+  document.querySelectorAll('.flow-group').forEach(function (row) {
+    row.addEventListener('click', function () {
+      var detail = row.nextElementSibling;
+      if (!detail || !detail.classList.contains('flow-detail-row')) return;
+      var open = row.classList.toggle('open');
+      detail.classList.toggle('hidden', !open);
+    });
+  });
+
+  document.getElementById('checkHealth').addEventListener('click', function () {
+    toast('健康检查通过：API 与数据库均正常');
+  });
+})();
+</script>
+</body>
+</html>

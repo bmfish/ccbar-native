@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.cc.service.admin.AdminTimes;
+import com.cc.service.admin.TtlCache;
 
 /** 访问审计统计与明细（仅管理 Token 可访问）。 */
 @RestController
@@ -32,6 +33,7 @@ public class AuditController {
     }
 
     private final AuditRepository repository;
+    private final TtlCache<Integer, SummaryResponse> summaryCache = new TtlCache<>(30_000);
 
     public AuditController(AuditRepository repository) {
         this.repository = repository;
@@ -40,6 +42,10 @@ public class AuditController {
     @GetMapping("/summary")
     public SummaryResponse summary(@RequestParam(defaultValue = "7") int days) {
         int safeDays = Math.min(Math.max(days, 1), MAX_DAYS);
+        return summaryCache.get(safeDays, () -> buildSummary(safeDays));
+    }
+
+    private SummaryResponse buildSummary(int safeDays) {
         OffsetDateTime from = AdminTimes.daysStart(safeDays);
         OffsetDateTime to = AdminTimes.now();
         AuditRepository.Summary summary = repository.summary(from);

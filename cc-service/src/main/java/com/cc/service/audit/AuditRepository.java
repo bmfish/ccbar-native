@@ -182,6 +182,21 @@ public class AuditRepository {
         return new LogPage(items, total, safePage, safeSize);
     }
 
+    public int deleteBatchBefore(OffsetDateTime cutoff, int limit) {
+        return jdbcClient.sql("""
+                        delete from api_audit_log
+                        where id in (
+                            select id from api_audit_log
+                            where created_at < :cutoff
+                            order by created_at
+                            limit :limit
+                        )
+                        """)
+                .param("cutoff", cutoff)
+                .param("limit", limit)
+                .update();
+    }
+
     private static String truncate(String value, int maxLength) {
         if (value == null) {
             return "";

@@ -40,16 +40,27 @@ public class AdminConsoleRepository {
                   (select count(*) from app_user where created_at >= :weekStart) as new_users_week,
                   (select count(*) from user_device) as total_devices,
                   (select count(*) from user_device where last_seen_at >= :onlineSince) as online_devices,
-                  (select count(*) from usage_event where created_at >= :todayStartEpoch
-                     and created_at < :nowEpoch) as today_events,
-                  (select count(*) from usage_event where created_at >= :weekStartEpoch
-                     and created_at < :nowEpoch) as week_events,
-                  (select coalesce(sum(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
-                     from usage_event where created_at >= :todayStartEpoch and created_at < :nowEpoch) as today_tokens,
-                  (select coalesce(sum(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
-                     from usage_event where created_at >= :weekStartEpoch and created_at < :nowEpoch) as week_tokens,
-                  (select coalesce(sum(credits), 0) from usage_event
-                     where created_at >= :todayStartEpoch and created_at < :nowEpoch) as today_credits
+                  u.today_events,
+                  u.week_events,
+                  u.today_tokens,
+                  u.week_tokens,
+                  u.today_credits
+                from (
+                  select
+                    count(*) filter (where created_at >= :todayStartEpoch and created_at < :nowEpoch)
+                        as today_events,
+                    count(*) as week_events,
+                    coalesce(sum(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens)
+                             filter (where created_at >= :todayStartEpoch and created_at < :nowEpoch), 0)
+                        as today_tokens,
+                    coalesce(sum(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
+                        as week_tokens,
+                    coalesce(sum(credits)
+                             filter (where created_at >= :todayStartEpoch and created_at < :nowEpoch), 0)
+                        as today_credits
+                  from usage_event
+                  where created_at >= :weekStartEpoch and created_at < :nowEpoch
+                ) u
                 """)
                 .param("weekStart", weekStart)
                 .param("onlineSince", onlineSince)
@@ -714,32 +725,47 @@ public class AdminConsoleRepository {
     private String userSql() {
         return """
                 select u.id, u.username, u.created_at, u.disabled,
-                       (select count(*) from user_device d where d.user_id = u.id) as device_count,
-                       (select max(d.last_seen_at) from user_device d where d.user_id = u.id) as last_active_at,
-                       (select coalesce(sum(e.input_tokens + e.output_tokens + e.cache_read_tokens
-                                            + e.cache_creation_tokens), 0)
-                          from usage_event e
-                          where e.user_id = u.id and e.created_at >= :todayStart and e.created_at < :now) as today_tokens,
-                       (select coalesce(sum(e.credits), 0)
-                          from usage_event e
-                          where e.user_id = u.id and e.created_at >= :todayStart and e.created_at < :now) as today_credits,
-                       (select coalesce(sum(e.input_tokens + e.output_tokens + e.cache_read_tokens
-                                            + e.cache_creation_tokens), 0)
-                          from usage_event e
-                          where e.user_id = u.id and e.created_at >= :weekStart and e.created_at < :now) as week_tokens,
-                       (select coalesce(sum(e.credits), 0)
-                          from usage_event e
-                          where e.user_id = u.id and e.created_at >= :weekStart and e.created_at < :now) as week_credits
+                       coalesce(d.device_count, 0) as device_count,
+                       d.last_active_at,
+                       coalesce(e.today_tokens, 0) as today_tokens,
+                       coalesce(e.today_credits, 0) as today_credits,
+                       coalesce(e.week_tokens, 0) as week_tokens,
+                       coalesce(e.week_credits, 0) as week_credits
                 from app_user u
+                left join lateral (
+                    select count(*) as device_count, max(d.last_seen_at) as last_active_at
+                    from user_device d
+                    where d.user_id = u.id
+                ) d on true
+                left join lateral (
+                    select
+                      coalesce(sum(e.input_tokens + e.output_tokens + e.cache_read_tokens
+                                   + e.cache_creation_tokens)
+                               filter (where e.created_at >= :todayStart and e.created_at < :now), 0)
+                          as today_tokens,
+                      coalesce(sum(e.credits)
+                               filter (where e.created_at >= :todayStart and e.created_at < :now), 0)
+                          as today_credits,
+                      coalesce(sum(e.input_tokens + e.output_tokens + e.cache_read_tokens
+                                   + e.cache_creation_tokens), 0) as week_tokens,
+                      coalesce(sum(e.credits), 0) as week_credits
+                    from usage_event e
+                    where e.user_id = u.id and e.created_at >= :weekStart and e.created_at < :now
+                ) e on true
                 """;
     }
 
     private String deviceSql() {
         return """
                 select d.device_id, d.user_id, u.username, d.first_seen_at, d.last_seen_at,
-                       (select count(*) from usage_event e
-                          where e.user_id = d.user_id and e.device_id = d.device_id) as event_count
-                from user_device d join app_user u on u.id = d.user_id
+                       coalesce(e.event_count, 0) as event_count
+                from user_device d
+                join app_user u on u.id = d.user_id
+                left join lateral (
+                    select count(*) as event_count
+                    from usage_event e
+                    where e.user_id = d.user_id and e.device_id = d.device_id
+                ) e on true
                 """;
     }
 

@@ -1,0 +1,692 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trae 账户 · CC 管理控制台（效果图）</title>
+<style>
+  :root {
+    --bg: #0e1210;
+    --sidebar: #111613;
+    --panel: #161b18;
+    --panel-2: #1c231f;
+    --border: #29312b;
+    --border-strong: #39443c;
+    --text: #e9efeb;
+    --muted: #8d978f;
+    --accent: #3ddc84;
+    --accent-dim: rgba(61, 220, 132, .12);
+    --accent-on: #07140c;
+    --danger: #ff6b6b;
+    --danger-dim: rgba(255, 107, 107, .12);
+    --warning: #f2b544;
+    --series-1: #3ddc84;
+    --series-2: #2a8f5d;
+    --series-3: #78bdf5;
+    --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+    --radius-card: 14px;
+    color-scheme: dark;
+  }
+  html[data-theme="light"] {
+    --bg: #f3f6f3;
+    --sidebar: #ffffff;
+    --panel: #ffffff;
+    --panel-2: #f1f5f2;
+    --border: #e0e7e1;
+    --border-strong: #cfd9d1;
+    --text: #18211b;
+    --muted: #64736a;
+    --accent: #0f9d58;
+    --accent-dim: rgba(15, 157, 88, .10);
+    --accent-on: #ffffff;
+    --danger: #d93d3d;
+    --danger-dim: rgba(217, 61, 61, .10);
+    --warning: #b77a10;
+    --series-1: #0f9d58;
+    --series-2: #8ad8ad;
+    --series-3: #3b82f6;
+    --shadow: 0 16px 42px rgba(20, 40, 28, .08);
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  .hidden { display: none !important; }
+  .mono { font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+  .muted { color: var(--muted); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .btn {
+    height: 34px; padding: 0 13px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text); cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    transition: background .12s, border-color .12s, color .12s; white-space: nowrap;
+  }
+  .btn:hover { border-color: var(--border-strong); }
+  .btn.sm { height: 28px; padding: 0 9px; font-size: 12px; }
+  .btn.ghost { background: transparent; }
+  .icon-btn {
+    width: 32px; height: 32px; padding: 0; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--muted); cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .icon-btn:hover { color: var(--text); border-color: var(--border-strong); }
+  .icon-btn svg { width: 15px; height: 15px; }
+  .select {
+    height: 32px; padding: 0 26px 0 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text); outline: none; cursor: pointer;
+  }
+  .select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+
+  .app { display: flex; min-height: 100vh; }
+  .sidebar {
+    width: 224px; flex: 0 0 224px; background: var(--sidebar);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; padding: 18px 12px;
+    position: sticky; top: 0; height: 100vh;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 22px; }
+  .brand-mark {
+    width: 26px; height: 26px; border-radius: 8px; background: var(--accent);
+    color: var(--accent-on); font-weight: 700; font-size: 14px;
+    display: flex; align-items: center; justify-content: center; flex: 0 0 26px;
+  }
+  .brand-name { font-weight: 600; font-size: 14px; letter-spacing: .2px; white-space: nowrap; }
+  .brand-name span { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 5px; }
+  .nav-section { color: var(--muted); font-size: 11px; letter-spacing: .8px; padding: 14px 12px 6px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px; margin-bottom: 2px;
+    border-radius: 8px; color: var(--muted); cursor: pointer; user-select: none;
+    border: 1px solid transparent; transition: background .12s, color .12s; white-space: nowrap;
+  }
+  .nav-item:hover { background: var(--panel-2); color: var(--text); }
+  .nav-item.active { background: var(--accent-dim); color: var(--accent); }
+  .nav-item svg { flex: 0 0 16px; width: 16px; height: 16px; }
+  .nav-badge {
+    margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+    background: var(--panel-2); color: var(--muted); font-size: 10.5px;
+    display: inline-flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums;
+  }
+  .nav-item.active .nav-badge { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+  .sidebar-foot { margin-top: auto; border-top: 1px solid var(--border); padding: 14px 10px 4px; display: flex; align-items: center; gap: 10px; }
+  .sidebar-foot .who { flex: 1; min-width: 0; }
+  .sidebar-foot .who b { display: block; font-size: 12.5px; font-weight: 500; }
+  .sidebar-foot .who span { display: block; font-size: 11px; color: var(--muted); }
+
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .topbar {
+    height: 62px; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 26px; border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: blur(10px); position: sticky; top: 0; z-index: 10; gap: 16px;
+  }
+  .topbar h1 { font-size: 15.5px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  .topbar .sub { color: var(--muted); font-size: 12px; margin-left: 10px; }
+  .topbar .right { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+  .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .content { width: 100%; max-width: 1240px; margin: 0 auto; padding: 22px 26px 64px; }
+
+  .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+  .page-head h2 { font-size: 19px; margin: 0 0 3px; font-weight: 600; letter-spacing: .2px; }
+  .page-head p { margin: 0; color: var(--muted); font-size: 12.5px; }
+  .page-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-card); }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 18px 0; flex-wrap: wrap; }
+  .card-head h3 { margin: 0; font-size: 13.5px; font-weight: 600; }
+  .card-head .sub { color: var(--muted); font-size: 11.5px; font-weight: 400; margin-left: 8px; }
+  .card-body { padding: 16px 18px 18px; }
+  .card-head + .card-body { padding-top: 14px; }
+
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
+  .kpi { padding: 16px 17px 15px; position: relative; overflow: hidden; }
+  .kpi .label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .kpi .value { font-size: 27px; font-weight: 650; letter-spacing: -.4px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .kpi .value .unit { font-size: 12px; font-weight: 500; color: var(--muted); margin-left: 5px; letter-spacing: 0; }
+  .kpi .foot { color: var(--muted); font-size: 11.5px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .kpi .foot b { color: var(--accent); font-weight: 500; }
+  .kpi .foot .warn { color: var(--warning); }
+  .kpi .foot .bad { color: var(--danger); }
+  .kpi.focus { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+  .kpi.focus .value { color: var(--accent); }
+  .kpi .value.bad { color: var(--danger); }
+
+  .grid-main { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr); gap: 12px; margin-bottom: 12px; align-items: start; }
+  .chart-wrap { padding: 12px 12px 2px; }
+  .chart-wrap svg { width: 100%; height: auto; display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; padding: 0 12px 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11.5px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: 0 0 7px; }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); display: inline-block; flex: 0 0 6px; }
+  .status-dot.ok { background: var(--accent); }
+  .status-dot.warn { background: var(--warning); }
+  .status-dot.bad { background: var(--danger); }
+
+  .alert-list { display: flex; flex-direction: column; }
+  .alert-row { display: flex; align-items: flex-start; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--border); }
+  .alert-row:last-child { border-bottom: none; }
+  .alert-row .status-dot { margin-top: 5px; }
+  .alert-main { flex: 1; min-width: 0; }
+  .alert-main b { display: block; font-size: 12.5px; font-weight: 500; }
+  .alert-main span { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .alert-time { color: var(--muted); font-size: 10.5px; white-space: nowrap; padding-top: 1px; }
+  .alert-foot { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; padding-top: 12px; }
+
+  .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 18px 0 10px; flex-wrap: wrap; }
+  .section-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
+  .section-head p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  .acct-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .acct-card { padding: 16px 17px 15px; transition: border-color .12s; cursor: pointer; }
+  .acct-card:hover { border-color: var(--border-strong); }
+  .acct-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .acct-id { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .acct-id .avatar {
+    width: 32px; height: 32px; border-radius: 50%; background: var(--panel-2);
+    border: 1px solid var(--border); color: var(--muted);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 600; flex: 0 0 32px;
+  }
+  .acct-id .avatar.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+  .acct-id b { display: block; font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acct-id span { display: block; color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+  .acct-balance { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-top: 14px; }
+  .acct-balance .k { color: var(--muted); font-size: 11.5px; margin-right: 4px; }
+  .acct-balance b { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -.2px; }
+  .acct-balance .total { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .acct-balance .pct { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .track { height: 6px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
+  .fill { height: 100%; border-radius: 999px; }
+  .acct-card .track { margin-top: 7px; }
+  .acct-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .acct-stats span { display: block; color: var(--muted); font-size: 10.5px; }
+  .acct-stats b { display: block; font-size: 13px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .acct-foot { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; margin-top: 12px; }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px;
+    border-radius: 999px; font-size: 11px; border: 1px solid transparent;
+    background: var(--panel-2); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .pill.ok { color: var(--accent); background: var(--accent-dim); }
+  .pill.warn { color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, transparent); }
+  .pill.bad { color: var(--danger); background: var(--danger-dim); }
+  .pill.plain { border-color: var(--border); background: transparent; }
+
+  .chips { display: inline-flex; align-items: center; gap: 4px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
+  .chip {
+    height: 26px; padding: 0 10px; border-radius: 6px; border: none; background: transparent;
+    color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap;
+  }
+  .chip:hover { color: var(--text); }
+  .chip.active { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 11.5px; background: var(--panel-2); }
+  tbody tr:hover { background: color-mix(in srgb, var(--panel-2) 55%, transparent); }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .card-body.flush { padding: 0; }
+  .acct-cell { display: flex; align-items: center; gap: 9px; }
+  .acct-cell b { font-weight: 500; }
+  .acct-cell span { color: var(--muted); font-size: 11px; }
+
+  @media (max-width: 1120px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .grid-main { grid-template-columns: 1fr; }
+    .kpi .value { font-size: 24px; }
+    .acct-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 860px) {
+    .app { flex-direction: column; }
+    .sidebar {
+      width: 100%; flex: none; height: auto; position: static;
+      flex-direction: row; align-items: center; padding: 10px 12px;
+      overflow-x: auto; border-right: none; border-bottom: 1px solid var(--border);
+    }
+    .brand { padding: 0 12px 0 2px; }
+    .brand-name span, .nav-section, .sidebar-foot, .nav-badge { display: none; }
+    .nav-item { margin-bottom: 0; padding: 7px 10px; }
+    .topbar { height: 56px; padding: 0 16px; }
+    .topbar .sub, .meta { display: none; }
+    .content { padding: 16px 14px 48px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">c</div>
+      <div class="brand-name">ccBar<span>控制台</span></div>
+    </div>
+    <div class="nav-section">监控</div>
+    <div class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      <span>概览</span>
+    </div>
+    <div class="nav-item active">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></svg>
+      <span>Trae</span>
+      <span class="nav-badge">4</span>
+    </div>
+    <div class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c.4-3.4 2.7-5.2 5.5-5.2s5.1 1.8 5.5 5.2"/><path d="M16 5.2a3 3 0 0 1 0 5.6M17.5 14.9c2 .5 3.1 2 3.4 4.3"/></svg>
+      <span>用户与设备</span>
+    </div>
+    <div class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+      <span>用量分析</span>
+    </div>
+    <div class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M3 12h18M3 18h18"/><circle cx="7" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="10" cy="18" r="1.4" fill="currentColor" stroke="none"/></svg>
+      <span>流水明细</span>
+    </div>
+    <div class="nav-section">资产</div>
+    <div class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2.5" y="5" width="19" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      <span>设备管理</span>
+      <span class="nav-badge">2</span>
+    </div>
+    <div class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.4 6.6a4.8 4.8 0 0 0-6.8 0L12 8.2l-1.6-1.6a4.8 4.8 0 1 0-6.8 6.8L12 21l8.4-7.6a4.8 4.8 0 0 0 0-6.8Z"/></svg>
+      <span>健康管理</span>
+    </div>
+    <div class="nav-section">运维</div>
+    <div class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
+      <span>推送管理</span>
+    </div>
+    <div class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 5h9M9 12h9M9 19h9"/><path d="M4.5 5h.01M4.5 12h.01M4.5 19h.01"/></svg>
+      <span>访问审计</span>
+    </div>
+    <div class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
+      <span>系统状态</span>
+    </div>
+    <div class="sidebar-foot">
+      <div class="acct-id"><div class="avatar on" style="color:var(--accent);border-color:color-mix(in srgb, var(--accent) 40%, var(--border));">A</div></div>
+      <div class="who">
+        <b>管理员</b>
+        <span>API Token 会话</span>
+      </div>
+      <button class="icon-btn" title="退出登录">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+      </button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div>
+        <h1>Trae</h1><span class="sub">账户余额 · 消耗趋势 · 上报健康</span>
+      </div>
+      <div class="right">
+        <span class="pill ok"><span class="status-dot ok"></span>服务正常</span>
+        <span class="meta">更新于 22:31:08</span>
+        <button class="icon-btn" title="刷新">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6"/></svg>
+        </button>
+        <button class="icon-btn" id="themeBtn" title="切换主题">
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+          <svg class="icon-moon hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="content">
+      <div class="page-head">
+        <div>
+          <h2>Trae 账户</h2>
+          <p>4 个账号 · 3 个有官方账单 · 最近上报 2 分钟前 · 示例数据</p>
+        </div>
+        <div class="page-actions filters">
+          <div class="chips" id="rangeChips">
+            <button class="chip">今日</button>
+            <button class="chip active">7 天</button>
+            <button class="chip">30 天</button>
+          </div>
+          <select class="select">
+            <option>全部用户</option>
+            <option>default</option>
+          </select>
+          <select class="select">
+            <option>全部状态</option>
+            <option>余额不足</option>
+            <option>上报异常</option>
+            <option>未上报账单</option>
+          </select>
+          <button class="btn">导出 CSV</button>
+        </div>
+      </div>
+
+      <div class="kpis">
+        <div class="card kpi focus">
+          <div class="label">可用积分</div>
+          <div class="value">4,665.7<span class="unit">积分</span></div>
+          <div class="foot">总额度 21,306 · 整体已用 78.1%</div>
+        </div>
+        <div class="card kpi">
+          <div class="label">今日消耗</div>
+          <div class="value">1,934.3</div>
+          <div class="foot">较昨日 <span class="warn">+12.4%</span></div>
+        </div>
+        <div class="card kpi">
+          <div class="label">7 日日均</div>
+          <div class="value">1,355.1</div>
+          <div class="foot">按当前速度可用 <b>3.4 天</b></div>
+        </div>
+        <div class="card kpi">
+          <div class="label">异常账号</div>
+          <div class="value bad">2<span class="unit">个</span></div>
+          <div class="foot"><span class="bad">1 个低余额</span> · <span class="warn">1 个未上报账单</span></div>
+        </div>
+      </div>
+
+      <div class="grid-main">
+        <div class="card">
+          <div class="card-head">
+            <h3>每日积分消耗 <span class="sub">近 7 天 · 按账号堆叠</span></h3>
+          </div>
+          <div class="chart-wrap">
+            <svg viewBox="0 0 660 250" role="img" aria-label="近 7 天各 Trae 账号积分消耗">
+              <line x1="46" y1="18" x2="646" y2="18" stroke="var(--border)" stroke-dasharray="3 5"/>
+              <line x1="46" y1="68" x2="646" y2="68" stroke="var(--border)" stroke-dasharray="3 5"/>
+              <line x1="46" y1="118" x2="646" y2="118" stroke="var(--border)" stroke-dasharray="3 5"/>
+              <line x1="46" y1="168" x2="646" y2="168" stroke="var(--border)" stroke-dasharray="3 5"/>
+              <line x1="46" y1="218" x2="646" y2="218" stroke="var(--border-strong)"/>
+              <text x="38" y="22" text-anchor="end" fill="var(--muted)" font-size="11">2,000</text>
+              <text x="38" y="72" text-anchor="end" fill="var(--muted)" font-size="11">1,500</text>
+              <text x="38" y="122" text-anchor="end" fill="var(--muted)" font-size="11">1,000</text>
+              <text x="38" y="172" text-anchor="end" fill="var(--muted)" font-size="11">500</text>
+              <text x="38" y="222" text-anchor="end" fill="var(--muted)" font-size="11">0</text>
+
+              <line x1="46" y1="82.5" x2="646" y2="82.5" stroke="var(--border-strong)" stroke-dasharray="4 4"/>
+              <text x="52" y="77" fill="var(--muted)" font-size="10.5">日均 1,355</text>
+
+              <!-- 11-19 -->
+              <rect x="55.9" y="210" width="36" height="8" fill="var(--series-1)"/>
+              <rect x="55.9" y="105" width="36" height="105" rx="3" fill="var(--series-2)"/>
+              <!-- 11-20 -->
+              <rect x="141.6" y="120" width="36" height="98" fill="var(--series-2)"/>
+              <rect x="141.6" y="112" width="36" height="8" rx="2" fill="var(--series-3)"/>
+              <!-- 11-21 -->
+              <rect x="227.3" y="212" width="36" height="6" fill="var(--series-1)"/>
+              <rect x="227.3" y="106" width="36" height="106" rx="3" fill="var(--series-2)"/>
+              <!-- 11-22 -->
+              <rect x="313" y="94" width="36" height="124" fill="var(--series-2)"/>
+              <rect x="313" y="82" width="36" height="12" rx="2" fill="var(--series-3)"/>
+              <!-- 11-23 -->
+              <rect x="398.7" y="209" width="36" height="9" fill="var(--series-1)"/>
+              <rect x="398.7" y="88" width="36" height="121" rx="3" fill="var(--series-2)"/>
+              <!-- 11-24 -->
+              <rect x="484.4" y="209.4" width="36" height="8.6" fill="var(--series-1)"/>
+              <rect x="484.4" y="93.4" width="36" height="116" fill="var(--series-2)"/>
+              <rect x="484.4" y="74.9" width="36" height="18.5" rx="2" fill="var(--series-3)"/>
+              <!-- 11-25 -->
+              <rect x="570.1" y="34.7" width="36" height="183.3" fill="var(--series-2)"/>
+              <rect x="570.1" y="24.6" width="36" height="10.1" rx="2" fill="var(--series-3)"/>
+
+              <text x="73.9" y="238" text-anchor="middle" fill="var(--muted)" font-size="11">11-19</text>
+              <text x="159.6" y="238" text-anchor="middle" fill="var(--muted)" font-size="11">11-20</text>
+              <text x="245.3" y="238" text-anchor="middle" fill="var(--muted)" font-size="11">11-21</text>
+              <text x="331" y="238" text-anchor="middle" fill="var(--muted)" font-size="11">11-22</text>
+              <text x="416.7" y="238" text-anchor="middle" fill="var(--muted)" font-size="11">11-23</text>
+              <text x="502.4" y="238" text-anchor="middle" fill="var(--muted)" font-size="11">11-24</text>
+              <text x="588.1" y="238" text-anchor="middle" fill="var(--muted)" font-size="11">11-25</text>
+            </svg>
+          </div>
+          <div class="legend">
+            <span><i class="dot" style="background:var(--series-1)"></i>笑话家的小鱼儿</span>
+            <span><i class="dot" style="background:var(--series-2)"></i>Trae 1 · 9427</span>
+            <span><i class="dot" style="background:var(--series-3)"></i>Trae 2 · 1870</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>账号健康 <span class="sub">2 项待处理</span></h3>
+            <button class="btn sm ghost">查看全部</button>
+          </div>
+          <div class="card-body">
+            <div class="alert-list">
+              <div class="alert-row">
+                <span class="status-dot warn"></span>
+                <div class="alert-main">
+                  <b>余额不足 2%</b>
+                  <span>Trae 1 · 9427…5804 · 剩 112.9 / 7,406</span>
+                </div>
+                <span class="alert-time">4 分钟前</span>
+              </div>
+              <div class="alert-row">
+                <span class="status-dot bad"></span>
+                <div class="alert-main">
+                  <b>未上报官方账单</b>
+                  <span>历史设备 · 3172…7002 · 近 30 天 1,024.8 积分</span>
+                </div>
+                <span class="alert-time">—</span>
+              </div>
+            </div>
+            <div class="alert-foot"><span class="status-dot ok"></span>3 个账号上报正常 · 最近同步 2 分钟前</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-head">
+        <div>
+          <h3>账户</h3>
+          <p>3 个有官方账单 · 1 个仅用量记录</p>
+        </div>
+        <div class="chips">
+          <button class="chip active">全部</button>
+          <button class="chip">有账单</button>
+          <button class="chip">无账单</button>
+        </div>
+      </div>
+
+      <div class="acct-grid">
+        <div class="card acct-card">
+          <div class="acct-head">
+            <div class="acct-id">
+              <div class="avatar on">鱼</div>
+              <div>
+                <b>笑话家的小鱼儿</b>
+                <span>Trae 1 · 3712…7002 · default</span>
+              </div>
+            </div>
+            <span class="pill ok">正常</span>
+          </div>
+          <div class="acct-balance">
+            <div><span class="k">剩余积分</span><b>1,969.6</b><span class="total"> / 9,400</span></div>
+            <span class="pct">已用 79%</span>
+          </div>
+          <div class="track"><div class="fill" style="width:21%;background:var(--series-1)"></div></div>
+          <div class="acct-stats">
+            <div><span>今日</span><b>0</b></div>
+            <div><span>7 日日均</span><b>45.2</b></div>
+            <div><span>预计可用</span><b>43 天</b></div>
+          </div>
+          <div class="acct-foot"><span class="status-dot ok"></span>2 分钟前上报</div>
+        </div>
+
+        <div class="card acct-card">
+          <div class="acct-head">
+            <div class="acct-id">
+              <div class="avatar">T</div>
+              <div>
+                <b>Trae 1</b>
+                <span>9427…5804 · default</span>
+              </div>
+            </div>
+            <span class="pill warn">低余额</span>
+          </div>
+          <div class="acct-balance">
+            <div><span class="k">剩余积分</span><b>112.9</b><span class="total"> / 7,406</span></div>
+            <span class="pct">已用 98%</span>
+          </div>
+          <div class="track"><div class="fill" style="width:1.5%;background:var(--warning)"></div></div>
+          <div class="acct-stats">
+            <div><span>今日</span><b>1,833.2</b></div>
+            <div><span>7 日日均</span><b>1,240.5</b></div>
+            <div><span>预计可用</span><b>&lt; 1 天</b></div>
+          </div>
+          <div class="acct-foot"><span class="status-dot warn"></span>4 分钟前上报 · 消耗速度偏高</div>
+        </div>
+
+        <div class="card acct-card">
+          <div class="acct-head">
+            <div class="acct-id">
+              <div class="avatar">T</div>
+              <div>
+                <b>Trae 2</b>
+                <span>1870…8522 · default</span>
+              </div>
+            </div>
+            <span class="pill ok">正常</span>
+          </div>
+          <div class="acct-balance">
+            <div><span class="k">剩余积分</span><b>2,583.2</b><span class="total"> / 4,500</span></div>
+            <span class="pct">已用 43%</span>
+          </div>
+          <div class="track"><div class="fill" style="width:57%;background:var(--series-1)"></div></div>
+          <div class="acct-stats">
+            <div><span>今日</span><b>101.1</b></div>
+            <div><span>7 日日均</span><b>69.5</b></div>
+            <div><span>预计可用</span><b>37 天</b></div>
+          </div>
+          <div class="acct-foot"><span class="status-dot ok"></span>8 分钟前上报</div>
+        </div>
+
+        <div class="card acct-card">
+          <div class="acct-head">
+            <div class="acct-id">
+              <div class="avatar">史</div>
+              <div>
+                <b>历史设备</b>
+                <span>3172…7002 · default</span>
+              </div>
+            </div>
+            <span class="pill warn">未上报账单</span>
+          </div>
+          <div class="acct-balance">
+            <div><span class="k">近 30 天</span><b>1,024.8</b><span class="total"> 积分</span></div>
+            <span class="pct">仅用量记录</span>
+          </div>
+          <div class="track"><div class="fill" style="width:0%;background:var(--border-strong)"></div></div>
+          <div class="acct-stats">
+            <div><span>今日</span><b>0</b></div>
+            <div><span>最近用量</span><b>26 小时前</b></div>
+            <div><span>最后上报</span><b>—</b></div>
+          </div>
+          <div class="acct-foot"><span class="status-dot"></span>等待 ccbar 上报官方账单</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>账户明细 <span class="sub">按剩余积分排序</span></h3>
+          <button class="btn sm ghost">导出 CSV</button>
+        </div>
+        <div class="card-body flush">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>账号</th>
+                  <th>用户</th>
+                  <th class="num">剩余 / 总额</th>
+                  <th class="num">今日</th>
+                  <th class="num">7 日</th>
+                  <th class="num">日均</th>
+                  <th class="num">预计可用</th>
+                  <th>最后上报</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><div class="acct-cell"><b>笑话家的小鱼儿</b><span>Trae 1 · 3712…7002</span></div></td>
+                  <td>default</td>
+                  <td class="num">1,969.6 / 9,400</td>
+                  <td class="num">0</td>
+                  <td class="num">316.4</td>
+                  <td class="num">45.2</td>
+                  <td class="num">43 天</td>
+                  <td>2 分钟前</td>
+                  <td><span class="pill ok">正常</span></td>
+                </tr>
+                <tr>
+                  <td><div class="acct-cell"><b>Trae 1</b><span>9427…5804</span></div></td>
+                  <td>default</td>
+                  <td class="num">112.9 / 7,406</td>
+                  <td class="num">1,833.2</td>
+                  <td class="num">8,683.2</td>
+                  <td class="num">1,240.5</td>
+                  <td class="num">&lt; 1 天</td>
+                  <td>4 分钟前</td>
+                  <td><span class="pill warn">低余额</span></td>
+                </tr>
+                <tr>
+                  <td><div class="acct-cell"><b>Trae 2</b><span>1870…8522</span></div></td>
+                  <td>default</td>
+                  <td class="num">2,583.2 / 4,500</td>
+                  <td class="num">101.1</td>
+                  <td class="num">486.4</td>
+                  <td class="num">69.5</td>
+                  <td class="num">37 天</td>
+                  <td>8 分钟前</td>
+                  <td><span class="pill ok">正常</span></td>
+                </tr>
+                <tr>
+                  <td><div class="acct-cell"><b>历史设备</b><span>3172…7002</span></div></td>
+                  <td>default</td>
+                  <td class="num">—</td>
+                  <td class="num">0</td>
+                  <td class="num">—</td>
+                  <td class="num">—</td>
+                  <td class="num">—</td>
+                  <td>—</td>
+                  <td><span class="pill warn">未上报</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+  'use strict';
+  (function () {
+    const root = document.documentElement;
+    const themeBtn = document.getElementById('themeBtn');
+    const sun = themeBtn.querySelector('.icon-sun');
+    const moon = themeBtn.querySelector('.icon-moon');
+    themeBtn.addEventListener('click', function () {
+      const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+      root.dataset.theme = next;
+      sun.classList.toggle('hidden', next !== 'dark');
+      moon.classList.toggle('hidden', next === 'dark');
+    });
+
+    const chips = document.querySelectorAll('#rangeChips .chip');
+    chips.forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        chips.forEach(function (item) { item.classList.toggle('active', item === chip); });
+      });
+    });
+  })();
+</script>
+</body>
+</html>

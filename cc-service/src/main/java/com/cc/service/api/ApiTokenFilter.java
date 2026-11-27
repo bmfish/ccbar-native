@@ -3,6 +3,7 @@ package com.cc.service.api;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.OffsetDateTime;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -19,14 +20,15 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+import com.cc.service.auth.AdminSessionRepository;
 import com.cc.service.auth.AuthTokens;
 import com.cc.service.auth.UserRepository;
 
 /**
  * /api/** 鉴权：
  * - /api/health 开放；
- * - /api/auth/login 开放（用户名密码换取会话 Token）；
- * - /api/admin/** 只接受管理 Token（app.api-token）；
+ * - /api/auth/login、/api/auth/admin-login 开放；
+ * - /api/admin/** 接受管理 Token 或管理员账号登录会话；
  * - 其他接口接受用户会话 Token，或管理 Token（映射到 default 用户，兼容旧客户端）。
  * 未配置 app.api-token 时关闭鉴权，所有请求映射到 default 用户，便于本地开发。
  */
@@ -34,6 +36,7 @@ import com.cc.service.auth.UserRepository;
 public class ApiTokenFilter extends OncePerRequestFilter {
 
     public static final String USER_ID_ATTRIBUTE = "cc.userId";
+    public static final String ADMIN_USER_ATTRIBUTE = "cc.adminUser";
 
     private static final Logger log = LoggerFactory.getLogger(ApiTokenFilter.class);
     private static final String BEARER_PREFIX = "Bearer ";
@@ -41,15 +44,19 @@ public class ApiTokenFilter extends OncePerRequestFilter {
     private static final String AUTH_PATH_PREFIX = "/api/";
     private static final String HEALTH_PATH = "/api/health";
     private static final String LOGIN_PATH = "/api/auth/login";
+    private static final String ADMIN_LOGIN_PATH = "/api/auth/admin-login";
     private static final String ADMIN_PATH_PREFIX = "/api/admin/";
 
     private final byte[] expectedToken;
     private final UserRepository users;
+    private final AdminSessionRepository adminSessions;
     private volatile Long defaultUserId;
 
-    public ApiTokenFilter(@Value("${app.api-token:}") String apiToken, UserRepository users) {
+    public ApiTokenFilter(@Value("${app.api-token:}") String apiToken, UserRepository users,
+            AdminSessionRepository adminSessions) {
         this.expectedToken = apiToken == null ? new byte[0] : apiToken.trim().getBytes(StandardCharsets.UTF_8);
         this.users = users;
+        this.adminSessions = adminSessions;
         if (expectedToken.length == 0) {
             log.warn("未配置 API_TOKEN，/api/** 鉴权已关闭");
         }
@@ -58,7 +65,8 @@ public class ApiTokenFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        return !path.startsWith(AUTH_PATH_PREFIX) || HEALTH_PATH.equals(path) || LOGIN_PATH.equals(path);
+        return !path.startsWith(AUTH_PATH_PREFIX) || HEALTH_PATH.equals(path)
+                || LOGIN_PATH.equals(path) || ADMIN_LOGIN_PATH.equals(path);
     }
 
     @Override
@@ -75,11 +83,22 @@ public class ApiTokenFilter extends OncePerRequestFilter {
         String presented = extractToken(request);
 
         if (path.startsWith(ADMIN_PATH_PREFIX)) {
-            if (!matchesAdminToken(presented)) {
-                unauthorized(response);
+            if (matchesAdminToken(presented)) {
+                request.setAttribute(ADMIN_USER_ATTRIBUTE, "管理员");
+                filterChain.doFilter(request, response);
                 return;
             }
-            filterChain.doFilter(request, response);
+            if (presented != null) {
+                String adminUser = adminSessions
+                        .findActive(AuthTokens.sha256Hex(presented), OffsetDateTime.now())
+                        .orElse(null);
+                if (adminUser != null) {
+                    request.setAttribute(ADMIN_USER_ATTRIBUTE, adminUser);
+                    filterChain.doFilter(request, response);
+                    return;
+                }
+            }
+            unauthorized(response);
             return;
         }
 

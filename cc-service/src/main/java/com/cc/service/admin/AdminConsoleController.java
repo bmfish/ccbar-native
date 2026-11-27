@@ -130,6 +130,7 @@ public class AdminConsoleController {
 
     private final AdminConsoleRepository console;
     private final String version;
+    private final TtlCache<Integer, OverviewResponse> overviewCache = new TtlCache<>(20_000);
 
     public AdminConsoleController(
             AdminConsoleRepository console,
@@ -140,6 +141,10 @@ public class AdminConsoleController {
 
     @GetMapping("/overview")
     public OverviewResponse overview() {
+        return overviewCache.get(0, this::loadOverview);
+    }
+
+    private OverviewResponse loadOverview() {
         OffsetDateTime now = AdminTimes.now();
         OffsetDateTime todayStart = AdminTimes.startOfDay(now.toLocalDate());
         OffsetDateTime weekStart = AdminTimes.daysStart(7);
