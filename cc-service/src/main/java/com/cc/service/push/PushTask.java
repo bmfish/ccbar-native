@@ -31,4 +31,5 @@ public record PushTask(
     public static final String TEXT = "TEXT";
     public static final String WEIGHT = "WEIGHT";
     public static final String TOKEN_USAGE = "TOKEN_USAGE";
+    public static final String AI_BRIEFING = "AI_BRIEFING";
 }
