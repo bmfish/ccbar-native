@@ -126,7 +126,12 @@
     border-right: 1px solid var(--border);
     display: flex; flex-direction: column; padding: 18px 12px;
     position: sticky; top: 0; height: 100vh;
+    /* 窗口较矮时导航项超出视口，必须允许侧栏内部滚动，否则底部项不可达 */
+    overflow-y: auto;
   }
+  .sidebar::-webkit-scrollbar { width: 6px; }
+  .sidebar::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+  .sidebar::-webkit-scrollbar-track { background: transparent; }
   .brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 22px; }
   .brand-mark {
     width: 26px; height: 26px; border-radius: 8px; background: var(--accent);
@@ -553,6 +558,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
       <span>系统状态</span>
     </div>
+    <div class="nav-item" data-view="settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z"/></svg>
+      <span>系统设置</span>
+    </div>
     <div class="sidebar-foot">
       <div class="avatar on" id="adminAvatar">A</div>
       <div class="who">
@@ -594,6 +603,16 @@
           <div class="page-actions">
             <button class="btn" id="exportDailyBtn">导出日报</button>
           </div>
+        </div>
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-head">
+            <h3>AI 综合简报 <span class="sub" id="aiBriefingSub">健康/用量/Trae/旅行跨板块联动洞察</span></h3>
+            <div style="display:flex;gap:8px">
+              <button class="btn" id="aiBriefingRefresh">强制重算</button>
+              <button class="btn primary" id="aiBriefingBtn">生成简报</button>
+            </div>
+          </div>
+          <div class="card-body" id="aiBriefingBody">点击「生成简报」汇总四个板块的 AI 分析，输出跨领域洞察与行动清单。也可在「推送管理」里新建 AI 综合简报任务，每日定时推送到 Bark。</div>
         </div>
         <div class="kpis">
           <div class="card kpi">
@@ -724,6 +743,17 @@
             </div>
             <div class="card-body" id="traeAlerts"></div>
           </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>AI 分析 <span class="sub" id="aiTraeSub">账户余额与调度解读 · 数据无变化时自动复用上次结果</span></h3>
+            <div style="display:flex;gap:8px">
+              <button class="btn" id="aiTraeRefresh">强制重算</button>
+              <button class="btn primary" id="aiTraeBtn">AI 分析</button>
+            </div>
+          </div>
+          <div class="card-body" id="aiTraeBody">点击「AI 分析」生成各账户余额评估与调度建议。</div>
         </div>
 
         <div class="section-head">
@@ -860,6 +890,16 @@
             <div class="value" id="usageCredits">—</div>
             <div class="foot" id="usageCreditsFoot">&nbsp;</div>
           </div>
+        </div>
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-head">
+            <h3>AI 分析 <span class="sub" id="aiUsageSub">消耗趋势解读 · 数据无变化时自动复用上次结果</span></h3>
+            <div style="display:flex;gap:8px">
+              <button class="btn" id="aiUsageRefresh">强制重算</button>
+              <button class="btn primary" id="aiUsageBtn">AI 分析</button>
+            </div>
+          </div>
+          <div class="card-body" id="aiUsageBody">点击「AI 分析」生成消耗趋势与省钱建议。</div>
         </div>
         <div class="card" style="margin-bottom:12px">
           <div class="card-head">
@@ -1056,6 +1096,16 @@
           </div>
         </div>
         <div class="card">
+          <div class="card-head">
+            <h3>AI 分析 <span class="sub" id="aiHealthSub">体重/体脂趋势解读 · 数据无变化时自动复用上次结果</span></h3>
+            <div style="display:flex;gap:8px">
+              <button class="btn" id="aiHealthRefresh">强制重算</button>
+              <button class="btn primary" id="aiHealthBtn">AI 分析</button>
+            </div>
+          </div>
+          <div class="card-body" id="aiHealthBody">点击「AI 分析」生成解读，首次调用约需数秒。Key 在「系统设置」中配置。</div>
+        </div>
+        <div class="card">
           <div class="card-head"><h3>最近记录 <span class="sub" id="healthRecordsSub"></span></h3></div>
           <div class="card-body flush">
             <div class="table-wrap">
@@ -1082,6 +1132,17 @@
 
         <div class="card" style="margin-bottom:12px">
           <div class="card-body" style="display:flex;gap:16px;flex-wrap:wrap;align-items:center" id="travelSyncBar">同步状态加载中…</div>
+        </div>
+
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-head">
+            <h3>AI 分析 <span class="sub" id="aiTravelSub">出行规律解读 · 票根无变化时自动复用上次结果</span></h3>
+            <div style="display:flex;gap:8px">
+              <button class="btn" id="aiTravelRefresh">强制重算</button>
+              <button class="btn primary" id="aiTravelBtn">AI 分析</button>
+            </div>
+          </div>
+          <div class="card-body" id="aiTravelBody">点击「AI 分析」生成出行规律与建议。</div>
         </div>
 
         <div class="kpis k5">
@@ -1387,6 +1448,25 @@
           服务每 30 秒检查一次。间隔任务只在生效时段内按间隔推送；每天定时任务每天最多推送一次。手动测试不受开关和调度限制。
         </p>
       </section>
+
+      <!-- 系统设置 -->
+      <section class="view" id="view-settings">
+        <div class="page-head">
+          <div>
+            <h2>系统设置</h2>
+            <p>运行时配置，保存后即时生效；优先级：这里保存的值 &gt; 环境变量 &gt; 默认值</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn" id="llmTestBtn">测试 AI 连接</button>
+            <button class="btn primary" id="settingsSaveBtn">保存设置</button>
+          </div>
+        </div>
+        <div id="settingsSections"><div class="card"><div class="card-body">加载中…</div></div></div>
+        <p class="muted" style="margin:14px 2px 0;font-size:12px;line-height:1.7">
+          密钥类字段（API Key、授权码）保存后仅回显掩码，修改需输入完整新值，留空表示保持不变。
+          「测试 AI 连接」会用界面当前填写值真实调用一次模型。
+        </p>
+      </section>
     </main>
   </div>
 </div>
@@ -1422,7 +1502,8 @@ const VIEW_META = {
   tickets: ['票据管理', '票根候选确认与同步控制'],
   push: ['推送管理', 'Bark 定时推送任务'],
   audit: ['访问审计', 'API 请求记录与访问统计'],
-  system: ['系统状态', '服务健康与数据维护']
+  system: ['系统状态', '服务健康与数据维护'],
+  settings: ['系统设置', 'AI 分析与邮件同步的运行时配置']
 };
 
 const state = {
@@ -1832,7 +1913,8 @@ const LOADERS = {
   tickets: () => loadTickets(),
   push: () => loadPush(),
   audit: () => loadAudit(),
-  system: () => loadSystem()
+  system: () => loadSystem(),
+  settings: () => loadSettings()
 };
 
 function switchView(view, force = false) {
@@ -1897,6 +1979,7 @@ async function loadOverview() {
   const traeBadge = $('#traeBadge');
   if (traeBadge && data.trae) traeBadge.textContent = fmtInt((data.trae.accounts || []).length);
   setServicePill(data.server.status === 'UP');
+  loadBriefingCache();
 }
 
 function renderOverviewKpis(kpi, trae) {
@@ -2242,6 +2325,7 @@ async function loadTrae() {
   const badge = $('#traeBadge');
   if (badge) badge.textContent = fmtInt(totals.accounts);
   $('#traeRangeCol').textContent = data.days === 1 ? '今日' : `近 ${data.days} 天`;
+  loadAiPanelCache('Trae', 'trae', state.trae.days);
 }
 
 function renderTraeKpis(data) {
@@ -3051,6 +3135,7 @@ async function loadUsage() {
   const days = Math.max(1, Math.ceil((new Date(data.to) - new Date(data.from)) / 86400000));
   $('#usageRange').textContent = `${fmtDate(data.from)} 至 ${fmtDate(data.to)} · ${days} 天`;
   $('#usageSourceSub').textContent = `${(data.bySource || []).length} 个来源`;
+  loadAiPanelCache('Usage', 'usage', state.usage.days);
 }
 
 function renderUsageDaily() {
@@ -3423,6 +3508,7 @@ async function loadHealth() {
   renderHealthRecords(data.recent);
   $('#healthRange').textContent = `趋势从 ${fmtDate(data.from)} 开始`;
   $('#healthTrendSub').textContent = state.health.days === 365 ? '近 1 年' : `近 ${state.health.days} 天`;
+  loadAiHealthCache();
 }
 
 function latestOf(data, kind) {
@@ -3618,6 +3704,288 @@ function openAddHealth() {
   });
 }
 
+/* ---------- 健康 AI 分析 ---------- */
+
+async function runAiAnalysis(refresh) {
+  const body = $('#aiHealthBody');
+  $('#aiHealthBtn').disabled = true;
+  $('#aiHealthRefresh').disabled = true;
+  body.innerHTML = '<div class="chart-empty">AI 分析中，约需数秒…</div>';
+  try {
+    const data = await api('/health/ai-analysis?days=' + state.health.days + (refresh ? '&refresh=true' : ''));
+    renderAiAnalysis(data);
+  } catch (error) {
+    body.innerHTML = `<div class="chart-empty">${esc(error.message || 'AI 分析失败')}</div>`;
+  } finally {
+    $('#aiHealthBtn').disabled = false;
+    $('#aiHealthRefresh').disabled = false;
+  }
+}
+
+function renderAiAnalysis(data) {
+  const analysis = data.analysis || {};
+  const metrics = data.metrics;
+  const parts = [];
+
+  if (metrics) {
+    const rows = [
+      ['区间', `${metrics.startDate} ~ ${metrics.endDate}`],
+      ['体重', `${metrics.startWeight.toFixed(1)} → ${metrics.latestWeight.toFixed(1)} kg（${metrics.delta > 0 ? '+' : ''}${metrics.delta.toFixed(1)}）`],
+      ['速度', `${(metrics.dailyRate * 7).toFixed(2)} kg/周`]
+    ];
+    if (metrics.bmi !== null && metrics.bmi !== undefined) rows.push(['BMI', metrics.bmi.toFixed(1)]);
+    if (metrics.startBodyfat !== null && metrics.startBodyfat !== undefined) {
+      rows.push(['体脂', `${metrics.startBodyfat.toFixed(1)}% → ${metrics.latestBodyfat.toFixed(1)}%`]);
+    }
+    parts.push(`<div class="status-list" style="margin-bottom:12px">${rows.map(([k, v]) =>
+      `<div class="status-row"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('')}</div>`);
+  }
+
+  if (analysis.summary) {
+    parts.push(`<p style="margin:0 0 10px;line-height:1.8">${esc(analysis.summary)}</p>`);
+  }
+
+  const trend = analysis.trend || {};
+  if (Array.isArray(trend.weekly_avg) && trend.weekly_avg.length) {
+    parts.push(`<div class="status-list">${trend.weekly_avg.map((item) =>
+      `<div class="status-row"><span class="k">${esc(String(item.week))}</span><span class="v">${Number(item.avg_kg).toFixed(2)} kg</span></div>`).join('')}</div>`);
+  }
+  if (trend.pace) parts.push(`<p class="muted" style="margin:10px 0;line-height:1.7">${esc(String(trend.pace))}</p>`);
+  if (analysis.quality) parts.push(`<p style="margin:10px 0;line-height:1.7"><b>质量评估：</b>${esc(String(analysis.quality))}</p>`);
+
+  const anomalies = Array.isArray(analysis.anomalies) ? analysis.anomalies : [];
+  if (anomalies.length) {
+    parts.push(`<div class="status-list">${anomalies.map((item) =>
+      `<div class="status-row"><span class="k"><span class="pill warn">${esc(String(item.date || '?'))}</span></span><span class="v">${esc(String(item.reason || ''))}</span></div>`).join('')}</div>`);
+  } else {
+    parts.push('<p class="muted" style="margin:10px 0">未发现明显异常。</p>');
+  }
+
+  const suggestions = Array.isArray(analysis.suggestions) ? analysis.suggestions : [];
+  if (suggestions.length) {
+    parts.push(`<ul style="margin:10px 0 0;padding-left:18px;line-height:1.9">${suggestions.map((item) => `<li>${esc(String(item))}</li>`).join('')}</ul>`);
+  }
+
+  $('#aiHealthSub').textContent = `${data.model || ''} · ${data.stale ? '数据已更新 · 展示上次分析' : data.cached ? '缓存结果（数据无变化）' : '刚生成'} · 分析于 ${fmtDateTime(data.analyzedAt)}`;
+  $('#aiHealthBody').innerHTML = parts.join('');
+}
+
+/* ---------- 通用板块 AI 分析（用量 / Trae / 旅行） ---------- */
+
+async function runAiPanel(domain, opts = {}) {
+  const body = $('#ai' + domain + 'Body');
+  const sub = $('#ai' + domain + 'Sub');
+  const btn = $('#ai' + domain + 'Btn');
+  const refreshBtn = $('#ai' + domain + 'Refresh');
+  [btn, refreshBtn].forEach((b) => { if (b) b.disabled = true; });
+  body.innerHTML = '<div class="chart-empty">AI 分析中，约需数秒…</div>';
+  try {
+    const query = [];
+    if (opts.days) query.push('days=' + opts.days);
+    if (opts.refresh) query.push('refresh=true');
+    const data = await api('/' + opts.path + '/ai-analysis' + (query.length ? '?' + query.join('&') : ''));
+    renderAiPanel(sub, body, data);
+  } catch (error) {
+    body.innerHTML = `<div class="chart-empty">${esc(error.message || 'AI 分析失败')}</div>`;
+  } finally {
+    [btn, refreshBtn].forEach((b) => { if (b) b.disabled = false; });
+  }
+}
+
+function renderAiPanel(sub, body, data) {
+  const a = data.analysis || {};
+  const parts = [];
+  if (a.summary) parts.push(`<p style="margin:0 0 10px;line-height:1.8">${esc(a.summary)}</p>`);
+
+  const trend = a.trend || {};
+  const series = Array.isArray(trend.daily) ? trend.daily
+    : (Array.isArray(trend.weekly_avg) ? trend.weekly_avg : []);
+  if (series.length) {
+    parts.push('<div class="status-list">' + series.slice(-12).map((item) => {
+      const label = item.day || item.week || '?';
+      let value = '';
+      if (item.credits !== undefined) {
+        value = Number(item.credits).toFixed(1) + ' 积分';
+        if (item.tokens !== undefined) value += ' · ' + fmtInt(item.tokens) + ' tk';
+      } else if (item.avg_kg !== undefined) {
+        value = Number(item.avg_kg).toFixed(2) + ' kg';
+      }
+      return `<div class="status-row"><span class="k">${esc(String(label))}</span><span class="v">${value}</span></div>`;
+    }).join('') + '</div>');
+  }
+  if (trend.pace) parts.push(`<p class="muted" style="margin:10px 0;line-height:1.7">${esc(String(trend.pace))}</p>`);
+
+  if (Array.isArray(a.accounts) && a.accounts.length) {
+    parts.push('<div class="status-list">' + a.accounts.map((item) => {
+      const statusPill = item.status
+        ? `<span class="pill ${item.status === 'healthy' ? 'ok' : (item.status === 'exhausted' || item.status === 'low' || item.status === 'stale' ? 'warn' : '')}">${esc(String(item.status))}</span> `
+        : '';
+      const daysLeft = item.days_left === null || item.days_left === undefined ? '' : ' · 可用 ' + item.days_left + ' 天';
+      const note = item.note ? `<div class="muted" style="font-size:11.5px;margin-top:3px">${esc(String(item.note))}</div>` : '';
+      const remain = item.remaining !== undefined ? Number(item.remaining).toFixed(1) + ' 积分' : '';
+      return `<div class="status-row" style="align-items:flex-start"><span class="k">${statusPill}${esc(String(item.account))}</span><span class="v">${remain}${daysLeft}${note}</span></div>`;
+    }).join('') + '</div>');
+  }
+
+  if (a.patterns && typeof a.patterns === 'object') {
+    const labels = { favorite_route: '常坐线路', favorite_city: '常去城市', travel_style: '时段偏好', monthly_trend: '月度趋势' };
+    parts.push('<div class="status-list">' + Object.entries(a.patterns).map(([k, v]) =>
+      `<div class="status-row"><span class="k">${labels[k] || esc(k)}</span><span class="v">${esc(String(v))}</span></div>`).join('') + '</div>');
+  }
+
+  if (a.quality) parts.push(`<p style="margin:10px 0;line-height:1.7"><b>质量评估：</b>${esc(String(a.quality))}</p>`);
+
+  const anomalies = Array.isArray(a.anomalies) ? a.anomalies : [];
+  if (anomalies.length) {
+    parts.push('<div class="status-list">' + anomalies.map((item) =>
+      `<div class="status-row"><span class="k"><span class="pill warn">${esc(String(item.date || item.account || item.period || '?'))}</span></span><span class="v">${esc(String(item.reason || item.note || ''))}</span></div>`).join('') + '</div>');
+  } else {
+    parts.push('<p class="muted" style="margin:10px 0">未发现明显异常。</p>');
+  }
+
+  const suggestions = Array.isArray(a.suggestions) ? a.suggestions : [];
+  if (suggestions.length) {
+    parts.push(`<ul style="margin:10px 0 0;padding-left:18px;line-height:1.9">${suggestions.map((item) => `<li>${esc(String(item))}</li>`).join('')}</ul>`);
+  }
+
+  sub.textContent = `${data.model || ''} · ${data.stale ? '数据已更新 · 展示上次分析' : data.cached ? '缓存结果（数据无变化）' : '刚生成'} · 分析于 ${fmtDateTime(data.analyzedAt)}`;
+  body.innerHTML = parts.join('');
+}
+
+/* ---------- 缓存静默预取（页面进入时展示已有结果，未命中不调 LLM） ---------- */
+
+async function loadAiPanelCache(domain, path, days) {
+  const body = $('#ai' + domain + 'Body');
+  const sub = $('#ai' + domain + 'Sub');
+  if (!body || !sub) return;
+  try {
+    const query = ['cachedOnly=true'];
+    if (days) query.push('days=' + days);
+    const data = await api('/' + path + '/ai-analysis?' + query.join('&'));
+    if (data && data.available && data.analysis) renderAiPanel(sub, body, data);
+  } catch (error) { /* 静默失败：保留占位文案 */ }
+}
+
+async function loadAiHealthCache() {
+  const body = $('#aiHealthBody');
+  if (!body) return;
+  try {
+    const data = await api('/health/ai-analysis?cachedOnly=true&days=' + state.health.days);
+    if (data && data.available && data.analysis) renderAiAnalysis(data);
+  } catch (error) { /* 静默失败 */ }
+}
+
+async function loadBriefingCache() {
+  const body = $('#aiBriefingBody');
+  const sub = $('#aiBriefingSub');
+  if (!body || !sub) return;
+  try {
+    const data = await api('/ai-briefing?cachedOnly=true');
+    if (data && data.available && data.text) {
+      sub.textContent = `${data.model || ''} · ${data.stale ? '数据已更新 · 展示上次简报' : '缓存结果'} · 生成于 ${fmtDateTime(data.analyzedAt)}`;
+      body.innerHTML = '<div style="white-space:pre-wrap;line-height:1.85;font-size:12.5px">'
+        + esc(String(data.text || '')).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>') + '</div>';
+    }
+  } catch (error) { /* 静默失败 */ }
+}
+
+/* ---------- AI 综合简报 ---------- */
+
+async function runBriefing(refresh) {
+  const body = $('#aiBriefingBody');
+  const sub = $('#aiBriefingSub');
+  const btn = $('#aiBriefingBtn');
+  const refreshBtn = $('#aiBriefingRefresh');
+  [btn, refreshBtn].forEach((b) => { if (b) b.disabled = true; });
+  body.innerHTML = '<div class="chart-empty">AI 生成简报中，约需数秒…</div>';
+  try {
+    const data = await api('/ai-briefing' + (refresh ? '?refresh=true' : ''));
+    sub.textContent = `${data.model || ''} · ${data.stale ? '数据已更新 · 展示上次简报' : data.cached ? '缓存结果' : '刚生成'} · 生成于 ${fmtDateTime(data.analyzedAt)}`;
+    body.innerHTML = '<div style="white-space:pre-wrap;line-height:1.85;font-size:12.5px">'
+      + esc(String(data.text || '')).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>') + '</div>';
+  } catch (error) {
+    body.innerHTML = `<div class="chart-empty">${esc(error.message || '简报生成失败')}</div>`;
+  } finally {
+    [btn, refreshBtn].forEach((b) => { if (b) b.disabled = false; });
+  }
+}
+
+/* ---------- 系统设置 ---------- */
+
+async function loadSettings() {
+  const data = await api('/settings');
+  renderSettings(data);
+}
+
+function renderSettings(data) {
+  const fields = data.fields || {};
+  $('#settingsSections').innerHTML = (data.sections || []).map((section) => `
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-head"><h3>${esc(section.title)}</h3></div>
+      <div class="card-body">
+        <p class="muted" style="margin:0 0 14px;font-size:12px;line-height:1.7">${esc(section.description)}</p>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px 20px">
+          ${section.fields.map((field) => settingsFieldRow(field, fields[field.key] || {})).join('')}
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function settingsFieldRow(field, state) {
+  let control;
+  if (field.type === 'boolean') {
+    const current = String(state.value) === 'true';
+    control = `<select class="select" data-key="${esc(field.key)}">
+      <option value="true" ${current ? 'selected' : ''}>开启</option>
+      <option value="false" ${current ? '' : 'selected'}>关闭</option>
+    </select>`;
+  } else if (field.secret) {
+    control = `<input class="input" data-key="${esc(field.key)}" type="password" autocomplete="new-password"
+      placeholder="${state.hasValue ? esc(String(state.value)) + ' · 输入新值可覆盖，留空不变' : '未配置，可填在这里或走环境变量'}">`;
+  } else {
+    control = `<input class="input" data-key="${esc(field.key)}" type="${field.type === 'number' ? 'number' : 'text'}"
+      value="${state.source === 'default' ? '' : esc(String(state.value))}"
+      placeholder="留空使用环境变量或默认值">`;
+  }
+  const sourcePill = state.source === 'db' ? '<span class="pill ok">db</span>'
+    : state.source === 'env' ? '<span class="pill blue">env</span>' : '<span class="pill">默认</span>';
+  return `<div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-bottom:6px">${esc(field.label)} ${sourcePill}</label>
+    ${control}
+    <div class="hint">${esc(field.hint || '')}</div>
+  </div>`;
+}
+
+async function saveSettings(options = {}) {
+  const payload = {};
+  $$('#settingsSections [data-key]').forEach((input) => {
+    if (input.type === 'password' && !input.value.trim()) return; // 密钥留空 = 保持不变
+    payload[input.dataset.key] = input.value.trim();
+  });
+  const data = await api('/settings', { method: 'PUT', body: JSON.stringify(payload) });
+  renderSettings(data);
+  if (!options.silent) toast('设置已保存并即时生效');
+  return data;
+}
+
+async function testLlm() {
+  const button = $('#llmTestBtn');
+  button.disabled = true;
+  button.textContent = '测试中…';
+  try {
+    await saveSettings({ silent: true }); // 用界面当前填写值测试
+    const result = await api('/settings/llm-test', { method: 'POST' });
+    if (result.ok) {
+      toast(`AI 连接正常 · ${result.model} · 返回「${result.reply}」（${(result.elapsedMs / 1000).toFixed(1)}s）`);
+    } else {
+      toast('AI 连接失败：' + (result.error || '未知错误'), 'error');
+    }
+  } finally {
+    button.disabled = false;
+    button.textContent = '测试 AI 连接';
+  }
+}
+
 /* ---------- 系统状态 ---------- */
 
 async function loadSystem() {
@@ -3657,6 +4025,7 @@ function timeValue(value) {
 function pushPreview(task) {
   if (task.taskType === 'WEIGHT') return `有今日体重就播报，否则提醒称重 · ${pushTemplateCount(task)} 条模板`;
   if (task.taskType === 'TOKEN_USAGE') return `今日 Token + 积分 · ${pushTemplateCount(task)} 条模板`;
+  if (task.taskType === 'AI_BRIEFING') return 'AI 跨板块综合简报（自动生成，无需文案）';
   const lines = String(task.messages || '').split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
@@ -3673,6 +4042,7 @@ function pushTemplateCount(task) {
 function pushTypeName(type) {
   if (type === 'WEIGHT') return '体重';
   if (type === 'TOKEN_USAGE') return 'Token 用量';
+  if (type === 'AI_BRIEFING') return 'AI 综合简报';
   return '静态文案';
 }
 
@@ -3742,6 +4112,7 @@ function pushEditorHtml(task) {
           <option value="TEXT" ${taskType === 'TEXT' ? 'selected' : ''}>静态文案（随机选一条）</option>
           <option value="WEIGHT" ${taskType === 'WEIGHT' ? 'selected' : ''}>体重（有数据播报 / 没数据提醒）</option>
           <option value="TOKEN_USAGE" ${taskType === 'TOKEN_USAGE' ? 'selected' : ''}>Token 用量（今日 token 与积分）</option>
+          <option value="AI_BRIEFING" ${taskType === 'AI_BRIEFING' ? 'selected' : ''}>AI 综合简报（四板块跨领域洞察）</option>
         </select>
       </div>
       <div class="field">
@@ -3819,6 +4190,9 @@ function syncPushEditorFields() {
   } else if (type === 'TOKEN_USAGE') {
     label.textContent = '文案模板（每行一条，随机选一条）';
     hint.textContent = '场景：[有Token] [仅积分] [无消耗]；占位符：{tokens} {input} {output} {cache} {breakdown} {credits}';
+  } else if (type === 'AI_BRIEFING') {
+    label.textContent = '文案（无需填写）';
+    hint.textContent = '简报由 AI 每次推送时自动生成，内容为四个板块的跨领域洞察与行动清单。';
   } else {
     label.textContent = '推送内容（每行一条，随机选一条）';
     hint.textContent = '';
@@ -4196,6 +4570,7 @@ async function loadTravel() {
   renderTravelTopCities(data.topCities || []);
   renderTravelSyncBar($('#travelSyncBar'), syncStatus, false);
   if (syncStatus && syncStatus.running) startTravelSyncPolling();
+  loadAiPanelCache('Travel', 'travel');
 }
 
 function ticketQueryString() {
@@ -4561,6 +4936,18 @@ function bindEvents() {
     refreshView('health');
   });
   $('#addHealthBtn').addEventListener('click', openAddHealth);
+  $('#aiHealthBtn').addEventListener('click', () => runAiAnalysis(false));
+  $('#aiHealthRefresh').addEventListener('click', () => runAiAnalysis(true));
+  $('#settingsSaveBtn').addEventListener('click', () => saveSettings());
+  $('#llmTestBtn').addEventListener('click', testLlm);
+  $('#aiUsageBtn').addEventListener('click', () => runAiPanel('Usage', { path: 'usage', days: state.usage.days }));
+  $('#aiUsageRefresh').addEventListener('click', () => runAiPanel('Usage', { path: 'usage', days: state.usage.days, refresh: true }));
+  $('#aiTraeBtn').addEventListener('click', () => runAiPanel('Trae', { path: 'trae', days: state.trae.days }));
+  $('#aiTraeRefresh').addEventListener('click', () => runAiPanel('Trae', { path: 'trae', days: state.trae.days, refresh: true }));
+  $('#aiTravelBtn').addEventListener('click', () => runAiPanel('Travel', { path: 'travel' }));
+  $('#aiTravelRefresh').addEventListener('click', () => runAiPanel('Travel', { path: 'travel', refresh: true }));
+  $('#aiBriefingBtn').addEventListener('click', () => runBriefing(false));
+  $('#aiBriefingRefresh').addEventListener('click', () => runBriefing(true));
 
   $('#checkSystemBtn').addEventListener('click', () => refreshView('system'));
 
