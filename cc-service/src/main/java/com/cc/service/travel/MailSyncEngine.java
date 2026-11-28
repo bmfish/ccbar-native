@@ -27,6 +27,7 @@ import org.springframework.stereotype.Component;
 
 import com.cc.service.admin.AdminTimes;
 import com.cc.service.push.PushService;
+import com.cc.service.settings.AppSettings;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.mail.Address;
@@ -98,15 +99,10 @@ public class MailSyncEngine {
     private final TravelRepository repository;
     private final ObjectMapper objectMapper;
     private final PushService pushService;
+    private final AppSettings settings;
 
-    private final String host;
-    private final int port;
-    private final String email;
-    private final String authCode;
-    private final String owner;
     private final int batchSize;
     private final int timeoutMs;
-    private final int minIntervalMinutes;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
 
@@ -114,25 +110,36 @@ public class MailSyncEngine {
             TravelRepository repository,
             ObjectMapper objectMapper,
             PushService pushService,
-            @Value("${app.travel.mail.host:imap.qq.com}") String host,
-            @Value("${app.travel.mail.port:993}") int port,
-            @Value("${app.travel.mail.email:}") String email,
-            @Value("${app.travel.mail.auth-code:}") String authCode,
-            @Value("${app.travel.mail.owner:}") String owner,
+            AppSettings settings,
             @Value("${app.travel.fetch.batch-size:20}") int batchSize,
-            @Value("${app.travel.fetch.timeout-ms:90000}") int timeoutMs,
-            @Value("${app.travel.min-interval-minutes:30}") int minIntervalMinutes) {
+            @Value("${app.travel.fetch.timeout-ms:90000}") int timeoutMs) {
         this.repository = repository;
         this.objectMapper = objectMapper;
         this.pushService = pushService;
-        this.host = host;
-        this.port = port;
-        this.email = email == null ? "" : email.trim();
-        this.authCode = authCode == null ? "" : authCode.trim();
-        this.owner = owner == null ? "" : owner.trim();
+        this.settings = settings;
         this.batchSize = Math.max(batchSize, 1);
         this.timeoutMs = Math.max(timeoutMs, 10000);
-        this.minIntervalMinutes = Math.max(minIntervalMinutes, 0);
+    }
+
+    /** 邮箱配置来自「系统设置」（数据库优先、环境变量兜底），改配置即生效。 */
+    private String mailHost() {
+        return settings.get(AppSettings.TRAVEL_MAIL_HOST);
+    }
+
+    private int mailPort() {
+        return settings.getInt(AppSettings.TRAVEL_MAIL_PORT, 993);
+    }
+
+    private String mailEmail() {
+        return settings.get(AppSettings.TRAVEL_MAIL_EMAIL);
+    }
+
+    private String mailAuthCode() {
+        return settings.get(AppSettings.TRAVEL_MAIL_AUTH_CODE);
+    }
+
+    private String mailOwner() {
+        return settings.get(AppSettings.TRAVEL_MAIL_OWNER);
     }
 
     public boolean isRunning() {
@@ -140,11 +147,12 @@ public class MailSyncEngine {
     }
 
     public boolean credentialsConfigured() {
-        return !email.isEmpty() && !authCode.isEmpty();
+        return !mailEmail().isEmpty() && !mailAuthCode().isEmpty();
     }
 
-    /** 距上次成功同步不足 min-interval-minutes 则跳过自动同步。 */
+    /** 距上次成功同步不足「同步节流」分钟数则跳过自动同步。 */
     public boolean throttled() {
+        int minIntervalMinutes = settings.getInt(AppSettings.TRAVEL_MIN_INTERVAL_MINUTES, 30);
         if (minIntervalMinutes <= 0) {
             return false;
         }
@@ -170,7 +178,7 @@ public class MailSyncEngine {
 
     private SyncSummary doSync(boolean fullHistory) {
         if (!credentialsConfigured()) {
-            throw new IllegalStateException("未配置邮箱账号或授权码（TRAVEL_MAIL_EMAIL / TRAVEL_MAIL_AUTH_CODE）");
+            throw new IllegalStateException("未配置邮箱账号或授权码：请在管理台「系统设置」填写，或配置环境变量 TRAVEL_MAIL_EMAIL / TRAVEL_MAIL_AUTH_CODE");
         }
         long started = System.currentTimeMillis();
         log.info("12306 邮件同步开始（{}，水位 {}）", fullHistory ? "全量" : "增量", sinceDate(fullHistory));
@@ -273,7 +281,7 @@ public class MailSyncEngine {
                 mails.size(), mailsMatched, candidatesCreated, importResult.imported(),
                 refundMarked, changeMarked,
                 System.currentTimeMillis() - started, AdminTimes.now());
-        repository.markSynced(email, owner, fullHistory, toJson(summary), AdminTimes.now());
+        repository.markSynced(mailEmail(), mailOwner(), fullHistory, toJson(summary), AdminTimes.now());
         log.info("12306 邮件同步完成：{} 封邮件，新增候选 {}，导入 {}，退票标记 {}，改签标记 {}",
                 mails.size(), candidatesCreated, importResult.imported(),
                 refundMarked, changeMarked);
@@ -301,6 +309,8 @@ public class MailSyncEngine {
     /* ---------- IMAP 连接 ---------- */
 
     private IMAPStore openStore() throws MessagingException, InterruptedException {
+        String host = mailHost();
+        int port = mailPort();
         // 明文联调：mock 服务器（127.0.0.1 / localhost 或 8025 端口）与 iOS 端约定一致
         boolean plaintext = host.equals("127.0.0.1") || host.equals("localhost") || port == 8025;
         Session session = Session.getInstance(sessionProps(plaintext));
@@ -308,7 +318,7 @@ public class MailSyncEngine {
         for (int attempt = 1; attempt <= LOGIN_RETRIES; attempt++) {
             IMAPStore store = (IMAPStore) session.getStore("imap");
             try {
-                store.connect(host, port, email, authCode);
+                store.connect(host, port, mailEmail(), mailAuthCode());
                 return store;
             } catch (MessagingException e) {
                 String message = String.valueOf(e.getMessage()).toLowerCase(Locale.ROOT);
@@ -490,7 +500,7 @@ public class MailSyncEngine {
             }
         }
         List<TicketMailParser.ParsedTicket> tickets =
-                TicketMailParser.parse(subject, body, owner.isEmpty() ? null : owner, sentDate);
+                TicketMailParser.parse(subject, body, mailOwner().isEmpty() ? null : mailOwner(), sentDate);
         List<String> orderNos = TicketMailParser.extractOrderNos(body);
         return new ParsedMail(folderName, from, subject, sentDate,
                 orderNos.isEmpty() ? null : orderNos.get(0), refund, change, tickets);
@@ -677,7 +687,7 @@ public class MailSyncEngine {
     private void reconnectQuietly(IMAPStore store) {
         try {
             if (!store.isConnected()) {
-                store.connect(host, port, email, authCode);
+                store.connect(mailHost(), mailPort(), mailEmail(), mailAuthCode());
             }
         } catch (MessagingException e) {
             log.warn("IMAP 重连失败: {}", e.getMessage());

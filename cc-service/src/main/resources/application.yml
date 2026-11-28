@@ -25,6 +25,14 @@ app:
     retention-days: ${AUDIT_RETENTION_DAYS:90}
     delete-batch-size: ${AUDIT_DELETE_BATCH_SIZE:5000}
   version: ${APP_VERSION:0.0.1-SNAPSHOT}
+  llm:
+    # AI 分析用 LLM 配置：管理台「系统设置」可在线修改（落库，优先级高于此处），这里只是环境变量兜底默认值
+    base-url: ${LLM_BASE_URL:https://open.bigmodel.cn/api/paas/v4}
+    api-key: ${LLM_API_KEY:}
+    model: ${LLM_MODEL:glm-4.7-flash}
+    thinking: ${LLM_THINKING:false}
+    timeout-ms: ${LLM_TIMEOUT_MS:120000}
+    max-attempts: ${LLM_MAX_ATTEMPTS:3}
   push:
     # 久坐提醒定时检查间隔（毫秒）
     check-interval-ms: ${PUSH_CHECK_INTERVAL_MS:30000}
@@ -37,10 +45,11 @@ app:
     min-interval-minutes: ${TRAVEL_MIN_INTERVAL_MINUTES:30}
     mail:
       # QQ 邮箱 IMAP；填 127.0.0.1 或 8025 端口时自动走明文（联调用 scripts/mock_imap.py）
+      # 邮箱配置同样可在管理台「系统设置」在线修改（落库），这里只是环境变量兜底默认值
       host: ${TRAVEL_MAIL_HOST:imap.qq.com}
       port: ${TRAVEL_MAIL_PORT:993}
       email: ${TRAVEL_MAIL_EMAIL:}
-      # QQ 邮箱授权码（16 位，非登录密码），只走环境变量不落库
+      # QQ 邮箱授权码（16 位，非登录密码）
       auth-code: ${TRAVEL_MAIL_AUTH_CODE:}
       # 乘车人姓名，只导入本人车票
       owner: ${TRAVEL_MAIL_OWNER:}
