@@ -1049,11 +1049,6 @@
         </div>
         <div class="toolbar">
           <div class="filters">
-            <select class="select" id="healthKind">
-              <option value="all">全部类型</option>
-              <option value="weight">体重</option>
-              <option value="height">身高</option>
-            </select>
             <select class="select" id="healthDays">
               <option value="30">近 30 天</option>
               <option value="90">近 90 天</option>
@@ -1100,7 +1095,13 @@
           <div class="card-body" id="aiHealthBody">点击「AI 分析」生成解读，首次调用约需数秒。Key 在「系统设置」中配置。</div>
         </div>
         <div class="card">
-          <div class="card-head"><h3>最近记录 <span class="sub" id="healthRecordsSub"></span></h3></div>
+          <div class="card-head">
+            <h3>体重记录 <span class="sub" id="healthRecordsSub"></span></h3>
+            <div style="display:flex;gap:8px">
+              <button class="btn sm ghost" id="healthPrev">上一页</button>
+              <button class="btn sm ghost" id="healthNext">下一页</button>
+            </div>
+          </div>
           <div class="card-body flush">
             <div class="table-wrap">
               <table>
@@ -1515,7 +1516,7 @@ const state = {
   traeData: null,
   usage: { days: 7, userId: '', source: '', model: '', metric: 'credits' },
   flow: { range: 'today', anchor: startOfToday(), userId: '', source: '', model: '' },
-  health: { days: 30, kind: 'all' },
+  health: { days: 30, page: 1 },
   tickets: { query: '', status: '', page: 1, size: 50, candidateFilter: 'pending' },
   travelSync: null,
   travelSyncPollTimer: null,
@@ -3499,7 +3500,7 @@ async function loadHealth() {
   renderHealthKpis(data);
   renderWeightChart($('#healthTrend'), data.weightTrend);
   renderHealthStats(data);
-  renderHealthRecords(data.recent);
+  loadHealthRecords();
   $('#healthRange').textContent = `趋势从 ${fmtDate(data.from)} 开始`;
   $('#healthTrendSub').textContent = state.health.days === 365 ? '近 1 年' : `近 ${state.health.days} 天`;
   loadAiHealthCache();
@@ -3613,22 +3614,23 @@ function healthValueText(record) {
   return record.value.toFixed(1) + ' kg';
 }
 
-function renderHealthRecords(rows) {
+async function loadHealthRecords() {
+  const data = await api('/health/records?page=' + (state.health.page || 1) + '&size=20');
+  const totalPages = Math.max(1, Math.ceil(data.total / data.size));
+  $('#healthRecordsSub').textContent = `共 ${fmtInt(data.total)} 条 · 第 ${data.page} / ${totalPages} 页`;
   const tbody = $('#healthRecords');
-  // 体脂数值来自客户端同步，单位异常（0.2%~0.4%），不展示也不参与分析
-  const filtered = (rows || []).filter((row) => row.kind !== 'bodyfat'
-    && (state.health.kind === 'all' || row.kind === state.health.kind));
-  $('#healthRecordsSub').textContent = (state.health.kind === 'all' ? '全部类型' : KIND_NAMES[state.health.kind]) + ' · 最近 12 条';
-  if (!filtered.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="4">暂无健康记录</td></tr>';
-    return;
+  if (!data.records.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="4">暂无体重记录</td></tr>';
+  } else {
+    tbody.innerHTML = data.records.map((record) => `<tr>
+      <td><span class="pill ok">体重</span></td>
+      <td class="num">${healthValueText(record)}</td>
+      <td class="muted">${fmtDateTime(record.recordedAt)}</td>
+      <td class="muted">${esc(record.source || '—')}</td>
+    </tr>`).join('');
   }
-  tbody.innerHTML = filtered.map((record) => `<tr>
-    <td><span class="pill ${record.kind === 'weight' ? 'ok' : record.kind === 'bodyfat' ? 'blue' : ''}">${KIND_NAMES[record.kind] || record.kind}</span></td>
-    <td class="num">${healthValueText(record)}</td>
-    <td class="muted">${fmtDateTime(record.recordedAt)}</td>
-    <td class="muted">${esc(record.source || '—')}</td>
-  </tr>`).join('');
+  $('#healthPrev').disabled = data.page <= 1;
+  $('#healthNext').disabled = data.page >= totalPages;
 }
 
 function toLocalInput(date) {
@@ -4909,13 +4911,17 @@ function bindEvents() {
 
   $('#purgeDevicesBtn').addEventListener('click', purgeDevices);
 
-  $('#healthKind').addEventListener('change', () => {
-    state.health.kind = $('#healthKind').value;
-    if (state.healthData) renderHealthRecords(state.healthData.recent);
-  });
   $('#healthDays').addEventListener('change', () => {
     state.health.days = Number($('#healthDays').value) || 30;
     refreshView('health');
+  });
+  $('#healthPrev').addEventListener('click', () => {
+    state.health.page = Math.max(1, (state.health.page || 1) - 1);
+    loadHealthRecords();
+  });
+  $('#healthNext').addEventListener('click', () => {
+    state.health.page = (state.health.page || 1) + 1;
+    loadHealthRecords();
   });
   $('#addHealthBtn').addEventListener('click', openAddHealth);
   $('#aiHealthBtn').addEventListener('click', () => runAiAnalysis(false));

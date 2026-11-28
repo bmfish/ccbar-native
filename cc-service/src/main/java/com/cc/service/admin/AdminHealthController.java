@@ -78,6 +78,24 @@ public class AdminHealthController {
         this.objectMapper = objectMapper;
     }
 
+    public record HealthPageResponse(long total, int page, int size, List<HealthRecordView> records) {
+    }
+
+    /** 体重记录分页查询（最近优先；体脂单位异常不展示，身高在 KPI 卡展示）。 */
+    @GetMapping("/records")
+    public HealthPageResponse records(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        int safeSize = Math.min(Math.max(size, 1), 100);
+        int safePage = Math.max(page, 1);
+        long total = console.weightCount();
+        List<HealthRecordView> records = console.weightPage((safePage - 1) * safeSize, safeSize).stream()
+                .map(record -> new HealthRecordView(
+                        record.kind(), record.value(), record.recordedAt(), record.source()))
+                .toList();
+        return new HealthPageResponse(total, safePage, safeSize, records);
+    }
+
     @PostMapping("/samples")
     public void addSample(@RequestBody SampleRequest request) {
         String kind = request.kind() == null ? "" : request.kind().trim().toLowerCase();

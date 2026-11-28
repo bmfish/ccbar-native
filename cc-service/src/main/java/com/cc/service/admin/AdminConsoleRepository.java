@@ -702,6 +702,27 @@ public class AdminConsoleRepository {
                 .list();
     }
 
+    /** 体重记录总数（记录列表只查体重：体脂单位异常不展示，身高在 KPI 卡展示）。 */
+    public long weightCount() {
+        return jdbcClient.sql("select count(*) from health_sample where kind = 'weight'")
+                .query(Long.class)
+                .single();
+    }
+
+    /** 体重记录分页（最近优先）。 */
+    public List<HealthRecord> weightPage(int offset, int limit) {
+        return jdbcClient.sql("""
+                select kind, recorded_at, value, source from health_sample
+                where kind = 'weight'
+                order by recorded_at desc
+                limit :limit offset :offset
+                """)
+                .param("limit", limit)
+                .param("offset", offset)
+                .query(HEALTH_MAPPER)
+                .list();
+    }
+
     /** 健康数据指纹：任何新增（条数变化）或修改（updated_at 推进）都会改变，用于 AI 分析缓存失效。 */
     public String healthFingerprint() {
         return jdbcClient.sql("""
