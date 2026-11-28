@@ -1041,7 +1041,7 @@
         <div class="page-head">
           <div>
             <h2>健康管理</h2>
-            <p>体重、体脂与身高记录，数据与 ccBar 客户端互通</p>
+            <p>体重与身高记录，数据与 ccBar 客户端互通</p>
           </div>
           <div class="page-actions">
             <button class="btn primary" id="addHealthBtn">新增记录</button>
@@ -1052,7 +1052,6 @@
             <select class="select" id="healthKind">
               <option value="all">全部类型</option>
               <option value="weight">体重</option>
-              <option value="bodyfat">体脂</option>
               <option value="height">身高</option>
             </select>
             <select class="select" id="healthDays">
@@ -1063,16 +1062,11 @@
           </div>
           <span class="meta" id="healthRange"></span>
         </div>
-        <div class="kpis">
+        <div class="kpis" style="grid-template-columns:repeat(3,1fr)">
           <div class="card kpi">
             <div class="label">最新体重</div>
             <div class="value" id="healthWeight">—</div>
             <div class="foot" id="healthWeightFoot">&nbsp;</div>
-          </div>
-          <div class="card kpi">
-            <div class="label">最新体脂</div>
-            <div class="value" id="healthBodyfat">—</div>
-            <div class="foot" id="healthBodyfatFoot">&nbsp;</div>
           </div>
           <div class="card kpi">
             <div class="label">身高</div>
@@ -1097,7 +1091,7 @@
         </div>
         <div class="card">
           <div class="card-head">
-            <h3>AI 分析 <span class="sub" id="aiHealthSub">体重/体脂趋势解读 · 数据无变化时自动复用上次结果</span></h3>
+            <h3>AI 分析 <span class="sub" id="aiHealthSub">体重趋势解读 · 数据无变化时自动复用上次结果</span></h3>
             <div style="display:flex;gap:8px">
               <button class="btn" id="aiHealthRefresh">强制重算</button>
               <button class="btn primary" id="aiHealthBtn">AI 分析</button>
@@ -1497,7 +1491,7 @@ const VIEW_META = {
   usage: ['用量分析', 'Token、缓存与积分消耗'],
   flow: ['流水明细', '按时间聚合的同步记录'],
   devices: ['设备管理', '所有登记设备与在线状态'],
-  health: ['健康管理', '体重、体脂与身高记录'],
+  health: ['健康管理', '体重与身高记录'],
   travel: ['旅行统计', '12306 邮件同步的车票数据'],
   tickets: ['票据管理', '票根候选确认与同步控制'],
   push: ['推送管理', 'Bark 定时推送任务'],
@@ -3526,7 +3520,6 @@ function deltaFoot(current, previous, unit, digits = 1) {
 
 function renderHealthKpis(data) {
   const weight = latestOf(data, 'weight');
-  const bodyfat = latestOf(data, 'bodyfat');
   const height = latestOf(data, 'height');
 
   if (weight) {
@@ -3535,17 +3528,6 @@ function renderHealthKpis(data) {
   } else {
     $('#healthWeight').textContent = '—';
     $('#healthWeightFoot').textContent = '暂无体重记录';
-  }
-
-  if (bodyfat) {
-    $('#healthBodyfat').innerHTML = `${(bodyfat.value * 100).toFixed(1)}<span class="unit">%</span>`;
-    const previous = data.weekAgo.bodyfat;
-    $('#healthBodyfatFoot').innerHTML = previous === null || previous === undefined
-      ? '暂无对比数据'
-      : deltaFoot(bodyfat.value * 100, previous * 100, '%');
-  } else {
-    $('#healthBodyfat').textContent = '—';
-    $('#healthBodyfatFoot').textContent = '暂无体脂记录';
   }
 
   if (height) {
@@ -3617,7 +3599,6 @@ function renderWeightChart(container, points) {
 function renderHealthStats(data) {
   const rows = [
     ['体重记录', fmtInt(data.counts.weight || 0) + ' 条'],
-    ['体脂记录', fmtInt(data.counts.bodyfat || 0) + ' 条'],
     ['身高记录', fmtInt(data.counts.height || 0) + ' 条'],
     ['数据来源', fmtInt(data.sources) + ' 个'],
     ['覆盖天数', fmtInt(data.days) + ' 天'],
@@ -3628,14 +3609,15 @@ function renderHealthStats(data) {
 }
 
 function healthValueText(record) {
-  if (record.kind === 'bodyfat') return (record.value * 100).toFixed(1) + ' %';
   if (record.kind === 'height') return record.value.toFixed(0) + ' cm';
   return record.value.toFixed(1) + ' kg';
 }
 
 function renderHealthRecords(rows) {
   const tbody = $('#healthRecords');
-  const filtered = (rows || []).filter((row) => state.health.kind === 'all' || row.kind === state.health.kind);
+  // 体脂数值来自客户端同步，单位异常（0.2%~0.4%），不展示也不参与分析
+  const filtered = (rows || []).filter((row) => row.kind !== 'bodyfat'
+    && (state.health.kind === 'all' || row.kind === state.health.kind));
   $('#healthRecordsSub').textContent = (state.health.kind === 'all' ? '全部类型' : KIND_NAMES[state.health.kind]) + ' · 最近 12 条';
   if (!filtered.length) {
     tbody.innerHTML = '<tr class="empty-row"><td colspan="4">暂无健康记录</td></tr>';

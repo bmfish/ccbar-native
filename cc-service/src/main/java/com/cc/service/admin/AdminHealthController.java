@@ -179,9 +179,7 @@ public class AdminHealthController {
             double delta,
             double dailyRate,
             int recordedDays,
-            Double bmi,
-            Double startBodyfat,
-            Double latestBodyfat) {
+            Double bmi) {
     }
 
     public record AiAnalysisResponse(
@@ -198,9 +196,9 @@ public class AdminHealthController {
             你是健康数据分析师。只输出一个 JSON 对象，不要输出任何其它文字或 markdown 代码块。字段定义：
             summary：两三句话总结当前状态（趋势方向、区间变化量、整体评价）；
             trend：对象，含 weekly_avg 数组（每项含 week 与 avg_kg，按周聚合的平均体重）和 pace（一句话节奏评价，速度是否健康）；
-            quality：一句话评估减脂/增肌质量（结合体重与体脂的交叉变化，判断掉的更可能是脂肪还是水分/肌肉；没有体脂数据则说明无法判断）；
             anomalies：数组，每项含 date 与 reason（突升突降、连续缺测、周变化速度过快等，没有则空数组）；
             suggestions：数组，2~3 条可执行建议。
+            注意：只有体重和身高数据，没有体脂率，不要对体脂/减脂质量做判断。
             """;
 
     /**
@@ -262,24 +260,16 @@ public class AdminHealthController {
         return new AiAnalysisResponse(false, false, true, llm.model(), AdminTimes.now(), analysisJson, gathered.metrics());
     }
 
-    private record Gathered(List<WeightPoint> weight, List<WeightPoint> bodyfat, AiMetrics metrics) {
+    private record Gathered(List<WeightPoint> weight, AiMetrics metrics) {
     }
 
-    /** 聚合分析输入：体重按天去重（同天取最新）、体脂折算为百分比、预计算指标。 */
+    /** 聚合分析输入：体重按天去重（同天取最新）、预计算指标。体脂数值来自客户端同步且单位异常，不参与分析。 */
     private Gathered gather(int days) {
         OffsetDateTime from = AdminTimes.daysStart(days);
         List<WeightPoint> weight = buildWeightTrend(console.weightTrend(from));
         if (weight.isEmpty()) {
             return null;
         }
-
-        List<HealthSample> bodyfatRaw = samples.find("bodyfat", from, null, 500);
-        List<WeightPoint> bodyfat = bodyfatRaw.stream()
-                .sorted(Comparator.comparing(HealthSample::recordedAt))
-                .map(sample -> new WeightPoint(
-                        sample.recordedAt().atZoneSameInstant(AdminTimes.ZONE).toLocalDate().toString(),
-                        Math.round(sample.value() * 1000.0) / 10.0))
-                .toList();
 
         double start = weight.get(0).value();
         double latest = weight.get(weight.size() - 1).value();
@@ -289,8 +279,6 @@ public class AdminHealthController {
         for (AdminConsoleRepository.HealthRecord record : console.latestHealth()) {
             latestByKind.put(record.kind(), record.value());
         }
-        Double startBodyfat = bodyfat.isEmpty() ? null : bodyfat.get(0).value();
-        Double latestBodyfat = bodyfat.isEmpty() ? null : bodyfat.get(bodyfat.size() - 1).value();
 
         AiMetrics metrics = new AiMetrics(
                 weight.get(0).date(),
@@ -300,10 +288,8 @@ public class AdminHealthController {
                 Math.round((latest - start) * 100.0) / 100.0,
                 Math.round((latest - start) / span * 1000.0) / 1000.0,
                 weight.size(),
-                bmi(latestByKind),
-                startBodyfat,
-                latestBodyfat);
-        return new Gathered(weight, bodyfat, metrics);
+                bmi(latestByKind));
+        return new Gathered(weight, metrics);
     }
 
     private String buildPrompt(int days, Gathered gathered) {
@@ -319,14 +305,8 @@ public class AdminHealthController {
         if (metrics.bmi() != null) {
             prompt.append("，BMI ").append(metrics.bmi());
         }
-        if (metrics.startBodyfat() != null && metrics.latestBodyfat() != null) {
-            prompt.append("，体脂率 ").append(metrics.startBodyfat()).append("% → ").append(metrics.latestBodyfat()).append("%");
-        }
         prompt.append("。\n");
         prompt.append("每日体重（kg，按天去重取最新）：").append(toJson(gathered.weight())).append("\n");
-        if (!gathered.bodyfat().isEmpty()) {
-            prompt.append("体脂率记录（%）：").append(toJson(gathered.bodyfat())).append("\n");
-        }
         return prompt.toString();
     }
 
