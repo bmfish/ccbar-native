@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -21,9 +22,13 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.cc.service.admin.AdminTimes;
+import com.cc.service.admin.AiAnalysisService;
 import com.cc.service.push.PushService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -173,14 +178,16 @@ public class AdminTravelController {
     private final MailSyncEngine engine;
     private final ObjectMapper objectMapper;
     private final PushService pushService;
+    private final AiAnalysisService aiAnalysis;
     private final ExecutorService syncExecutor;
 
     public AdminTravelController(TravelRepository repository, MailSyncEngine engine,
-            ObjectMapper objectMapper, PushService pushService) {
+            ObjectMapper objectMapper, PushService pushService, AiAnalysisService aiAnalysis) {
         this.repository = repository;
         this.engine = engine;
         this.objectMapper = objectMapper;
         this.pushService = pushService;
+        this.aiAnalysis = aiAnalysis;
         ThreadFactory factory = new ThreadFactory() {
             private final AtomicInteger seq = new AtomicInteger();
 
@@ -302,6 +309,77 @@ public class AdminTravelController {
                 topRoutes, topCities, highlights);
     }
 
+    /* ---------- AI 分析 ---------- */
+
+    private static final String DOMAIN_TRAVEL = "travel";
+
+    private static final String AI_TRAVEL_SYSTEM_PROMPT = """
+            你是出行数据分析师。数据来自 12306 购票邮件解析的高铁/火车票根（只计 status=normal 的正式行程）。只输出一个 JSON 对象，不要输出任何其它文字或 markdown 代码块。字段定义：
+            summary：两三句话总结出行频率、总里程与花费水平；
+            patterns：对象，含 favorite_route（最常坐线路，一句话）、favorite_city（最常去城市，一句话）、travel_style（出发时段偏好，一句话）、monthly_trend（近 12 个月频率变化，一句话）；
+            anomalies：数组，每项含 period 与 reason（出行突增、长期未出行、某月花费异常高等，没有则空数组）；
+            suggestions：数组，2~3 条轻量建议（比如票价规律、时段优化）。
+            """;
+
+    public record AiTravelResponse(
+            boolean cached, boolean stale, boolean available,
+            String model, OffsetDateTime analyzedAt, JsonNode analysis) {
+    }
+
+    /** 旅行 AI 分析：按数据指纹缓存，票根无新增/退改时直接复用上次结果。 */
+    @GetMapping("/ai-analysis")
+    public AiTravelResponse aiAnalysis(
+            @RequestParam(defaultValue = "false") boolean refresh,
+            @RequestParam(defaultValue = "false") boolean cachedOnly) {
+        String fingerprint = repository.travelFingerprint();
+
+        if (cachedOnly) {
+            return aiAnalysis.findCached(DOMAIN_TRAVEL, fingerprint, 0)
+                    .map(r -> new AiTravelResponse(true, r.stale(), true, r.model(), r.analyzedAt(), r.analysis()))
+                    .orElseGet(() -> new AiTravelResponse(false, false, false, null, null, null));
+        }
+
+        OverviewResponse data = overview();
+        if (data.totals().trips() == 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "暂无旅行数据，无法分析");
+        }
+
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("分析全部高铁出行记录（统计截至 ").append(AdminTimes.now().toLocalDate()).append("）。\n");
+        prompt.append("总量：").append(data.totals().trips()).append(" 次出行，途经 ").append(data.totals().stations())
+                .append(" 个车站、").append(data.totals().cities()).append(" 个城市，总里程 ")
+                .append(data.totals().totalKm()).append(" km，总花费 ").append(data.totals().totalCost()).append(" 元，今年 ")
+                .append(data.totals().thisYearCount()).append(" 次、本月 ").append(data.totals().thisMonthCount()).append(" 次。\n");
+        prompt.append("年度分布：").append(toJson(data.yearly())).append("\n");
+        prompt.append("近 12 个月：").append(toJson(data.monthly())).append("\n");
+        prompt.append("出发时段分布：").append(toJson(data.hours())).append("\n");
+        prompt.append("TOP5 线路：").append(toJson(data.topRoutes())).append("\n");
+        prompt.append("TOP5 城市：").append(toJson(data.topCities())).append("\n");
+        prompt.append("之最：最近 ").append(highlightText(data.highlights().latest()))
+                .append("；最早 ").append(highlightText(data.highlights().earliest()))
+                .append("；单程最长 ").append(highlightText(data.highlights().longest()))
+                .append("；单程最贵 ").append(highlightText(data.highlights().priciest())).append("\n");
+        prompt.append("请总结出行规律、找异常、给建议。");
+
+        AiAnalysisService.AiResult result = aiAnalysis.analyze(DOMAIN_TRAVEL, fingerprint, 0,
+                AI_TRAVEL_SYSTEM_PROMPT, prompt.toString(), refresh);
+        return new AiTravelResponse(result.cached(), result.stale(), true, result.model(), result.analyzedAt(), result.analysis());
+    }
+
+    private String highlightText(Highlight highlight) {
+        return highlight == null ? "无" : "%s %s→%s %skm %s元".formatted(
+                highlight.rideDate(), highlight.fromStation(), highlight.toStation(),
+                highlight.km(), highlight.price() == null ? "-" : highlight.price());
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("分析输入序列化失败", exception);
+        }
+    }
+
     @GetMapping("/tickets")
     public TicketPageResponse tickets(
             @RequestParam(required = false) String query,
@@ -357,7 +435,7 @@ public class AdminTravelController {
         if (!engine.credentialsConfigured()) {
             return ResponseEntity.badRequest().body(new SyncResponse(false,
                     full ? "full" : "incremental", false,
-                    "未配置邮箱账号或授权码（TRAVEL_MAIL_EMAIL / TRAVEL_MAIL_AUTH_CODE）"));
+                    "未配置邮箱账号或授权码：请在「系统设置」填写，或配置环境变量 TRAVEL_MAIL_EMAIL / TRAVEL_MAIL_AUTH_CODE"));
         }
         syncExecutor.submit(() -> {
             try {

@@ -702,6 +702,38 @@ public class AdminConsoleRepository {
                 .list();
     }
 
+    /** 健康数据指纹：任何新增（条数变化）或修改（updated_at 推进）都会改变，用于 AI 分析缓存失效。 */
+    public String healthFingerprint() {
+        return jdbcClient.sql("""
+                select count(*) || ':' || coalesce(max(updated_at)::text, '')
+                from health_sample
+                """)
+                .query(String.class)
+                .single();
+    }
+
+    /** 用量数据指纹：usage_event 任何新增上报都会改变。 */
+    public String usageFingerprint() {
+        return jdbcClient.sql("""
+                select count(*) || ':' || coalesce(max(updated_at)::text, '')
+                from usage_event
+                """)
+                .query(String.class)
+                .single();
+    }
+
+    /** Trae 数据指纹：账户配额上报或 Trae 来源用量变化都会改变。 */
+    public String traeFingerprint() {
+        return jdbcClient.sql("""
+                select (select count(*) || ':' || coalesce(max(updated_at)::text, '') from trae_account_quota)
+                    || '|' ||
+                       (select count(*) || ':' || coalesce(max(updated_at)::text, '')
+                        from usage_event where source = 'trae')
+                """)
+                .query(String.class)
+                .single();
+    }
+
     // ---------- 系统 ----------
 
     public SystemCounts systemCounts() {

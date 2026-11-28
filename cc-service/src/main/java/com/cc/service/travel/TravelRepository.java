@@ -371,6 +371,13 @@ public class TravelRepository {
 
     /* ---------- 同步水位 ---------- */
 
+    /** 旅行数据指纹:新增车票或退票/改签(会更新 updated_at)都会改变,用于 AI 分析缓存失效。 */
+    public String travelFingerprint() {
+        return jdbc.sql("select count(*) || ':' || coalesce(max(updated_at)::text, '') from travel_ticket")
+                .query(String.class)
+                .single();
+    }
+
     public SyncState getSyncState() {
         return jdbc.sql("""
                 select email, owner, last_sync_at, last_full_sync_at, cast(last_result as text)

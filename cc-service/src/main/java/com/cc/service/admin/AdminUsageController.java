@@ -24,6 +24,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.cc.service.auth.UserRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /** 用量分析、流水聚合与 CSV 导出（仅管理 Token 可访问）。 */
 @RestController
@@ -101,10 +104,108 @@ public class AdminUsageController {
 
     private final AdminConsoleRepository console;
     private final UserRepository users;
+    private final AiAnalysisService aiAnalysis;
+    private final ObjectMapper objectMapper;
 
-    public AdminUsageController(AdminConsoleRepository console, UserRepository users) {
+    public AdminUsageController(AdminConsoleRepository console, UserRepository users,
+                                AiAnalysisService aiAnalysis, ObjectMapper objectMapper) {
         this.console = console;
         this.users = users;
+        this.aiAnalysis = aiAnalysis;
+        this.objectMapper = objectMapper;
+    }
+
+    /* ---------- AI 分析 ---------- */
+
+    private static final String DOMAIN_USAGE = "usage";
+
+    private static final String AI_USAGE_SYSTEM_PROMPT = """
+            你是用量数据分析师，分析 AI CLI 编程工具（cc-switch / ZCode / Trae 等来源）的 token 与积分消耗。只输出一个 JSON 对象，不要输出任何其它文字或 markdown 代码块。字段定义：
+            summary：两三句话总结消耗总量与趋势；
+            trend：对象，含 daily 数组（每项含 day、tokens、credits）和 pace（一句话节奏评价）；
+            anomalies：数组，每项含 date 与 reason（消耗突增突降、整天无同步、单日异常高等，没有则空数组）；
+            suggestions：数组，2~3 条省钱或使用调度建议。
+            """;
+
+    public record AiUsageResponse(
+            boolean cached, boolean stale, boolean available,
+            String model, OffsetDateTime analyzedAt, JsonNode analysis) {
+    }
+
+    /** 用量 AI 分析：按数据指纹缓存，无新增上报时直接复用上次结果，不调用 LLM。 */
+    @GetMapping("/ai-analysis")
+    public AiUsageResponse aiAnalysis(
+            @RequestParam(defaultValue = "7") int days,
+            @RequestParam(defaultValue = "false") boolean refresh,
+            @RequestParam(defaultValue = "false") boolean cachedOnly) {
+        int safeDays = Math.min(Math.max(days, 1), 365);
+        String fingerprint = console.usageFingerprint();
+
+        if (cachedOnly) {
+            return aiAnalysis.findCached(DOMAIN_USAGE, fingerprint, safeDays)
+                    .map(r -> new AiUsageResponse(true, r.stale(), true, r.model(), r.analyzedAt(), r.analysis()))
+                    .orElseGet(() -> new AiUsageResponse(false, false, false, null, null, null));
+        }
+
+        OffsetDateTime end = AdminTimes.now();
+        OffsetDateTime start = AdminTimes.daysStart(safeDays);
+        long fromEpoch = start.toEpochSecond();
+        long toEpoch = end.toEpochSecond();
+
+        var totals = console.usageTotals(fromEpoch, toEpoch, null, "", "");
+        List<AdminConsoleRepository.SourceAgg> bySource = console.usageBySource(fromEpoch, toEpoch, null, "", "");
+        List<AdminConsoleRepository.ModelAgg> byModel = console.usageByModel(fromEpoch, toEpoch, null, "", "", 8);
+        List<Map<String, Object>> daily = dailyTotals(console.usageDailyBySource(fromEpoch, toEpoch, null, "", ""));
+
+        AiAnalysisService.AiResult result = aiAnalysis.analyze(DOMAIN_USAGE, fingerprint, safeDays,
+                AI_USAGE_SYSTEM_PROMPT,
+                buildUsagePrompt(safeDays, start, end, totals, bySource, byModel, daily), refresh);
+        return new AiUsageResponse(result.cached(), result.stale(), true, result.model(), result.analyzedAt(), result.analysis());
+    }
+
+    /** 把 天×来源 明细合并成每日总量（tokens + 积分）。 */
+    private List<Map<String, Object>> dailyTotals(List<AdminConsoleRepository.DaySourceUsageRow> rows) {
+        Map<String, long[]> tokensByDay = new LinkedHashMap<>();
+        Map<String, double[]> creditsByDay = new LinkedHashMap<>();
+        for (AdminConsoleRepository.DaySourceUsageRow row : rows) {
+            tokensByDay.computeIfAbsent(row.day(), k -> new long[1])[0] += row.tokens();
+            creditsByDay.computeIfAbsent(row.day(), k -> new double[1])[0] += row.credits();
+        }
+        return tokensByDay.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .map(e -> Map.<String, Object>of(
+                        "day", e.getKey(),
+                        "tokens", e.getValue()[0],
+                        "credits", Math.round(creditsByDay.get(e.getKey())[0] * 10.0) / 10.0))
+                .toList();
+    }
+
+    private String buildUsagePrompt(int days, OffsetDateTime start, OffsetDateTime end,
+                                    AdminConsoleRepository.UsageTotals totals,
+                                    List<AdminConsoleRepository.SourceAgg> bySource,
+                                    List<AdminConsoleRepository.ModelAgg> byModel,
+                                    List<Map<String, Object>> daily) {
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("分析最近 ").append(days).append(" 天（").append(start.toLocalDate()).append(" 至 ")
+                .append(end.toLocalDate()).append("）的 AI CLI 用量数据。\n");
+        prompt.append("总量：事件 ").append(totals.events()).append("，请求 ").append(totals.requests())
+                .append("，tokens ").append(totals.tokens())
+                .append("（缓存读 ").append(totals.cacheReadTokens()).append("，缓存写 ").append(totals.cacheCreationTokens())
+                .append("），积分 ").append(totals.credits())
+                .append("，费用 $").append(totals.costUsd())
+                .append("，活跃设备 ").append(totals.devices()).append("。\n");
+        prompt.append("按来源：").append(toJson(bySource)).append("\n");
+        prompt.append("按模型 TOP8：").append(toJson(byModel)).append("\n");
+        prompt.append("每日汇总：").append(toJson(daily)).append("\n");
+        return prompt.toString();
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("分析输入序列化失败", exception);
+        }
     }
 
     @GetMapping("/options")
