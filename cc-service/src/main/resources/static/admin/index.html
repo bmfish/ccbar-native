@@ -536,6 +536,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.4 6.6a4.8 4.8 0 0 0-6.8 0L12 8.2l-1.6-1.6a4.8 4.8 0 1 0-6.8 6.8L12 21l8.4-7.6a4.8 4.8 0 0 0 0-6.8Z"/></svg>
       <span>健康管理</span>
     </div>
+    <div class="nav-item" data-view="weightstats">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5h16M6.5 14.5l3.5-5.5 4 3 4.5-8"/><circle cx="6.5" cy="14.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="10" cy="9" r="1.2" fill="currentColor" stroke="none"/><circle cx="14" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="18.5" cy="4" r="1.2" fill="currentColor" stroke="none"/></svg>
+      <span>体重统计</span>
+    </div>
     <div class="nav-section">票据</div>
     <div class="nav-item" data-view="travel">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="6" y="3.5" width="12" height="13" rx="3"/><path d="M6 10h12"/><circle cx="9.3" cy="13.3" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.7" cy="13.3" r="1.1" fill="currentColor" stroke="none"/><path d="M8.5 16.5 6 20.5M15.5 16.5 18 20.5M6 20.5h12"/></svg>
@@ -1128,6 +1132,12 @@
       </section>
 
       <!-- 旅行统计 -->
+      <section class="view" id="view-weightstats">
+        <div style="height:calc(100vh - 118px);min-height:480px;border:1px solid var(--border);border-radius:14px;overflow:hidden">
+          <iframe id="weightStatsFrame" data-src="weight-stats/weight-stats.html" title="体重统计"
+                  style="width:100%;height:100%;border:0;display:block;background:#07080A"></iframe>
+        </div>
+      </section>
       <section class="view" id="view-travel">
         <div class="page-head">
           <div>
@@ -1507,6 +1517,7 @@ const VIEW_META = {
   flow: ['流水明细', '按时间聚合的同步记录'],
   devices: ['设备管理', '所有登记设备与在线状态'],
   health: ['健康管理', '体重与身高记录'],
+  weightstats: ['体重统计', '体重笔记仪表盘 · 数据来自健康记录'],
   travel: ['旅行统计', '12306 邮件同步的车票数据'],
   tickets: ['票据管理', '票根候选确认与同步控制'],
   push: ['推送管理', 'Bark 定时推送任务'],
@@ -1918,6 +1929,7 @@ const LOADERS = {
   flow: () => loadFlow(),
   devices: () => loadDevices(),
   health: () => loadHealth(),
+  weightstats: () => loadWeightStats(),
   travel: () => loadTravel(),
   tickets: () => loadTickets(),
   push: () => loadPush(),
@@ -1925,6 +1937,13 @@ const LOADERS = {
   system: () => loadSystem(),
   settings: () => loadSettings()
 };
+
+function loadWeightStats() {
+  const frame = document.getElementById('weightStatsFrame');
+  // 绝对路径：/admin 被 forward 时浏览器 URL 无尾斜杠，相对路径会解析到根目录
+  if (frame && !frame.src) frame.src = '/admin/weight-stats/weight-stats.html';
+  return Promise.resolve();
+}
 
 function switchView(view, force = false) {
   closeTraeDrawer();
