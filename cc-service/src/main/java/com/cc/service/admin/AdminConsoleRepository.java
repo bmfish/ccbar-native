@@ -755,6 +755,20 @@ public class AdminConsoleRepository {
                 .single();
     }
 
+    /** 旅行问答摘要：正式票根的次数与总花费。 */
+    public TravelAskSummary travelAskSummary() {
+        return jdbcClient.sql("""
+                select count(*) as trips, coalesce(sum(price), 0) as cost
+                from travel_ticket where status = 'normal'
+                """)
+                .query((rs, rowNum) -> new TravelAskSummary(
+                        rs.getLong("trips"), rs.getDouble("cost")))
+                .single();
+    }
+
+    public record TravelAskSummary(long trips, double cost) {
+    }
+
     // ---------- 系统 ----------
 
     public SystemCounts systemCounts() {

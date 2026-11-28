@@ -614,6 +614,20 @@
           </div>
           <div class="card-body" id="aiBriefingBody">点击「生成简报」汇总四个板块的 AI 分析，输出跨领域洞察与行动清单。也可在「推送管理」里新建 AI 综合简报任务，每日定时推送到 Bark。</div>
         </div>
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-head">
+            <h3>AI 数据问答 <span class="sub">用自然语言问任何板块的数据，基于实时汇总回答</span></h3>
+          </div>
+          <div class="card-body">
+            <div style="display:flex;gap:8px">
+              <input class="input" id="aiAskInput" style="flex:1" maxlength="300"
+                placeholder="例如：这周消耗了多少积分？feiyu 还能用几天？最近体重趋势怎么样？"
+                onkeydown="if(event.key==='Enter') runAiAsk()">
+              <button class="btn primary" id="aiAskBtn">问一下</button>
+            </div>
+            <div id="aiAskBody" class="muted" style="margin-top:12px;line-height:1.85;font-size:12.5px;min-height:20px">答案会显示在这里。</div>
+          </div>
+        </div>
         <div class="kpis">
           <div class="card kpi">
             <div class="label">今日 Token</div>
@@ -3873,6 +3887,29 @@ async function loadBriefingCache() {
   } catch (error) { /* 静默失败 */ }
 }
 
+/* ---------- AI 数据问答 ---------- */
+
+async function runAiAsk() {
+  const input = $('#aiAskInput');
+  const body = $('#aiAskBody');
+  const btn = $('#aiAskBtn');
+  const question = input.value.trim();
+  if (!question) { toast('先输入问题', 'error'); return; }
+  btn.disabled = true;
+  body.innerHTML = '<span class="loading">思考中…</span>';
+  try {
+    const data = await api('/ai-ask', { method: 'POST', body: JSON.stringify({ question }) });
+    body.innerHTML = '<div style="white-space:pre-wrap"><b>Q：' + esc(question) + '</b><br>'
+      + esc(String(data.answer || '')).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+      + `<span class="muted" style="font-size:11px">　—— ${esc(data.model || '')} · ${(data.elapsedMs / 1000).toFixed(1)}s</span></div>`;
+    input.value = '';
+  } catch (error) {
+    body.innerHTML = `<div class="warn">${esc(error.message || '问答失败')}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 /* ---------- AI 综合简报 ---------- */
 
 async function runBriefing(refresh) {
@@ -4936,6 +4973,7 @@ function bindEvents() {
   $('#aiTravelRefresh').addEventListener('click', () => runAiPanel('Travel', { path: 'travel', refresh: true }));
   $('#aiBriefingBtn').addEventListener('click', () => runBriefing(false));
   $('#aiBriefingRefresh').addEventListener('click', () => runBriefing(true));
+  $('#aiAskBtn').addEventListener('click', runAiAsk);
 
   $('#checkSystemBtn').addEventListener('click', () => refreshView('system'));
 
